@@ -29,12 +29,14 @@ class TestFixturesRoles(IntegrationTestCase):
 	def _make_user(email, role):
 		if frappe.db.exists("User", email):
 			return
-		doc = frappe.get_doc({
-			"doctype": "User",
-			"email": email,
-			"first_name": email.split("@")[0],
-			"send_welcome_email": 0,
-		})
+		doc = frappe.get_doc(
+			{
+				"doctype": "User",
+				"email": email,
+				"first_name": email.split("@")[0],
+				"send_welcome_email": 0,
+			}
+		)
 		if role:
 			doc.append("roles", {"role": role})
 		doc.insert(ignore_permissions=True)

@@ -6,22 +6,24 @@ all ORM checks. Driver on frappe v16 is mysqlclient, so the raw backstop
 exception is MySQLdb.IntegrityError (proof P9b).
 """
 
-import MySQLdb
 import frappe
+import MySQLdb
 from frappe.exceptions import DuplicateEntryError
 from frappe.tests import IntegrationTestCase
 
 
 def _log_doc(key):
-	doc = frappe.get_doc({
-		"doctype": "Production Request Log",
-		"idempotency_key": key,
-		"user": "Administrator",
-		"action": "finish_production",
-		"work_order": None,
-		"payload_fingerprint": "deadbeef",
-		"status": "Processing",
-	})
+	doc = frappe.get_doc(
+		{
+			"doctype": "Production Request Log",
+			"idempotency_key": key,
+			"user": "Administrator",
+			"action": "finish_production",
+			"work_order": None,
+			"payload_fingerprint": "deadbeef",
+			"status": "Processing",
+		}
+	)
 	return doc
 
 
@@ -56,6 +58,12 @@ class TestProductionRequestLog(IntegrationTestCase):
 					 idempotency_key, `user`, action, status)
 					values (%(name)s, %(owner)s, %(now)s, %(now)s, %(owner)s, 0, 0,
 						%(key)s, %(owner)s, %(action)s, %(status)s)""",
-				{"name": key + "-other", "owner": "Administrator", "now": now, "key": key,
-				 "action": "finish_production", "status": "Processing"},
+				{
+					"name": key + "-other",
+					"owner": "Administrator",
+					"now": now,
+					"key": key,
+					"action": "finish_production",
+					"status": "Processing",
+				},
 			)

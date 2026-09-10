@@ -18,7 +18,14 @@ def _summary(wo):
 	return frappe.db.get_value(
 		"Work Order",
 		wo,
-		["custom_p_good_qty", "custom_p_reject_qty", "custom_p_trial_qty", "custom_p_sisa_qty", "custom_qc_packing", "custom_jam_packing"],
+		[
+			"custom_p_good_qty",
+			"custom_p_reject_qty",
+			"custom_p_trial_qty",
+			"custom_p_sisa_qty",
+			"custom_qc_packing",
+			"custom_jam_packing",
+		],
 		as_dict=True,
 	)
 
@@ -49,7 +56,12 @@ class TestWoSummary(IntegrationTestCase):
 			"custom_jam_packing": "Datetime",
 		}
 		for fieldname in missing:
-			props = {"fieldname": fieldname, "label": fieldname, "fieldtype": types[fieldname], "insert_after": "project"}
+			props = {
+				"fieldname": fieldname,
+				"label": fieldname,
+				"fieldtype": types[fieldname],
+				"insert_after": "project",
+			}
 			if types[fieldname] == "Link":
 				props["options"] = "User"
 			create_custom_field("Work Order", props)
@@ -63,9 +75,15 @@ class TestWoSummary(IntegrationTestCase):
 
 		# App-style session 1: good=60 reject=2 trial=1 sisa=3, no petugas -> owner.
 		factories.se_manufacture(
-			wo, good=60,
+			wo,
+			good=60,
 			materials={factories.RM1: 10, factories.RM2: 2},
-			packing={"custom_p_good_qty": 60, "custom_p_reject_qty": 2, "custom_p_trial_qty": 1, "custom_p_sisa_qty": 3},
+			packing={
+				"custom_p_good_qty": 60,
+				"custom_p_reject_qty": 2,
+				"custom_p_trial_qty": 1,
+				"custom_p_sisa_qty": 3,
+			},
 		)
 		s = _summary(wo)
 		self.assertEqual(s.custom_p_good_qty, 60)
@@ -74,9 +92,14 @@ class TestWoSummary(IntegrationTestCase):
 
 		# App-style session 2: good=30 sisa=5, petugas set explicitly.
 		factories.se_manufacture(
-			wo, good=30,
+			wo,
+			good=30,
 			materials={factories.RM1: 10, factories.RM2: 2},
-			packing={"custom_p_good_qty": 30, "custom_p_sisa_qty": 5, "custom_p_petugas_packing": "Administrator"},
+			packing={
+				"custom_p_good_qty": 30,
+				"custom_p_sisa_qty": 5,
+				"custom_p_petugas_packing": "Administrator",
+			},
 		)
 		s = _summary(wo)
 		self.assertEqual(s.custom_p_good_qty, 90)
@@ -97,14 +120,16 @@ class TestWoSummary(IntegrationTestCase):
 		factories.se_transfer(wo, materials={factories.RM1: 100, factories.RM2: 100})
 
 		factories.se_manufacture(
-			wo, good=60,
+			wo,
+			good=60,
 			materials={factories.RM1: 10, factories.RM2: 2},
 			packing={"custom_p_good_qty": 60},
 		)
 		self.assertEqual(_summary(wo).custom_p_good_qty, 60)
 
 		se2 = factories.se_manufacture(
-			wo, good=30,
+			wo,
+			good=30,
 			materials={factories.RM1: 10, factories.RM2: 2},
 			packing={"custom_p_good_qty": 30, "custom_p_reject_qty": 4},
 		)
@@ -121,7 +146,8 @@ class TestWoSummary(IntegrationTestCase):
 		factories.stock_in(factories.RM2, factories.STORES, 100, 500)
 		factories.se_transfer(wo, materials={factories.RM1: 100, factories.RM2: 100})
 		factories.se_manufacture(
-			wo, good=25,
+			wo,
+			good=25,
 			materials={factories.RM1: 10, factories.RM2: 2},
 			packing={"custom_p_good_qty": 25},
 		)
