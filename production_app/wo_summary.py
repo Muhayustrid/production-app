@@ -16,31 +16,41 @@ from frappe.utils import flt
 
 GUARD_PURPOSES = ("Manufacture", "Material Consumption for Manufacture")
 
-# Work Order summary fields written by recompute().
+# Work Order summary fields written by recompute() - the SITE's existing
+# Customize-Form fields (spec section 8.1).
 # These fields are SITE-OWNED (spec 8.3): they are not shipped by this app as
 # fixtures. If a field is absent from the Work Order meta it is skipped and
 # one Work Order comment records the skip (never silent).
-# - custom_p_* totals mirror the Stock Entry field names (aggregate of all
-#   submitted app-style packing sessions).
+# - *_postpacking totals: aggregate of the submitted app-style packing
+#   sessions (post values).
+# - *_prepacking totals: aggregate of the optional pre-packing readings.
 # - custom_qc_packing / custom_jam_packing: petugas and posting time of the
 #   last manufacturing stock entry of the Work Order.
 WO_SUMMARY_FIELDS = (
-	"custom_p_good_qty",
-	"custom_p_reject_qty",
-	"custom_p_trial_qty",
-	"custom_p_sisa_qty",
+	"custom_good_qty_postpacking",
+	"custom_reject_qty_postpacking",
+	"custom_trial_qty_postpacking",
+	"custom_sisa_qty_postpacking",
+	"custom_good_qty_prepacking",
+	"custom_reject_qty_prepacking",
+	"custom_trial_qty_prepacking",
+	"custom_sisa_qty_prepacking",
 	"custom_qc_packing",
 	"custom_jam_packing",
 )
 
-# Stock Entry per-transaction fields read during aggregation. Per-entry
-# custom_p_good_qty is NOT read here: the good total comes from the FG rows
-# (see recompute - identical for app entries by spec 7.6, correct fallback
-# for Desk entries per spec 8.1).
+# Stock Entry per-transaction fields read during aggregation. Post-good total
+# is NOT read from custom_p_good_qty: it comes from the FG rows (see
+# recompute - identical for app entries by spec 7.6, correct fallback for
+# Desk entries per spec 8.1). Pre values are read from the SE fields.
 SE_SUMMARY_FIELDS = (
 	"custom_p_reject_qty",
 	"custom_p_trial_qty",
 	"custom_p_sisa_qty",
+	"custom_p_good_qty_pre",
+	"custom_p_reject_qty_pre",
+	"custom_p_trial_qty_pre",
+	"custom_p_sisa_qty_pre",
 	"custom_p_petugas_packing",
 )
 
@@ -65,15 +75,19 @@ def recompute(work_order):
 	entries and write it to the Work Order summary fields.
 
 	Mapping (spec 8.1):
-	- good: per entry, the sum of its finished-goods rows (core derived). For
-	  app-style entries the FG row qty equals custom_p_good_qty by contract
-	  (spec 7.6 step 5), so the aggregate is identical either way; for Desk
-	  entries without the custom fields this is the specified fallback - and
-	  since Float fields default to 0 (never NULL) there is no reliable way to
-	  tell "app entry with good 0" from "Desk entry", so the FG rows are used
-	  for all entries. Consumption entries have no FG rows -> contribute 0.
-	- reject / trial / sisa: categories come from app-style entries only (0 on
-	  Desk entries, which is correct: categories are app-only, spec 8.1).
+	- good (post): per entry, the sum of its finished-goods rows (core
+	  derived). For app-style entries the FG row qty equals custom_p_good_qty
+	  by contract (spec 7.6 step 5), so the aggregate is identical either way;
+	  for Desk entries without the custom fields this is the specified
+	  fallback - and since Float fields default to 0 (never NULL) there is no
+	  reliable way to tell "app entry with good 0" from "Desk entry", so the
+	  FG rows are used for all entries. Consumption entries have no FG rows
+	  -> contribute 0.
+	- reject / trial / sisa (post): categories come from app-style entries
+	  only (0 on Desk entries, which is correct: categories are app-only,
+	  spec 8.1).
+	- *_pre totals: sums of the optional pre-packing readings
+	  (custom_p_*_pre) - app-style entries only.
 	- custom_qc_packing / custom_jam_packing: petugas (custom_p_petugas_packing
 	  else entry owner) and posting datetime of the LAST entry.
 
@@ -84,18 +98,27 @@ def recompute(work_order):
 	rows = _submitted_entries(work_order)
 
 	good = reject = trial = sisa = 0.0
+	pre_good = pre_reject = pre_trial = pre_sisa = 0.0
 	for row in rows:
 		good += row.fg_qty
 		reject += flt(row.get("custom_p_reject_qty"))
 		trial += flt(row.get("custom_p_trial_qty"))
 		sisa += flt(row.get("custom_p_sisa_qty"))
+		pre_good += flt(row.get("custom_p_good_qty_pre"))
+		pre_reject += flt(row.get("custom_p_reject_qty_pre"))
+		pre_trial += flt(row.get("custom_p_trial_qty_pre"))
+		pre_sisa += flt(row.get("custom_p_sisa_qty_pre"))
 
 	last = rows[-1] if rows else None
 	values = {
-		"custom_p_good_qty": good,
-		"custom_p_reject_qty": reject,
-		"custom_p_trial_qty": trial,
-		"custom_p_sisa_qty": sisa,
+		"custom_good_qty_postpacking": good,
+		"custom_reject_qty_postpacking": reject,
+		"custom_trial_qty_postpacking": trial,
+		"custom_sisa_qty_postpacking": sisa,
+		"custom_good_qty_prepacking": pre_good,
+		"custom_reject_qty_prepacking": pre_reject,
+		"custom_trial_qty_prepacking": pre_trial,
+		"custom_sisa_qty_prepacking": pre_sisa,
 		"custom_qc_packing": (last and (last.get("custom_p_petugas_packing") or last.owner)) or None,
 		"custom_jam_packing": _posting_datetime(last) if last else None,
 	}

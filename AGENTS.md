@@ -29,9 +29,13 @@ bench build --app production_app                              # only when assets
   `api.py`, `access.py`, `qty.py`, `cancel.py` are Tahap 3 stubs — keep them
   raising `NotImplementedError` until then.
 - Stock Entry custom fields `custom_p_*` are app-owned (fixtures). Work Order
-  summary fields (`custom_p_good_qty`, `custom_p_reject_qty`,
-  `custom_p_trial_qty`, `custom_p_sisa_qty`, `custom_qc_packing`,
-  `custom_jam_packing`) are site-owned — never export them from this app.
+  summary fields are the SITE's Customize-Form fields (spec 8.1) — never
+  export them from this app: `custom_good_qty_postpacking`,
+  `custom_reject_qty_postpacking`, `custom_trial_qty_postpacking`,
+  `custom_sisa_qty_postpacking`, `custom_good_qty_prepacking`,
+  `custom_reject_qty_prepacking`, `custom_trial_qty_prepacking`,
+  `custom_sisa_qty_prepacking`, `custom_qc_packing`, `custom_jam_packing`.
+  On a site without these WO fields, recompute skips them with one WO comment.
 - Idempotency ledger: `Production Request Log.idempotency_key` is unique at
   the DB level; duplicate raw inserts raise `MySQLdb.IntegrityError`
   (mysqlclient driver — NOT pymysql). ORM-level duplicates surface as

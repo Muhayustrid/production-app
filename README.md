@@ -20,11 +20,14 @@ Work Order packing summary kept in sync by Stock Entry hooks).
 
 ## Key contracts
 
-- Work Order summary fields (`custom_p_good_qty`, `custom_p_reject_qty`,
-  `custom_p_trial_qty`, `custom_p_sisa_qty`, `custom_qc_packing`,
-  `custom_jam_packing`) are **site-owned** (spec 8.3): they are NOT shipped as
-  fixtures. `wo_summary.recompute` skips absent fields with one Work Order
-  comment.
+- Work Order summary fields are **site-owned** Customize-Form fields
+  (spec 8.1/8.3), NOT shipped as fixtures: `custom_good_qty_postpacking`,
+  `custom_reject_qty_postpacking`, `custom_trial_qty_postpacking`,
+  `custom_sisa_qty_postpacking`, `custom_good_qty_prepacking`,
+  `custom_reject_qty_prepacking`, `custom_trial_qty_prepacking`,
+  `custom_sisa_qty_prepacking`, `custom_qc_packing`, `custom_jam_packing`.
+  On a site where these Work Order fields are absent, `wo_summary.recompute`
+  skips them with one Work Order comment (never silent).
 - `Production Request Log.idempotency_key` has a DB-level unique constraint
   AND names the document (autoname `field:`). Raw duplicates raise
   `MySQLdb.IntegrityError` (frappe v16 driver = mysqlclient).
