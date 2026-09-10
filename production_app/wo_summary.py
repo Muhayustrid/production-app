@@ -70,9 +70,11 @@ def _recompute_guarded(doc):
 		recompute(doc.work_order)
 
 
-def recompute(work_order):
-	"""Re-aggregate the packing summary of `work_order` from submitted stock
-	entries and write it to the Work Order summary fields.
+def compute_summary(work_order):
+	"""Pure aggregation, no writes: the spec 8.1 packing summary of
+	`work_order` as a dict of WO_SUMMARY_FIELDS values, aggregated from its
+	submitted manufacturing stock entries. Shared by recompute() (which writes
+	the projection) and the detail endpoint (which reports it, spec 7.2).
 
 	Mapping (spec 8.1):
 	- good (post): per entry, the sum of its finished-goods rows (core
@@ -90,11 +92,7 @@ def recompute(work_order):
 	  (custom_p_*_pre) - app-style entries only.
 	- custom_qc_packing / custom_jam_packing: petugas (custom_p_petugas_packing
 	  else entry owner) and posting datetime of the LAST entry.
-
-	Fields missing from the Work Order meta are skipped with a single Work
-	Order comment listing them (spec 8.3, test 14.13b).
 	"""
-	missing = _missing_wo_fields()
 	rows = _submitted_entries(work_order)
 
 	good = reject = trial = sisa = 0.0
@@ -110,7 +108,7 @@ def recompute(work_order):
 		pre_sisa += flt(row.get("custom_p_sisa_qty_pre"))
 
 	last = rows[-1] if rows else None
-	values = {
+	return {
 		"custom_good_qty_postpacking": good,
 		"custom_reject_qty_postpacking": reject,
 		"custom_trial_qty_postpacking": trial,
@@ -123,6 +121,13 @@ def recompute(work_order):
 		"custom_jam_packing": _posting_datetime(last) if last else None,
 	}
 
+
+def recompute(work_order):
+	"""Write compute_summary() to the Work Order summary fields. Fields missing
+	from the Work Order meta are skipped with a single Work Order comment
+	listing them (spec 8.3, test 14.13b)."""
+	values = compute_summary(work_order)
+	missing = _missing_wo_fields()
 	if missing:
 		values = {k: v for k, v in values.items() if k not in missing}
 		_comment_missing_fields(work_order, missing)
