@@ -48,6 +48,46 @@ bench build --app production_app                              # only when assets
 Tests target the isolated proof site (`proof.localhost`). Never install,
 migrate, or test against `posnext.localhost` (production).
 
+## Development & Build (frontend SPA)
+
+The frontend is a Vue 3 + Vite + frappe-ui single-page app in `vue/`,
+mirroring the pos_next serving pattern:
+
+- Source: `vue/` (Vite + Vue 3 + vue-router + frappe-ui + lucide-vue-next +
+  Tailwind).
+- Build output: `production_app/public/production/` (committed; `node_modules`
+  is ignored).
+- Entry page: the build rewrites/copies its `index.html` to
+  `production_app/www/production-app.html`, which Frappe serves as a standard
+  www page at **`/production-app`** (with a Jinja boot block injected by the
+  frappe-ui vite plugin). Deep links (`/production-app/...`) are mapped to the
+  SPA via `website_route_rules` in `hooks.py` — same mechanism as pos_next's
+  `/pos`.
+- Login gate: the SPA checks the `user_id` session cookie in a router guard
+  and redirects guests to `/login`. No custom backend endpoints are used; the
+  placeholder screen fetches the user via the existing core method
+  `frappe.auth.get_logged_user`.
+
+Build commands (inside the bench container):
+
+```bash
+# Reproducible build (installs deps per vue/yarn.lock, outputs to
+# public/production + www/production-app.html). bench also runs this
+# automatically:
+bench build --app production_app
+
+# Equivalent manual steps:
+cd vue && yarn install && yarn build
+
+# Dev server with hot reload:
+yarn dev   # from vue/ (proxies /api,/assets to the local bench)
+```
+
+Note: a plain `bench serve` pins the site to `default_site`
+(`posnext.localhost`). To serve the proof site over HTTP use
+`bench --site proof.localhost serve --port 8001` and open
+`http://127.0.0.1:8001/production-app` from inside the container.
+
 ## Contributing
 
 This app uses `pre-commit` for code formatting and linting (ruff, eslint,
