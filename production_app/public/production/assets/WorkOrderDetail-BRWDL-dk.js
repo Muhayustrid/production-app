@@ -1,0 +1,2 @@
+import{c as a,b as t,t as r,d as l}from"./index-D5bNZMgk.js";const n={class:"flex min-h-screen flex-col items-center justify-center gap-2 p-8"},o={class:"text-gray-500"},p={__name:"WorkOrderDetail",props:{name:{type:String,default:""}},setup(s){return(i,e)=>(l(),a("div",n,[e[0]||(e[0]=t("h1",{class:"text-xl font-semibold"},"Work Order detail",-1)),t("p",o,r(s.name),1),e[1]||(e[1]=t("p",{class:"text-sm text-gray-400"},"Phase 2 placeholder — detail screen arrives in Tahap 4.",-1))]))}};export{p as default};
+//# sourceMappingURL=WorkOrderDetail-BRWDL-dk.js.map
