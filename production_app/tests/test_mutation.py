@@ -8,7 +8,9 @@ Contract proven per test:
   re-check; binding mismatches (payload/action/user/WO) and the Processing
   window are rejected with firm Indonesian messages (10.2);
 - fingerprint canonicalization: 10 == 10.0, key order irrelevant, None != "";
-- per-WO row lock serializes a second raw connection (P9a recipe);
+- per-WO row lock serializes a second raw connection (P9a recipe), and the
+  ledger lookup is a current read: after waiting on the lock it sees the
+  winner's committed row (REPEATABLE READ snapshot staleness guard);
 - fn raising leaves NO ledger row - the key is cleanly retryable (10.3, P9b).
 """
 
@@ -217,6 +219,50 @@ class TestMutation(IntegrationTestCase):
 				conn.commit()
 		finally:
 			conn.close()
+
+	def test_ledger_lookup_sees_committed_row_after_lock_wait(self):
+		"""The follower's ledger lookup must be a CURRENT (locking) read.
+		Choreography: the follower opens its read view, the leader (second
+		frappe connection) commits a Done ledger row while holding the WO
+		lock, then the follower acquires the WO lock and reads the ledger.
+		run_mutation's FOR UPDATE lookup must see the committed Done row and
+		replay it instead of walking the fresh path into the unique
+		constraint. (MariaDB also refreshes the read view on the WO FOR
+		UPDATE itself; the explicit for_update keeps this guaranteed on
+		MySQL and additionally serializes on the ledger row.)"""
+		key, payload = self._key(), {"good": 11}
+		# Fresh follower transaction: earlier tests left this connection
+		# holding the WO row lock (run_mutation never commits), which would
+		# block the leader below.
+		frappe.db.rollback()
+		# Follower opens its read view: the key is not there yet.
+		self.assertIsNone(frappe.db.get_value("Production Request Log", key, "status"))
+		# Leader (second connection): takes the WO lock, commits the Done row
+		# and releases the lock in one commit - the real run_mutation flow.
+		with self.secondary_connection():
+			frappe.db.sql("select name from `tabWork Order` where name=%s for update", (self.wo,))
+			frappe.get_doc(
+				{
+					"doctype": "Production Request Log",
+					"idempotency_key": key,
+					"user": frappe.session.user,
+					"action": "transfer_material",
+					"work_order": self.wo,
+					"payload_fingerprint": mutation.payload_fingerprint(payload),
+					"status": "Done",
+					"result_json": '{"note": "stored"}',
+				}
+			).insert(ignore_permissions=True)
+			frappe.db.commit()  # commits the row AND releases the WO lock
+		# Follower: acquires the WO lock, then the ledger lookup exactly as
+		# run_mutation performs it (FOR UPDATE = current read).
+		self.assertEqual(mutation.lock_work_order(self.wo), self.wo)
+		row = frappe.db.get_value(
+			"Production Request Log", key, ["status", "result_json"], as_dict=True, for_update=True
+		)
+		self.assertEqual(row.status, "Done")
+		self.assertEqual(row.result_json, '{"note": "stored"}')  # the stored replay
+		frappe.db.rollback()  # release the WO + ledger row locks
 
 	# ------------------------------------------------- atomicity / retry (10.3)
 

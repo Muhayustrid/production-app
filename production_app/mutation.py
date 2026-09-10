@@ -2,8 +2,9 @@
 
 Every mutating SPA endpoint routes through `run_mutation` (10.2):
 - The Work Order row is locked FIRST (10.1, `lock_work_order`), so two
-  sessions mutating the same WO serialize and the ledger check happens
-  under the lock; no ledger row can be observed mid-flight.
+  sessions mutating the same WO serialize; the ledger lookup under it is a
+  locking (current) read, so a session that waited on the lock sees the
+  winner's committed row instead of its stale REPEATABLE READ snapshot.
 - The request is bound in `Production Request Log` to (user, action,
   work_order, payload fingerprint); the DB unique constraint on
   `idempotency_key` (autoname field:) is the final backstop (P9b).
@@ -107,11 +108,21 @@ def run_mutation(work_order, action, idempotency_key, payload, fn):
 	lock_work_order(work_order)
 	fingerprint = payload_fingerprint(payload)
 
+	# The ledger lookup is itself a LOCKING (current) read: the request's
+	# read view may predate the wait on the WO lock, so a plain snapshot read
+	# (REPEATABLE READ - frappe does not override it) could miss a ledger row
+	# the lock holder committed in the meantime and wrongly take the fresh
+	# path into the unique constraint (1062). MariaDB additionally refreshes
+	# the read view on the WO FOR UPDATE itself, but the explicit current
+	# read keeps the guarantee on MySQL too and serializes concurrent
+	# workers on the ledger row. Lock order stays consistently WO -> PRL,
+	# so the two-step locking cannot deadlock.
 	log = frappe.db.get_value(
 		"Production Request Log",
 		idempotency_key,
 		["user", "action", "work_order", "payload_fingerprint", "status", "result_json"],
 		as_dict=True,
+		for_update=True,
 	)
 	if log is None:
 		return _run_first_time(work_order, action, idempotency_key, fingerprint, fn)
