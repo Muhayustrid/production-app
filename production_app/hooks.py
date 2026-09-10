@@ -8,7 +8,49 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["erpnext"]
+
+# Fixtures
+# --------
+# Custom fields on Stock Entry are app-owned (spec section 8); the Work Order
+# summary fields are site-owned and deliberately NOT exported (spec 8.3).
+
+CUSTOM_P_FIELDS = [
+	"custom_p_good_qty",
+	"custom_p_reject_qty",
+	"custom_p_trial_qty",
+	"custom_p_sisa_qty",
+	"custom_p_good_qty_pre",
+	"custom_p_reject_qty_pre",
+	"custom_p_trial_qty_pre",
+	"custom_p_sisa_qty_pre",
+	"custom_p_petugas_packing",
+	"custom_p_packing_note",
+]
+
+PRODUCTION_ROLES = ["Production Operator", "Production Supervisor"]
+
+fixtures = [
+	{
+		"dt": "Custom Field",
+		"filters": [["dt", "=", "Stock Entry"], ["fieldname", "in", CUSTOM_P_FIELDS]],
+	},
+	{"dt": "Role", "filters": [["role_name", "in", PRODUCTION_ROLES]]},
+	{"dt": "Custom DocPerm", "filters": [["role", "in", PRODUCTION_ROLES]]},
+]
+
+# DocEvents
+# ---------
+# Keep the Work Order packing summary in sync on every submit/cancel of a
+# manufacturing stock entry - including entries made from Desk without the
+# custom_p_* fields (spec 8.1).
+
+doc_events = {
+	"Stock Entry": {
+		"on_submit": "production_app.wo_summary.on_submit",
+		"on_cancel": "production_app.wo_summary.on_cancel",
+	}
+}
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
