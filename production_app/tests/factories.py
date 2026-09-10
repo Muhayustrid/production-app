@@ -17,6 +17,10 @@ RM1, RM2, FG = "PDTC-RM1", "PDTC-RM2", "PDTC-FG"
 BATCH_RM1 = "PDTC-B-RM1"
 BATCH_FG = "PDTC-B-FG"
 ITEM_GROUP = "PDTC Items"
+SECOND_COMPANY = "PDTC Second Co"
+SECOND_ABBR = "PDTC2"
+WORKSTATION = "PDTC Workstation"
+OPERATION = "PDTC Assembly"
 
 
 def setup_company():
@@ -299,3 +303,86 @@ def _pick_batch(item, warehouse):
 	for r in rows:
 		totals[r.batch_no] = totals.get(r.batch_no, 0) + r.qty
 	return max(totals, key=totals.get)
+
+
+def make_user(email, roles=()):
+	"""Idempotent enabled User with the given roles (access tests)."""
+	if not frappe.db.exists("User", email):
+		frappe.get_doc(
+			{
+				"doctype": "User",
+				"email": email,
+				"first_name": email.split("@")[0],
+				"send_welcome_email": 0,
+				"roles": [{"role": role} for role in roles],
+			}
+		).insert()
+	return email
+
+
+def make_user_permission(user, allow, for_value):
+	"""Idempotent User Permission (11.2); returns its name for cleanup."""
+	name = frappe.db.get_value("User Permission", {"user": user, "allow": allow, "for_value": for_value})
+	if name:
+		return name
+	return (
+		frappe.get_doc(
+			{
+				"doctype": "User Permission",
+				"user": user,
+				"allow": allow,
+				"for_value": for_value,
+				"apply_to_all_doctypes": 1,
+			}
+		)
+		.insert()
+		.name
+	)
+
+
+def setup_second_company():
+	"""Bare second Company for User Permission tests (11.2 [T] V23); only the
+	Company record itself is needed."""
+	if not frappe.db.exists("Company", SECOND_COMPANY):
+		frappe.get_doc(
+			{
+				"doctype": "Company",
+				"company_name": SECOND_COMPANY,
+				"abbr": SECOND_ABBR,
+				"default_currency": "USD",
+				"country": "United States",
+			}
+		).insert()
+	return SECOND_COMPANY
+
+
+def setup_operation():
+	"""Workstation + Operation so a Work Order Operation row (operation loss)
+	can be attached to a Work Order in tests (6.7 pre-check)."""
+	if not frappe.db.exists("Workstation", WORKSTATION):
+		frappe.get_doc(
+			{"doctype": "Workstation", "workstation_name": WORKSTATION, "production_capacity": 1}
+		).insert()
+	if not frappe.db.exists("Operation", OPERATION):
+		frappe.get_doc(
+			{
+				"doctype": "Operation",
+				"__newname": OPERATION,
+				"operation_name": OPERATION,
+				"workstation": WORKSTATION,
+			}
+		).insert()
+
+
+def add_wo_operation(wo, process_loss_qty):
+	"""Attach an operation row carrying booked loss to a SUBMITTED Work Order.
+	Raw insert: the submitted parent must not be re-saved/re-validated; only
+	name columns the 6.7 pre-check query reads are populated."""
+	frappe.db.sql(
+		"""insert into `tabWork Order Operation`
+			(name, parent, parentfield, parenttype, owner, modified_by, creation, modified,
+			 operation, time_in_mins, completed_qty, process_loss_qty, docstatus, idx)
+			values (%s, %s, 'operations', 'Work Order', 'Administrator', 'Administrator', now(), now(),
+			 %s, 60, 0, %s, 1, 1)""",
+		(f"PDTC-OP-{frappe.generate_hash(length=8)}", wo, OPERATION, process_loss_qty),
+	)
