@@ -94,7 +94,9 @@ def run_mutation(work_order, action, idempotency_key, payload, fn):
 	(stored on the ledger for traceability). Returns the fn result, or on
 	replay the stored result with `"duplicate": True`. Never commits (10.3).
 	"""
-	if not isinstance(idempotency_key, str) or not _KEY_PATTERN.match(idempotency_key.strip()):
+	if isinstance(idempotency_key, str):
+		idempotency_key = idempotency_key.strip()  # the trimmed key is what gets bound
+	if not _KEY_PATTERN.match(idempotency_key or ""):
 		frappe.throw("Idempotency key tidak valid.", frappe.ValidationError)
 	if action not in ACTIONS:
 		frappe.throw(f"Aksi tidak dikenal: {action}", frappe.ValidationError)
@@ -135,6 +137,8 @@ def run_mutation(work_order, action, idempotency_key, payload, fn):
 		frappe.throw("Anda tidak berhak melihat hasil aksi ini.", frappe.ValidationError)
 
 	result = json.loads(log.result_json) if log.result_json else {}
+	if not isinstance(result, dict):  # fn contract violation must not break replay
+		result = {}
 	result["duplicate"] = True
 	return result
 
