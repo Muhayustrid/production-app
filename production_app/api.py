@@ -349,8 +349,16 @@ def _detail_materials(wo):
 				"required_qty": flt(row.required_qty, wo.precision("qty")),
 				"transferred_net": transferred,
 				"dipakai": used,
-				"sisa_wip": flt(transferred - used, wo.precision("qty")),
-				"sisa_perlu": flt(max(flt(row.required_qty) - transferred, 0), wo.precision("qty")),
+				# INV10 keeps used <= transferred on transfer-based WOs, so the
+				# floor never bites there; on skip_transfer WOs there is no
+				# transfer leg and sisa_wip is simply never negative.
+				"sisa_wip": flt(max(transferred - used, 0), wo.precision("qty")),
+				# What the WO still needs: on transfer-based WOs that is driven
+				# by transferred_net (used is its subset per INV10); on
+				# skip_transfer WOs direct consumption already covers it.
+				"sisa_perlu": flt(
+					max(flt(row.required_qty) - max(transferred, used), 0), wo.precision("qty")
+				),
 				"stok_gudang_asal": _indicative_stock(item, warehouse),
 			}
 		)
@@ -360,10 +368,13 @@ def _detail_materials(wo):
 def _material_nets(wo):
 	"""(transferred_net, used_net) per item over submitted Stock Entries of the
 	WO. transferred_net: purpose Material Transfer for Manufacture, warehouse
-	net against the WIP warehouse (is_return flows out naturally). used_net:
-	Manufacture + Consumption rows leaving the WIP warehouse (INV10)."""
-	if not wo.wip_warehouse:
-		return {}, {}
+	net against the WIP warehouse (is_return flows out naturally). used_net is
+	dipakai per spec 5 ("sum of consumption rows, docstatus 1" - NO warehouse
+	qualifier): Manufacture + Consumption rows count positive when they LEAVE
+	the WIP warehouse; on a skip_transfer Work Order core books those rows
+	directly FROM the source warehouse (make_stock_entry: from_warehouse =
+	source_warehouse when skip_transfer and not from_wip_warehouse), so those
+	count too; a consumption row RETURNING to the WIP warehouse subtracts."""
 	ses = frappe.get_all(
 		"Stock Entry",
 		filters={"docstatus": 1, "work_order": wo.name},
@@ -385,16 +396,23 @@ def _material_nets(wo):
 	)
 	precision = wo.precision("qty")
 	transfer_net, used_net = {}, {}
+	wip, source = wo.wip_warehouse, wo.source_warehouse
+	skip_transfer = cint(wo.skip_transfer)
 	for row in rows:
-		into_wip = row.t_warehouse == wo.wip_warehouse
-		out_wip = row.s_warehouse == wo.wip_warehouse
-		if not (into_wip or out_wip):
-			continue
+		into_wip = bool(wip) and row.t_warehouse == wip
+		out_wip = bool(wip) and row.s_warehouse == wip
 		if row.parent in transfer_se:
 			# Transferred net: into the WIP warehouse counts positive, returns flow out.
+			if not (into_wip or out_wip):
+				continue
 			bucket, sign = transfer_net, 1 if into_wip else -1
 		else:
-			# dipakai (3.1): consumption OUT of the WIP warehouse counts positive.
+			# dipakai (3.1): consumption OUT of the WIP warehouse counts
+			# positive - or straight out of the source warehouse on a
+			# skip_transfer WO.
+			from_source = skip_transfer and source and row.s_warehouse == source
+			if not (out_wip or from_source or into_wip):
+				continue
 			bucket, sign = used_net, -1 if into_wip else 1
 		bucket[row.item_code] = flt(bucket.get(row.item_code, 0) + sign * flt(row.qty), precision)
 	return transfer_net, used_net

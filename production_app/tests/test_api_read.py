@@ -199,6 +199,28 @@ class TestGetWorkOrderDetail(IntegrationTestCase):
 		rm2 = materials[factories.RM2]
 		self.assertEqual((rm2["required_qty"], rm2["transferred_net"], rm2["dipakai"]), (2, 100, 5))
 
+	def test_skip_transfer_wo_dipakai_from_source_warehouse(self):
+		"""skip_transfer WO (supported config, spec 6): core books the
+		Manufacture material rows directly FROM the source warehouse - no WIP
+		leg ever exists (make_stock_entry: from_warehouse = source_warehouse
+		when skip_transfer and not from_wip_warehouse). dipakai must still
+		count those rows (spec 5 has no warehouse qualifier), sisa_wip floors
+		at 0 and sisa_perlu decreases with the consumption."""
+		wo = factories.make_wo()
+		frappe.db.set_value("Work Order", wo, "skip_transfer", 1)
+		factories.stock_in(factories.RM1, factories.STORES, 100, 100, batch_no=factories.BATCH_RM1)
+		factories.stock_in(factories.RM2, factories.STORES, 100, 500)
+		factories.se_manufacture(wo, good=60, materials={factories.RM1: 6, factories.RM2: 1.2})
+
+		frappe.set_user(self.operator)
+		detail = api.get_work_order_detail(wo)
+		rm1 = next(m for m in detail["materials"] if m["item_code"] == factories.RM1)
+		self.assertEqual(rm1["transferred_net"], 0)  # no transfer leg by design
+		self.assertEqual(rm1["dipakai"], 6)  # consumed straight from Stores
+		self.assertEqual(rm1["sisa_wip"], 0)
+		self.assertEqual(rm1["sisa_perlu"], 4)  # required 10 - 6 consumed
+		self.assertEqual(detail["next_action"], "finish_production")
+
 	def test_expired_batch_flagged_and_excluded_from_tersedia(self):
 		wo = _progressed_wo()
 		factories.stock_in(factories.RM1, factories.STORES, 50, 100, batch_no="PDTC-B-RM1-EXPIRED")
