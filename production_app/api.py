@@ -7,10 +7,14 @@ lock (10.1); user-facing errors are Indonesian (term dictionary 3.1); error
 codes `STATE_CHANGED` (UI reloads) and `NEEDS_ALLOWANCE` (3.4).
 """
 
+import uuid
+
 import frappe
+from frappe.model.document import Document
 from frappe.utils import cint, flt, getdate, today
 
 from production_app import access, qty, wo_summary
+from production_app.hooks import CUSTOM_P_FIELDS
 from production_app.mutation import run_mutation
 
 # 7.1: the statuses that still show up in the operator's list (Completed /
@@ -210,11 +214,73 @@ def save_production_data(work_order, data, idempotency_key=None):
 
 
 @frappe.whitelist()
-def transfer_material(work_order, items, idempotency_key=None):
+def transfer_material(work_order, items=None, idempotency_key=None):
 	"""Material transfer (7.4): operator's ACTUAL picked quantities per
 	material; over-transfer gate (6.8); insert/submit via make_stock_entry dict
 	with ignore_permissions after the app gate; batch picking left to core."""
-	raise NotImplementedError("Tahap 4")
+	parsed = frappe.parse_json(items) if isinstance(items, str) else items
+	if parsed is None:
+		parsed = {}
+	if not isinstance(parsed, dict):
+		frappe.throw("Items harus berupa objek (dict) kode bahan -> jumlah.", frappe.ValidationError)
+
+	def fn():
+		access.require_role("Production Operator", "Production Supervisor")
+		wo = access.check_wo_access(work_order, "read")
+		reasons, _bom_pct = access.config_blocked_reasons(wo)
+		if reasons:
+			frappe.throw(reasons[0])
+		_reject_if_not_open(wo, "transfer bahan", BLOCKED_TRANSFER_STATUSES)
+		if cint(wo.skip_transfer):
+			frappe.throw("Work Order ini tidak memerlukan pengambilan bahan (skip transfer).")
+		if not any(m["sisa_perlu"] > 0 for m in _detail_materials(wo)):
+			frappe.throw("Semua bahan sudah diambil - tidak ada lagi yang perlu ditransfer.")
+
+		from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
+
+		# V8: the dict carries ONLY the still-pending materials, default qty = sisa
+		# perlu; operator overrides win per item.
+		se = frappe.get_doc(make_stock_entry(wo.name, "Material Transfer for Manufacture"))
+		for item_code, value in parsed.items():
+			row = next((r for r in se.items if r.item_code == item_code), None)
+			if row is None:
+				frappe.throw(f"Bahan {item_code} tidak memiliki sisa kebutuhan transfer pada Work Order ini.")
+			row.qty = row.transfer_qty = qty._normalize(
+				value, wo.precision("qty"), f"Bahan Diambil {item_code}"
+			)
+			if row.qty <= 0:
+				frappe.throw(f"Bahan Diambil {item_code} harus lebih besar dari 0.")
+
+		# gate + stock pre-checks speak for themselves; only the submit's core
+		# errors need mapping (user-facing messages must not be masked)
+		_over_transfer_gate(wo, se)
+		_check_indicative_stock(wo, se)
+		try:
+			_submit_authorized(se)
+		except frappe.ValidationError as e:
+			if "cannot be greater than planned quantity" in str(e):
+				# the 6.8 gate should have caught this pre-submit; map it anyway
+				frappe.throw(
+					"Total bahan yang diambil melebihi batas transfer Work Order. Kurangi jumlah yang "
+					"diambil, simpan bahan ekstra di gudang asal (Stores), atau hubungi admin untuk "
+					"menyetel toleransi transfer."
+				)
+			frappe.log_error(title="Production App: transfer_material", message=frappe.get_traceback())
+			frappe.throw("Transfer bahan gagal karena kesalahan tak terduga - coba lagi atau hubungi admin.")
+
+		wo.reload()
+		materials = _detail_materials(wo)
+		operations, _job_cards = _detail_operations(wo)
+		return {
+			"work_order": wo.name,
+			"stock_entry": se.name,
+			"materials": materials,
+			"next_action": _next_action(wo, [], materials, operations),
+			"reference_doctype": "Stock Entry",
+			"reference_doc": se.name,
+		}
+
+	return run_mutation(work_order, "transfer_material", idempotency_key, {"items": parsed}, fn)
 
 
 @frappe.whitelist()
@@ -227,12 +293,90 @@ def complete_operation(work_order, job_card, qty, is_final, idempotency_key=None
 
 
 @frappe.whitelist()
-def finish_production(work_order, packing, idempotency_key=None):
+def finish_production(work_order, packing=None, idempotency_key=None):
 	"""Packing session (7.6): Jalur A single Manufacture SE - material rows =
 	actual used, FG row qty = good (explicit batch_no, proof P7a-3),
 	process_loss_qty = explicit loss; writes custom_p_* ; WO summary synced by
 	the Stock Entry hook in the same transaction (8.1)."""
-	raise NotImplementedError("Tahap 4")
+	payload = frappe.parse_json(packing) if isinstance(packing, str) else packing
+	if payload is None:
+		payload = {}
+	if not isinstance(payload, dict):
+		frappe.throw("Packing harus berupa objek (dict).", frappe.ValidationError)
+
+	def fn():
+		access.require_role("Production Operator", "Production Supervisor")
+		wo = access.check_wo_access(work_order, "read")
+		reasons, _bom_pct = access.config_blocked_reasons(wo)
+		if reasons:
+			frappe.throw(reasons[0])
+		_reject_if_not_open(wo, "sesi packing", BLOCKED_FINISH_STATUSES)
+		if qty.remaining_target(wo) <= 0:
+			frappe.throw("Target produksi sudah tercapai - tidak ada sesi packing yang perlu dibuat.")
+		_require_packing_schema()
+
+		normalized, warnings = qty.validate_packing(wo, payload)
+		_operations_coverage_check(wo, normalized)
+		session = qty.compute_session_materials(wo, payload.get("bahan_dipakai"))
+
+		from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
+
+		rows = []
+		try:
+			se = frappe.get_doc(
+				make_stock_entry(wo.name, "Manufacture", qty=normalized.good + normalized.loss_eksplisit)
+			)
+			# V17: explicit loss prevents the BOM pct fallback in set_process_loss_qty.
+			se.process_loss_qty = normalized.loss_eksplisit
+
+			for row in se.items:
+				if row.item_code == wo.production_item:
+					row.qty = row.transfer_qty = normalized.good
+					if frappe.db.get_value("Item", row.item_code, "has_batch_no"):
+						# proof P7a-3: core's FG auto-batch is broken (Serial and Batch
+						# Bundle built without company) - the app creates the batch
+						# explicitly; core then fills the bundle with qty = good.
+						row.use_serial_batch_fields = 1
+						row.batch_no = _create_fg_batch(row.item_code)
+					rows.append(row)
+				elif row.item_code in session:
+					row.qty = row.transfer_qty = session[row.item_code]
+					rows.append(row)
+				# else: drop the row - INV5, never consume BOM defaults the session
+				# did not confirm.
+			se.set("items", rows)
+			_apply_packing_fields(se, normalized, payload)
+			_submit_authorized(se)
+		except frappe.ValidationError as e:
+			# the duplicate gate already fires at make_stock_entry (get_items ->
+			# validate_work_order), so the mapping must span the whole build
+			if "Stock Entries already created for Work Order" in str(e):
+				# duplicate gate [F] check_duplicate_entry_for_work_order
+				frappe.throw("Target sesi sebelumnya sudah mencapai batas Work Order - hubungi admin.")
+			frappe.log_error(title="Production App: finish_production", message=frappe.get_traceback())
+			frappe.throw("Sesi packing gagal karena kesalahan tak terduga - coba lagi atau hubungi admin.")
+
+		if warnings:
+			wo.add_comment("Comment", text=" ".join(warnings))
+		wo.reload()
+		remaining = qty.remaining_target(wo)
+		return {
+			"work_order": wo.name,
+			"stock_entry": se.name,
+			"produced": flt(wo.produced_qty, wo.precision("qty")),
+			"loss": flt(wo.process_loss_qty, wo.precision("qty")),
+			"remaining_target": remaining,
+			"status": wo.status,
+			"sisa_wip": qty.wip_remaining(wo),
+			"warnings": warnings,
+			# 3.4: final session short of target -> explicit close decision, no
+			# automatic action whatsoever (7.8).
+			"needs_close_decision": bool(normalized.is_final) and remaining > 0,
+			"reference_doctype": "Stock Entry",
+			"reference_doc": se.name,
+		}
+
+	return run_mutation(work_order, "finish_production", idempotency_key, payload, fn)
 
 
 @frappe.whitelist()
@@ -597,3 +741,160 @@ def _validate_metadata(wo, payload):
 		else:
 			values[fieldname] = value
 	return values
+
+
+# ----------------------------------------------------------------- mutations
+
+
+# 7.4: transfer only while the WO can still move material; 7.6: packing also
+# stops at Completed (is_final leftovers go through the close decision, 3.4).
+BLOCKED_TRANSFER_STATUSES = ("Stopped", "Closed")
+BLOCKED_FINISH_STATUSES = ("Stopped", *FINISHED_STATUSES)
+
+
+def _reject_if_not_open(wo, action, blocked_statuses):
+	"""Post-lock status gate (7.4/7.6 step 1): submitted document, none of the
+	blocked statuses."""
+	if wo.docstatus != 1:
+		frappe.throw(f"Work Order {wo.name} bukan dokumen yang sudah disubmit - {action} ditolak.")
+	if wo.status in blocked_statuses:
+		frappe.throw(f"Work Order dalam status {wo.status} - {action} tidak dapat dilakukan.")
+
+
+def _submit_authorized(se):
+	"""Authorized SE insert+submit (11.2 step 5, 11.4).
+
+	`authorized_ignore` covers the Stock Entry itself, but core's submit spawns
+	related documents for the same authorized action (Serial and Batch Bundle
+	for batch picking) whose permission checks do NOT inherit the SE's flag -
+	and this frappe version has no request-wide ignore_permissions. All app
+	gates (role, WO, config, pre-checks) ran BEFORE this block, so the
+	Document-level permission check is suspended for exactly the duration of
+	the authorized insert+submit and restored afterwards.
+	# ponytail: scoped in time, not per spawned document; tighten if frappe
+	# ever propagates flags to core-spawned documents.
+	"""
+	original = Document.has_permission
+
+	def _allow(self, permtype="read", **kwargs):
+		return True
+
+	Document.has_permission = _allow
+	try:
+		with access.authorized_ignore(se):
+			se.insert()
+			se.submit()
+	finally:
+		Document.has_permission = original
+
+
+def _transfer_allowance_pct():
+	"""6.8: overproduction percentage, falling back to the transfer-extra knob
+	ONLY when overproduction is 0 (core precedence in update_work_order_qty)."""
+	pct = flt(
+		frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order")
+	)
+	if not pct:
+		pct = flt(frappe.db.get_single_value("Manufacturing Settings", "transfer_extra_materials_percentage"))
+	return pct
+
+
+def _over_transfer_gate(wo, se):
+	"""6.8 pre-check (brief: cumulative transferred + requested qty vs
+	qty x (1 + pct%)). Indicative only - the binding validation stays with core.
+
+	After the check, the SE's WO-coverage claim (fg_completed_qty) is bounded to
+	the remaining transfer allowance: core's own default claim (qty - produced)
+	is FULL-target even on a partial pick, its coverage cap is skipped whenever
+	the cumulative claim would exceed the allowance (stock_entry.py
+	_cap_completed_qty_to_material_coverage), and the next update_work_order_qty
+	then throws on claims alone - blocking a legitimate second partial transfer.
+	The actual booked quantity still comes from core's coverage cap."""
+	request = flt(sum(flt(row.qty) for row in se.items), wo.precision("qty"))
+	transferred = flt(wo.material_transferred_for_manufacturing)
+	pct = _transfer_allowance_pct()
+	allowed = flt(flt(wo.qty) * (1 + pct / 100), wo.precision("qty"))
+	se.fg_completed_qty = flt(allowed - transferred, wo.precision("qty"))
+	if flt(transferred + request, 9) > flt(allowed, 9):
+		frappe.throw(
+			f"Total bahan yang diambil ({transferred + request:g}) melebihi batas transfer Work Order "
+			f"({allowed:g} = target {wo.qty:g} + toleransi {pct:g}%). Simpan bahan ekstra di gudang "
+			"asal (Stores), atau hubungi admin untuk menyetel toleransi transfer."
+		)
+	se.fg_completed_qty = flt(allowed - transferred, wo.precision("qty"))
+
+
+def _check_indicative_stock(wo, se):
+	"""Indicative stock pre-check at the source warehouse (7.4 step 3); the
+	binding validation is core's at submit."""
+	for row in se.items:
+		warehouse = row.get("s_warehouse") or wo.source_warehouse
+		if not warehouse:
+			continue
+		bin_qty = flt(
+			frappe.db.get_value("Bin", {"item_code": row.item_code, "warehouse": warehouse}, "actual_qty")
+		)
+		if bin_qty < flt(row.qty, wo.precision("qty")):
+			uom = row.get("stock_uom") or frappe.db.get_value("Item", row.item_code, "stock_uom")
+			frappe.throw(
+				f"Bahan {row.item_code} kurang {flt(flt(row.qty) - bin_qty, wo.precision('qty')):g} {uom} "
+				f"di Gudang {warehouse} - hubungi gudang."
+			)
+
+
+def _require_packing_schema():
+	"""8.4: every custom_p_* field must exist on the Stock Entry meta before a
+	packing session can be recorded."""
+	missing = [f for f in CUSTOM_P_FIELDS if not frappe.get_meta("Stock Entry").has_field(f)]
+	if missing:
+		frappe.throw("Field packing belum terpasang - jalankan bench migrate / hubungi admin.")
+
+
+def _operations_coverage_check(wo, normalized):
+	"""INV6 mirror of core check_if_operations_completed: fg_completed_qty
+	(good + loss) + produced vs each operation's completed + loss + allowance.
+	Core still enforces this at submit; the app pre-empts it with one friendly
+	Indonesian message instead of the core throw."""
+	if not wo.operations:
+		return
+	allowance_pct = flt(
+		frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order")
+	)
+	total = flt(wo.produced_qty) + normalized.good + normalized.loss_eksplisit
+	for op in wo.operations:
+		covered = (
+			flt(op.completed_qty) + flt(op.process_loss_qty) + (allowance_pct / 100 * flt(op.completed_qty))
+		)
+		if flt(total, 9) > flt(covered, 9):
+			frappe.throw(
+				f"Operasi {op.operation} baru tercatat selesai untuk "
+				f"{flt(op.completed_qty + op.process_loss_qty, wo.precision('qty')):g} {wo.stock_uom}. "
+				f"Selesaikan operasi ini untuk {flt(total - covered, wo.precision('qty')):g} "
+				f"{wo.stock_uom} lagi dulu sebelum packing."
+			)
+
+
+def _create_fg_batch(item_code):
+	"""Fresh FG batch per packing session (proof P7a-3c recipe): the app owns
+	batch creation because every core auto-batch path crashes on v16 (Serial
+	and Batch Bundle built without the mandatory company)."""
+	batch = frappe.new_doc("Batch")
+	batch.item = item_code
+	batch.batch_id = f"{item_code}-{uuid.uuid6()}"
+	batch.insert(ignore_permissions=True)
+	return batch.name
+
+
+def _apply_packing_fields(se, normalized, payload):
+	"""8.1: record the session's packing categories + petugas on the Stock
+	Entry (schema presence guaranteed by _require_packing_schema)."""
+	se.custom_p_good_qty = normalized.good
+	se.custom_p_reject_qty = normalized.reject
+	se.custom_p_trial_qty = normalized.trial
+	se.custom_p_sisa_qty = normalized.sisa
+	se.custom_p_good_qty_pre = normalized.good_pre
+	se.custom_p_reject_qty_pre = normalized.reject_pre
+	se.custom_p_trial_qty_pre = normalized.trial_pre
+	se.custom_p_sisa_qty_pre = normalized.sisa_pre
+	se.custom_p_petugas_packing = normalized.petugas_packing
+	se.custom_p_packing_note = payload.get("note")
