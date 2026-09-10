@@ -39,6 +39,15 @@ fixtures = [
 	{"dt": "Custom DocPerm", "filters": [["role", "in", PRODUCTION_ROLES]]},
 ]
 
+# Website
+# ------------------
+# Serve the SPA (vue/ build, www/production-app.html) at deep links like
+# /production-app/work-orders/NAME — same mechanism as pos_next's /pos rule.
+
+website_route_rules = [
+	{"from_route": "/production-app/<path:app_path>", "to_route": "production-app"},
+]
+
 # DocEvents
 # ---------
 # Keep the Work Order packing summary in sync on every submit/cancel of a
