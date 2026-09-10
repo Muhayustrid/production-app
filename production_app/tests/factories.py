@@ -374,6 +374,89 @@ def setup_operation():
 		).insert()
 
 
+OPERATION2 = "PDTC Baking"
+
+
+def make_workstation(name):
+	"""Idempotent Workstation (production_capacity 1, like the shop floor)."""
+	if not frappe.db.exists("Workstation", name):
+		frappe.get_doc(
+			{"doctype": "Workstation", "workstation_name": name, "production_capacity": 1}
+		).insert()
+	return name
+
+
+def make_operation(name, workstation=None):
+	"""Idempotent Operation (autoname by name, P13 recipe)."""
+	if not frappe.db.exists("Operation", name):
+		doc = {"doctype": "Operation", "__newname": name, "operation_name": name}
+		if workstation:
+			doc["workstation"] = workstation
+		frappe.get_doc(doc).insert()
+	return name
+
+
+def make_bom_operations(operations):
+	"""BOM FG 100 = RM1 10 + RM2 2 with one row per operation:
+	operations = [(operation, workstation)]."""
+	bom = frappe.get_doc(
+		{
+			"doctype": "BOM",
+			"item": FG,
+			"company": COMPANY,
+			"quantity": 100,
+			"uom": "Nos",
+			"currency": "USD",
+			"is_active": 1,
+			"is_default": 1,
+			"with_operations": 1,
+			"operations": [
+				{"operation": operation, "workstation": workstation, "time_in_mins": 60, "hour_rate": 0}
+				for operation, workstation in operations
+			],
+			"items": [
+				{"item_code": RM1, "qty": 10, "uom": "Nos"},
+				{"item_code": RM2, "qty": 2, "uom": "Nos"},
+			],
+		}
+	)
+	bom.insert()
+	bom.submit()
+	return bom.name
+
+
+def make_wo_operations(bom_no, qty=100):
+	"""Work Order from an operations BOM. CORE: operations are NOT copied
+	server-side - get_items_and_operations_from_bom() is mandatory before
+	submit (P13 core surprise 1); submit then creates one Job Card per
+	operation (on_submit.create_job_card). Returns (wo_name, job_cards)."""
+	wo = frappe.get_doc(
+		{
+			"doctype": "Work Order",
+			"naming_series": "PDTC-WO-.####",
+			"company": COMPANY,
+			"production_item": FG,
+			"bom_no": bom_no,
+			"qty": qty,
+			"stock_uom": "Nos",
+			"wip_warehouse": WIP,
+			"fg_warehouse": FG_WH,
+			"source_warehouse": STORES,
+		}
+	)
+	wo.insert()
+	wo.get_items_and_operations_from_bom()
+	wo.submit()
+	job_cards = frappe.get_all(
+		"Job Card",
+		filters={"work_order": wo.name},
+		fields=["name", "operation", "operation_id", "for_quantity", "docstatus"],
+		order_by="creation asc, name asc",
+	)
+	assert len(job_cards) == len(wo.operations), f"expected one Job Card per operation, got {job_cards}"
+	return wo.name, job_cards
+
+
 def add_wo_operation(wo, process_loss_qty):
 	"""Attach an operation row carrying booked loss to a SUBMITTED Work Order.
 	Raw insert: the submitted parent must not be re-saved/re-validated; only

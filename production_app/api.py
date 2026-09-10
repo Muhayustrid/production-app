@@ -7,10 +7,12 @@ lock (10.1); user-facing errors are Indonesian (term dictionary 3.1); error
 codes `STATE_CHANGED` (UI reloads) and `NEEDS_ALLOWANCE` (3.4).
 """
 
+import contextlib
 import uuid
 
 import frappe
-from frappe.utils import cint, flt, getdate, today
+from frappe.model.document import Document
+from frappe.utils import cint, flt, get_datetime, getdate, now_datetime, today
 
 from production_app import access, qty, wo_summary
 from production_app.hooks import CUSTOM_P_FIELDS
@@ -288,12 +290,106 @@ def transfer_material(work_order, items_aktual=None, idempotency_key=None):
 
 
 @frappe.whitelist()
-def complete_operation(work_order, job_card, qty, is_final, idempotency_key=None):
-	"""Complete one operation (7.5): actual qty, honest duration (single-tap =
-	time_in_mins 0), pending_qty kept as remainder; choreography per proof P13
-	(add_time_log -> reload -> complete_job_card(qty, end_time,
-	process_loss_qty, pending_qty, auto_submit=1))."""
-	raise NotImplementedError("Tahap 4")
+def complete_operation(work_order, job_card, qty, is_final, idempotency_key=None, started_at=None, loss=None):
+	"""Complete one operation in one tap (7.5): ACTUAL qty, honest duration
+	(single tap = time_in_mins 0; `started_at` makes it real, P13c), pending_qty
+	kept as the operation remainder - a final tap NEVER inflates the completed
+	qty (P13d). Choreography per proof P13/V22 on a docstatus-0 Job Card:
+	add_time_log(start_time) -> reload -> complete_job_card(qty, end_time,
+	process_loss_qty, pending_qty, auto_submit=1). A partial completion leaves
+	the operation short of the WO qty with its card submitted, so the follow-up
+	card for the remainder is created immediately (P13e payload: `operation`
+	MUST be passed explicitly - core get_operation_details omits it)."""
+	completion = _parse_number(qty, "Jumlah Selesai")
+	loss_value = _parse_number(loss, "Loss Operasi")
+	final = _to_bool(is_final)
+
+	def fn():
+		access.require_role("Production Operator", "Production Supervisor")
+		wo = access.check_wo_access(work_order, "read")
+		reasons, _bom_pct = access.config_blocked_reasons(wo)
+		if reasons:
+			frappe.throw(reasons[0])
+		_reject_if_not_open(wo, "penyelesaian operasi", BLOCKED_COMPLETE_STATUSES)
+
+		jc = frappe.get_doc("Job Card", job_card)
+		access.check_relation(jc, wo.name)
+		if jc.docstatus != 0:
+			frappe.throw("Kartu operasi sudah selesai/dibatalkan.")
+		op = next((row for row in wo.operations if row.name == jc.operation_id), None)
+		if op is None:
+			frappe.throw("Job Card tidak terkait dengan operasi pada Work Order ini.")
+
+		precision = wo.precision("qty")
+		q = flt(completion, precision)
+		loss_qty = flt(loss_value, precision)
+		if q <= 0:
+			frappe.throw("Jumlah selesai harus lebih besar dari 0.")
+		# completed + loss + pending must add up to the card qty (core
+		# validate_time_logs_present) - the remainder stays pending (7.5).
+		pending = flt(flt(jc.for_quantity) - q - loss_qty, precision)
+		if pending < 0:
+			frappe.throw(
+				f"Jumlah selesai ({q:g}) + loss ({loss_qty:g}) melebihi jumlah kartu operasi "
+				f"({flt(jc.for_quantity, precision):g})."
+			)
+		_sequence_precheck(wo, op, q)
+
+		if not jc.time_logs:
+			# V22: the open child row is persisted directly by add_time_log
+			# (the parent is NOT saved) - reload before completing. The end
+			# time is captured AFTER the log opens (P13 order): a single-tap
+			# window [start, end] must never have start > end.
+			jc.add_time_log(
+				frappe._dict({"start_time": _parse_start(started_at), "employees": [], "completed_qty": 0})
+			)
+			jc = frappe.get_doc("Job Card", jc.name)
+		end = now_datetime()
+		try:
+			from erpnext.manufacturing.doctype.job_card.job_card import OperationSequenceError, OverlapError
+
+			with _core_wo_propagation():
+				jc.complete_job_card(
+					qty=q, end_time=end, process_loss_qty=loss_qty, pending_qty=pending, auto_submit=1
+				)
+		except OperationSequenceError:
+			# backstop behind _sequence_precheck (core keeps the final say)
+			frappe.throw("Operasi sebelumnya belum selesai - selesaikan operasi sebelumnya dulu.")
+		except OverlapError:
+			frappe.throw("Jadwal workstation bentrok dengan job card lain - coba lagi beberapa saat.")
+
+		wo.reload()
+		op = next((row for row in wo.operations if row.name == jc.operation_id), None)
+		kartu_tambahan = _ensure_additional_card(wo, op)
+		materials = _detail_materials(wo)
+		operations, _cards = _detail_operations(wo)
+		# the `qty` parameter shadows the qty module in this scope - inline
+		# remaining_target (3.2: qty - produced - loss)
+		remaining = flt(flt(wo.qty) - flt(wo.produced_qty) - flt(wo.process_loss_qty), precision)
+		return {
+			"work_order": wo.name,
+			"job_card": jc.name,
+			"operation": op.operation,
+			"operation_completed": flt(op.completed_qty, precision),
+			"operation_loss": flt(op.process_loss_qty, precision),
+			"operation_qty": flt(wo.qty, precision),
+			"kartu_tambahan": kartu_tambahan,
+			"status": wo.status,
+			"remaining_target": remaining,
+			"needs_close_decision": bool(final) and remaining > 0,
+			"next_action": _next_action(wo, [], materials, operations),
+			"reference_doctype": "Job Card",
+			"reference_doc": jc.name,
+		}
+
+	payload = {
+		"job_card": job_card,
+		"qty": completion,
+		"is_final": final,
+		"started_at": started_at,
+		"loss": loss_value,
+	}
+	return run_mutation(work_order, "complete_operation", idempotency_key, payload, fn)
 
 
 @frappe.whitelist()
@@ -415,10 +511,52 @@ def cancel_production(work_order, expected_fingerprint, idempotency_key=None):
 
 @frappe.whitelist()
 def close_work_order(work_order, reason, idempotency_key=None):
-	"""Close WO (7.8): Supervisor; rejected while a Job Card is WIP submitted;
-	executed via document methods (4.2) without permission bypass; reason
+	"""Close WO (7.8): Supervisor only; rejected while a submitted Job Card is
+	still "Work In Progress" (mirror of the core close gate). Executed via
+	document methods (4.2): update_status db_sets the status directly and
+	on_close_or_cancel runs the close bookkeeping - NO Work Order save, so the
+	production roles' read-only Work Order access suffices; `reason` is
 	recorded as a Work Order comment."""
-	raise NotImplementedError("Tahap 4")
+	reason = str(reason or "").strip()
+
+	def fn():
+		access.require_role("Production Supervisor")
+		if not reason:
+			frappe.throw("Alasan penutupan wajib diisi.")
+		wo = access.check_wo_access(work_order, "read")
+		if wo.docstatus != 1:
+			frappe.throw(f"Work Order {wo.name} bukan dokumen yang sudah disubmit - penutupan ditolak.")
+		if wo.status == "Closed":
+			frappe.throw("Work Order sudah Closed.")
+		if wo.get("operations"):
+			# mirror of the core close gate (work_order.close_work_order)
+			wip = frappe.get_all(
+				"Job Card",
+				filters={"work_order": wo.name, "status": "Work In Progress", "docstatus": 1},
+				pluck="name",
+			)
+			if wip:
+				frappe.throw(
+					f"Selesaikan atau batalkan job card {', '.join(wip)} dulu sebelum menutup Work Order."
+				)
+		# update_status accepts Closed from any submitted status incl. Stopped
+		# (core keeps status untouched only when already Closed) - traced from
+		# work_order.update_status: db_set("status", "Closed") + update_required_items.
+		wo.update_status("Closed")
+		wo.on_close_or_cancel()
+		wo.add_comment("Comment", text=f"Work Order ditutup. Alasan: {reason}")
+		wo.reload()
+		return {
+			"work_order": wo.name,
+			"status": wo.status,
+			"produced": flt(wo.produced_qty, wo.precision("qty")),
+			"loss": flt(wo.process_loss_qty, wo.precision("qty")),
+			"belum_diproduksi": qty.remaining_target(wo),
+			"reference_doctype": "Work Order",
+			"reference_doc": wo.name,
+		}
+
+	return run_mutation(work_order, "close_work_order", idempotency_key, {"reason": reason}, fn)
 
 
 # --------------------------------------------------------------------- list
@@ -765,9 +903,12 @@ def _validate_metadata(wo, payload):
 
 
 # 7.4: transfer only while the WO can still move material; 7.6: packing also
-# stops at Completed (is_final leftovers go through the close decision, 3.4).
+# stops at Completed (is_final leftovers go through the close decision, 3.4);
+# 7.5: operation taps stop at Stopped (core rejects JC transactions there) and
+# Closed alike.
 BLOCKED_TRANSFER_STATUSES = ("Stopped", "Closed")
 BLOCKED_FINISH_STATUSES = ("Stopped", *FINISHED_STATUSES)
+BLOCKED_COMPLETE_STATUSES = ("Stopped", "Closed")
 
 
 def _reject_if_not_open(wo, action, blocked_statuses):
@@ -906,6 +1047,98 @@ def _create_fg_batch(item_code):
 	batch.batch_id = f"{item_code}-{uuid.uuid6()}"
 	batch.insert(ignore_permissions=True)
 	return batch.name
+
+
+# --------------------------------------------------------------- complete_operation
+
+
+def _parse_number(value, label):
+	"""HTTP form fields arrive as strings; parse at max precision for the
+	idempotency fingerprint (so "60" and 60 bind to one request). Unparseable
+	input is rejected, never coerced (qty._normalize)."""
+	return qty._normalize(value, 9, label)
+
+
+def _to_bool(value):
+	"""Boolean HTTP form field: "1"/"true"/"yes" (any case) are truthy."""
+	if isinstance(value, str):
+		return value.strip().lower() in ("1", "true", "yes")
+	return bool(value)
+
+
+def _parse_start(started_at):
+	"""`started_at` (7.5): the operator's real start of the tap -> honest
+	duration (P13c); invalid input is rejected, never silently treated as now."""
+	if not started_at:
+		return now_datetime()
+	try:
+		return get_datetime(started_at)
+	except Exception:
+		frappe.throw("Waktu mulai tidak valid.")
+
+
+def _sequence_precheck(wo, op, q):
+	"""Friendly mirror of core validate_sequence_id (P13f): a previous
+	operation counts by completed_qty only (process loss is NOT counted -
+	P13 core surprise 3). Starting this card before the previous operation has
+	caught up is rejected in Indonesian; core keeps the final say (the
+	OperationSequenceError mapping below is the backstop)."""
+	op_key = _op_order_key(op)
+	for row in sorted(wo.operations, key=_op_order_key):
+		if _op_order_key(row) >= op_key:
+			break
+		if flt(row.completed_qty) < q:
+			frappe.throw(f"Selesaikan operasi {row.operation} dulu.")
+
+
+def _ensure_additional_card(wo, op):
+	"""7.5 / P13e: an operation short of the WO qty whose card was just
+	submitted gets its follow-up Job Card immediately (the remainder can only
+	be tapped on a new card). Payload per proof: `operation` explicitly -
+	core get_operation_details omits it; pending_qty = qty so core
+	validate_operation_data passes. Returns the new card name or None."""
+	if op is None:
+		return None
+	precision = wo.precision("qty")
+	sisa = flt(flt(wo.qty) - flt(op.completed_qty) - flt(op.process_loss_qty), precision)
+	if sisa <= 0:
+		return None
+	open_card = {"work_order": wo.name, "operation_id": op.name, "docstatus": 0}
+	if frappe.db.exists("Job Card", open_card):
+		return None
+	from erpnext.manufacturing.doctype.work_order.work_order import make_job_card
+
+	make_job_card(wo.name, [{"name": op.name, "operation": op.operation, "qty": sisa, "pending_qty": sisa}])
+	return frappe.get_value("Job Card", open_card, "name")
+
+
+@contextlib.contextmanager
+def _core_wo_propagation():
+	"""11.2 step 5 / 11.4: the P13 choreography's core submit propagates the
+	completion onto the Work Order with a plain wo.save() (job_card
+	update_work_order_data) - permissions the production roles deliberately do
+	NOT hold (WO read-only, 11.3): that save asserts write AND, because the WO
+	is docstatus 1 (update-after-submit transition check), submit. The save is
+	core-internal bookkeeping of the already-gated mutation (role / WO access /
+	relation / docstatus / sequence all checked before this point), not a user
+	action, so exactly those two assertions are waived while it runs. Every
+	other permission check - including Job Card create/write/submit on the
+	card itself - runs untouched.
+
+	ponytail: class-level waiver - a concurrent Desk WO save in another thread
+	during this window would also pass; acceptable at proxy-app traffic, move
+	the propagation to a queued job if that ever matters."""
+
+	def patched(doc, permtype="read", permlevel=None):
+		if doc.doctype == "Work Order" and permtype in ("write", "submit"):
+			return
+		original(doc, permtype, permlevel)
+
+	original, Document.check_permission = Document.check_permission, patched
+	try:
+		yield
+	finally:
+		Document.check_permission = original
 
 
 def _apply_packing_fields(se, normalized, payload):
