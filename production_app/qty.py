@@ -141,7 +141,16 @@ def remaining_target(wo_doc):
 
 
 def _normalize(value, precision, label):
-	"""Finite >= 0 at field precision; Indonesian message otherwise."""
+	"""Finite >= 0 at field precision; Indonesian message otherwise.
+	Unparseable input is rejected, never coerced to 0 by flt (API trust
+	boundary); numeric strings and None are still accepted."""
+	if value is None or value == "":
+		value = 0
+	elif isinstance(value, str):
+		try:
+			value = float(value.strip().replace(",", ""))
+		except ValueError:
+			frappe.throw(f"{label} harus berupa angka yang valid.")
 	value = flt(value, precision)
 	if not math.isfinite(value):
 		frappe.throw(f"{label} harus berupa angka yang valid.")

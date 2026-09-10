@@ -76,6 +76,11 @@ class TestQty(IntegrationTestCase):
 			qty.validate_packing(wo, {"good": float("nan")})
 		with self.assertRaises(frappe.ValidationError):
 			qty.validate_packing(wo, {"good": float("inf")})
+		# unparseable strings are rejected, never coerced to 0
+		with self.assertRaises(frappe.ValidationError) as cm:
+			qty.validate_packing(wo, {"good": 10, "reject": "abc"})
+		self.assertIn("Reject", str(cm.exception))
+		self.assertIn("harus berupa angka yang valid", str(cm.exception))
 		# precision follows the field
 		normalized, _ = qty.validate_packing(wo, {"good": 10.123456789})
 		self.assertEqual(normalized.good, flt(10.123456789, wo.precision("qty")))
@@ -163,3 +168,6 @@ class TestQty(IntegrationTestCase):
 			qty.compute_session_materials(wo, {factories.RM2: -1})  # negative
 		with self.assertRaises(frappe.ValidationError):
 			qty.compute_session_materials(wo, {"PDTC-UNKNOWN-ITEM": 1})  # never in WIP
+		with self.assertRaises(frappe.ValidationError) as cm:
+			qty.compute_session_materials(wo, {factories.RM1: "abc"})  # unparseable
+		self.assertIn("harus berupa angka yang valid", str(cm.exception))
