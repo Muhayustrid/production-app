@@ -10,7 +10,6 @@ codes `STATE_CHANGED` (UI reloads) and `NEEDS_ALLOWANCE` (3.4).
 import uuid
 
 import frappe
-from frappe.model.document import Document
 from frappe.utils import cint, flt, getdate, today
 
 from production_app import access, qty, wo_summary
@@ -214,11 +213,11 @@ def save_production_data(work_order, data, idempotency_key=None):
 
 
 @frappe.whitelist()
-def transfer_material(work_order, items=None, idempotency_key=None):
+def transfer_material(work_order, items_aktual=None, idempotency_key=None):
 	"""Material transfer (7.4): operator's ACTUAL picked quantities per
 	material; over-transfer gate (6.8); insert/submit via make_stock_entry dict
 	with ignore_permissions after the app gate; batch picking left to core."""
-	parsed = frappe.parse_json(items) if isinstance(items, str) else items
+	parsed = frappe.parse_json(items_aktual) if isinstance(items_aktual, str) else items_aktual
 	if parsed is None:
 		parsed = {}
 	if not isinstance(parsed, dict):
@@ -256,7 +255,12 @@ def transfer_material(work_order, items=None, idempotency_key=None):
 		_over_transfer_gate(wo, se)
 		_check_indicative_stock(wo, se)
 		try:
-			_submit_authorized(se)
+			# 11.2 step 5 / 11.4: the SE is the authorized document; the Serial
+			# and Batch Bundles core spawns during submit are covered by the
+			# production roles' Custom DocPerm (fixtures).
+			with access.authorized_ignore(se):
+				se.insert()
+				se.submit()
 		except frappe.ValidationError as e:
 			if "cannot be greater than planned quantity" in str(e):
 				# the 6.8 gate should have caught this pre-submit; map it anyway
@@ -280,7 +284,7 @@ def transfer_material(work_order, items=None, idempotency_key=None):
 			"reference_doc": se.name,
 		}
 
-	return run_mutation(work_order, "transfer_material", idempotency_key, {"items": parsed}, fn)
+	return run_mutation(work_order, "transfer_material", idempotency_key, {"items_aktual": parsed}, fn)
 
 
 @frappe.whitelist()
@@ -317,7 +321,16 @@ def finish_production(work_order, packing=None, idempotency_key=None):
 
 		normalized, warnings = qty.validate_packing(wo, payload)
 		_operations_coverage_check(wo, normalized)
-		session = qty.compute_session_materials(wo, payload.get("bahan_dipakai"))
+		session = _session_materials(
+			wo, normalized.good + normalized.loss_eksplisit, payload.get("bahan_dipakai")
+		)
+		if not session:
+			# a Manufacture SE without any material row is rejected by core with a
+			# confusing message - reject here with directions instead
+			frappe.throw(
+				"Belum ada bahan yang tersedia untuk dikonsumsi pada Work Order ini - "
+				"pastikan bahan sudah tersedia, atau hubungi Supervisor."
+			)
 
 		from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 
@@ -346,10 +359,15 @@ def finish_production(work_order, packing=None, idempotency_key=None):
 				# did not confirm.
 			se.set("items", rows)
 			_apply_packing_fields(se, normalized, payload)
-			_submit_authorized(se)
+			# 11.2 step 5 / 11.4: the SE is the authorized document; the Serial
+			# and Batch Bundles core spawns during submit are covered by the
+			# production roles' Custom DocPerm (fixtures).
+			with access.authorized_ignore(se):
+				se.insert()
+				se.submit()
 		except frappe.ValidationError as e:
-			# the duplicate gate already fires at make_stock_entry (get_items ->
-			# validate_work_order), so the mapping must span the whole build
+			# the duplicate gate fires at SE validate (so already during insert),
+			# not only at submit - the mapping must span build + submit
 			if "Stock Entries already created for Work Order" in str(e):
 				# duplicate gate [F] check_duplicate_entry_for_work_order
 				frappe.throw("Target sesi sebelumnya sudah mencapai batas Work Order - hubungi admin.")
@@ -761,33 +779,6 @@ def _reject_if_not_open(wo, action, blocked_statuses):
 		frappe.throw(f"Work Order dalam status {wo.status} - {action} tidak dapat dilakukan.")
 
 
-def _submit_authorized(se):
-	"""Authorized SE insert+submit (11.2 step 5, 11.4).
-
-	`authorized_ignore` covers the Stock Entry itself, but core's submit spawns
-	related documents for the same authorized action (Serial and Batch Bundle
-	for batch picking) whose permission checks do NOT inherit the SE's flag -
-	and this frappe version has no request-wide ignore_permissions. All app
-	gates (role, WO, config, pre-checks) ran BEFORE this block, so the
-	Document-level permission check is suspended for exactly the duration of
-	the authorized insert+submit and restored afterwards.
-	# ponytail: scoped in time, not per spawned document; tighten if frappe
-	# ever propagates flags to core-spawned documents.
-	"""
-	original = Document.has_permission
-
-	def _allow(self, permtype="read", **kwargs):
-		return True
-
-	Document.has_permission = _allow
-	try:
-		with access.authorized_ignore(se):
-			se.insert()
-			se.submit()
-	finally:
-		Document.has_permission = original
-
-
 def _transfer_allowance_pct():
 	"""6.8: overproduction percentage, falling back to the transfer-extra knob
 	ONLY when overproduction is 0 (core precedence in update_work_order_qty)."""
@@ -814,7 +805,6 @@ def _over_transfer_gate(wo, se):
 	transferred = flt(wo.material_transferred_for_manufacturing)
 	pct = _transfer_allowance_pct()
 	allowed = flt(flt(wo.qty) * (1 + pct / 100), wo.precision("qty"))
-	se.fg_completed_qty = flt(allowed - transferred, wo.precision("qty"))
 	if flt(transferred + request, 9) > flt(allowed, 9):
 		frappe.throw(
 			f"Total bahan yang diambil ({transferred + request:g}) melebihi batas transfer Work Order "
@@ -840,6 +830,39 @@ def _check_indicative_stock(wo, se):
 				f"Bahan {row.item_code} kurang {flt(flt(row.qty) - bin_qty, wo.precision('qty')):g} {uom} "
 				f"di Gudang {warehouse} - hubungi gudang."
 			)
+
+
+def _session_materials(wo, fg_qty, explicit):
+	"""Session material rows (3.2, INV5): a default per material plus the
+	operator's explicit overrides; rows the session does not confirm must never
+	carry core's proportional defaults.
+
+	- normal WOs: default = WIP remaining net, capped at that balance
+	  (qty.compute_session_materials);
+	- skip_transfer WOs: material never passes the WIP warehouse (core books the
+	  Manufacture rows straight from the source warehouse), so qty.wip_remaining
+	  is structurally empty. Default = the BOM requirement scaled to the session
+	  qty - exactly the rows core fills in the Manufacture dict. The WIP cap is
+	  not meaningful here; core validates the actual stock at submit.
+	"""
+	if not cint(wo.skip_transfer):
+		return qty.compute_session_materials(wo, explicit)
+
+	precision = wo.precision("qty")
+	session = {}
+	for row in wo.required_items:
+		if flt(row.required_qty) > 0:
+			session[row.item_code] = flt(flt(row.required_qty) * fg_qty / flt(wo.qty), precision)
+	if explicit:
+		for item_code, used in explicit.items():
+			if item_code not in session:
+				frappe.throw(f"Bahan Dipakai {item_code} bukan kebutuhan Work Order ini.")
+			used = qty._normalize(used, precision, f"Bahan Dipakai {item_code}")
+			if used > 0:
+				session[item_code] = used
+			else:
+				session.pop(item_code, None)
+	return session
 
 
 def _require_packing_schema():

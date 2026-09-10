@@ -233,3 +233,40 @@ class TestFinishProduction(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			api.finish_production(wo, {"good": 1}, self._key())
 		self.assertIn("Completed", str(cm.exception))
+
+	def test_empty_session_precheck_message(self):
+		wo = factories.make_wo()  # no transfer -> nothing in WIP to consume
+		frappe.set_user(self.operator)
+		with self.assertRaises(frappe.ValidationError) as cm:
+			api.finish_production(wo, {"good": 10}, self._key())
+		self.assertIn("Belum ada bahan yang tersedia untuk dikonsumsi", str(cm.exception))
+		self.assertEqual(self._manufacture_ses(wo), [])
+
+	def test_skip_transfer_finish_defaults_to_bom_rows_from_source(self):
+		wo = factories.make_wo()
+		frappe.db.set_value("Work Order", wo, "skip_transfer", 1)
+		factories.stock_in(factories.RM1, factories.STORES, 10, 100, batch_no=factories.BATCH_RM1)
+		factories.stock_in(factories.RM2, factories.STORES, 2, 500)
+		result = self._finish(wo, {"good": 95})
+
+		self.assertEqual(result["produced"], 95.0)
+		self.assertEqual(result["status"], "In Process")
+		se = self._se(result["stock_entry"])
+		# default session = BOM requirement scaled to the session qty (10 -> 9.5,
+		# 2 -> 1.9), booked straight from the source warehouse - no WIP involved
+		materials = {r.item_code: flt(r.qty) for r in se.items if r.item_code != factories.FG}
+		self.assertEqual(materials, {factories.RM1: 9.5, factories.RM2: 1.9})
+		rm1 = next(r for r in se.items if r.item_code == factories.RM1)
+		self.assertEqual(rm1.s_warehouse, factories.STORES)
+
+	def test_skip_transfer_finish_explicit_override_wins(self):
+		wo = factories.make_wo()
+		frappe.db.set_value("Work Order", wo, "skip_transfer", 1)
+		factories.stock_in(factories.RM1, factories.STORES, 10, 100, batch_no=factories.BATCH_RM1)
+		factories.stock_in(factories.RM2, factories.STORES, 2, 500)
+		result = self._finish(wo, {"good": 50, "bahan_dipakai": {factories.RM1: 8}})
+
+		se = self._se(result["stock_entry"])
+		materials = {r.item_code: flt(r.qty) for r in se.items if r.item_code != factories.FG}
+		self.assertEqual(materials, {factories.RM1: 8.0, factories.RM2: 1.0})
+		self.assertEqual(result["produced"], 50.0)
