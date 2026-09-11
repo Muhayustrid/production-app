@@ -81,9 +81,9 @@ test("getWorkOrders maps date range + item filters to query params", async () =>
 		return { ok: true, json: async () => ({ message: { work_orders: [] } }) };
 	};
 	try {
-		await getWorkOrders("", { dateFrom: "2026-09-01", dateTo: "2026-09-30", item: "Roti" });
-		await getWorkOrders("PDTC-WO-1", {});
-		await getWorkOrders("", { dateFrom: "", dateTo: "", item: "   " });
+		await getWorkOrders({ dateFrom: "2026-09-01", dateTo: "2026-09-30", item: "Roti" });
+		await getWorkOrders({ item: "PDTC-WO-1" });
+		await getWorkOrders();
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
@@ -92,12 +92,16 @@ test("getWorkOrders maps date range + item filters to query params", async () =>
 	assert.equal(urls[0].startsWith("/api/method/production_app.api.get_open_work_orders?"), true);
 	assert.equal(query.get("date_from"), "2026-09-01");
 	assert.equal(query.get("date_to"), "2026-09-30");
+	// the text box goes out as BOTH search (WO number also matches) and item
 	assert.equal(query.get("item"), "Roti");
-	assert.equal(query.get("search"), null); // empty search is dropped
+	assert.equal(query.get("search"), "Roti");
 
-	// plain search still maps to search
-	assert.equal(new URLSearchParams(urls[1].split("?")[1]).get("search"), "PDTC-WO-1");
+	// WO-number search: same dual mapping
+	const byNumber = new URLSearchParams(urls[1].split("?")[1]);
+	assert.equal(byNumber.get("search"), "PDTC-WO-1");
+	assert.equal(byNumber.get("item"), "PDTC-WO-1");
+	assert.equal(byNumber.get("date_from"), null);
 
-	// no real filter values -> bare URL, old unfiltered behavior
+	// no filters -> bare URL, old unfiltered behavior
 	assert.equal(urls[2], "/api/method/production_app.api.get_open_work_orders");
 });

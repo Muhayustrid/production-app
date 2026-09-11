@@ -40,7 +40,7 @@ test("empty list failure: banner only - no toast", async () => {
 	const restore = failingServer();
 	try {
 		reset(toasts);
-		await loadList("");
+		await loadList();
 	} finally {
 		restore();
 	}
@@ -54,7 +54,7 @@ test("stale rows failure: toast only - rows stay, no banner", async () => {
 	try {
 		reset(toasts);
 		workOrderStore.list = [{ name: "PDTC-WO-0001", item: "PDTC-FG" }];
-		await loadList("");
+		await loadList();
 	} finally {
 		restore();
 	}
@@ -63,7 +63,8 @@ test("stale rows failure: toast only - rows stay, no banner", async () => {
 	assert.deepEqual(toasts, ["server rusak"]);
 });
 
-// Task 24: loadList must carry the store's filters into the request.
+// Task 24: loadList must carry the store's filters into the request; the
+// text box value is sent as BOTH search (WO number matches too) and item.
 test("loadList sends active filters from the store", async () => {
 	const urls = [];
 	const originalFetch = globalThis.fetch;
@@ -75,13 +76,14 @@ test("loadList sends active filters from the store", async () => {
 		reset([]);
 		workOrderStore.filters.item = "Roti";
 		workOrderStore.filters.dateFrom = "2026-09-01";
-		await loadList("");
+		await loadList();
 	} finally {
 		globalThis.fetch = originalFetch;
 		reset([]);
 	}
 	const query = new URLSearchParams(urls[0].split("?")[1]);
 	assert.equal(query.get("item"), "Roti");
+	assert.equal(query.get("search"), "Roti");
 	assert.equal(query.get("date_from"), "2026-09-01");
 	assert.equal(query.get("date_to"), null); // unset filter is not sent
 });

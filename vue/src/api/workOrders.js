@@ -8,14 +8,19 @@ const ENDPOINT = "production_app.api";
 
 // ------------------------------------------------------------- reads (GET)
 
-// Task 24: optional list filters. `filters` = { dateFrom, dateTo, item },
-// mapped to the backend's date_from / date_to / item params; empty values are
-// dropped so a call without them keeps the plain unfiltered list behavior.
-export function getWorkOrders(search, filters = {}) {
-	const params = search && String(search).trim() ? { search } : {};
-	if (filters.dateFrom) params.date_from = filters.dateFrom;
-	if (filters.dateTo) params.date_to = filters.dateTo;
-	if (filters.item && String(filters.item).trim()) params.item = filters.item;
+// Task 24: optional list filters. The text box value goes out as BOTH
+// `search` (the backend ORs it with the WO number too) and `item` (the
+// name/code filter), so an operator can search by either. Empty values are
+// dropped: a call without filters keeps the plain unfiltered list behavior.
+export function getWorkOrders({ dateFrom = "", dateTo = "", item = "" } = {}) {
+	const params = {};
+	if (dateFrom) params.date_from = dateFrom;
+	if (dateTo) params.date_to = dateTo;
+	const text = String(item).trim();
+	if (text) {
+		params.search = text;
+		params.item = text;
+	}
 	return call(`${ENDPOINT}.get_open_work_orders`, params);
 }
 

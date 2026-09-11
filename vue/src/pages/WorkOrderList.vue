@@ -53,6 +53,9 @@
 						/>
 					</label>
 				</div>
+				<p v-if="store.filters.dateFrom || store.filters.dateTo" class="text-xs text-gray-500">
+					Work Order tanpa tanggal target tidak ikut hasil filter.
+				</p>
 				<div class="relative">
 					<Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
 					<input
@@ -219,12 +222,12 @@ const activeFilters = computed(
 		).length,
 );
 
+// Reset only clears the values: the watcher above re-fetches (debounced).
+// The button is visible only while a filter is set, so the watcher always fires.
 function resetFilters() {
-	clearTimeout(debounce);
 	store.filters.dateFrom = "";
 	store.filters.dateTo = "";
 	store.filters.item = "";
-	loadList();
 }
 
 onMounted(() => loadList());
