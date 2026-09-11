@@ -14,9 +14,9 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import cint, flt, get_datetime, getdate, now_datetime, today
 
-from production_app import access, qty, wo_summary
+from production_app import access, cancel, qty, wo_summary
 from production_app.hooks import CUSTOM_P_FIELDS
-from production_app.mutation import run_mutation
+from production_app.mutation import assert_state, run_mutation
 
 # 7.1: the statuses that still show up in the operator's list (Completed /
 # Closed / Cancelled are never loaded).
@@ -495,18 +495,102 @@ def finish_production(work_order, packing=None, idempotency_key=None):
 
 @frappe.whitelist()
 def cancel_last_step(work_order, expected_target, idempotency_key=None):
-	"""Cancel the newest cancelable step (7.7, order per section 12);
-	`expected_target` mismatch -> STATE_CHANGED, nothing cancelled.
-	Supervisor only."""
-	raise NotImplementedError("Tahap 4")
+	"""Cancel the newest cancelable step (7.7, order per 12); Supervisor only.
+	After the lock the resolved target must still be `expected_target`:
+	mismatch (or nothing left to cancel) -> STATE_CHANGED, nothing cancelled -
+	including SE-A confirmed, SE-B created by someone else (SE-B stays intact).
+	Pre-checks block with an Indonesian reason; core reverses stock, WO status
+	and costing (P8-1) and the hook re-syncs the packing summary (8.1)."""
+
+	def fn():
+		access.require_role("Production Supervisor")
+		wo = access.check_wo_access(work_order, "read")
+		reasons, _bom_pct = access.config_blocked_reasons(wo)
+		if reasons:
+			frappe.throw(reasons[0])
+		target = cancel.next_cancel_target(wo)
+		assert_state(
+			target is not None and target.name == expected_target,
+			"Dokumen target berubah - muat ulang halaman dan konfirmasi ulang.",
+		)
+		reason = cancel.precheck_cancel(target)
+		if reason:
+			frappe.throw(reason)
+		try:
+			cancel.cancel_doc(target)
+		except frappe.ValidationError as e:
+			cancel.map_cancel_error(e)
+
+		wo.reload()
+		materials = _detail_materials(wo)
+		operations, _job_cards = _detail_operations(wo)
+		return {
+			"work_order": wo.name,
+			"cancelled": {"doctype": target.doctype, "name": target.name},
+			"produced": flt(wo.produced_qty, wo.precision("qty")),
+			"loss": flt(wo.process_loss_qty, wo.precision("qty")),
+			"belum_diproduksi": qty.remaining_target(wo),
+			"status": wo.status,
+			"materials": materials,
+			"next_action": _next_action(wo, [], materials, operations),
+			# the fingerprint of the post-cancel state pre-fills the next
+			# confirmation dialog (7.7)
+			"fingerprint": cancel.production_fingerprint(wo.name),
+			"reference_doctype": target.doctype,
+			"reference_doc": target.name,
+		}
+
+	return run_mutation(
+		work_order, "cancel_last_step", idempotency_key, {"expected_target": expected_target}, fn
+	)
 
 
 @frappe.whitelist()
 def cancel_production(work_order, expected_fingerprint, idempotency_key=None):
-	"""Cancel the whole production in one request (7.7): verify fingerprint of
-	the docstatus-1 document list, loop pre-checks until clean, then cancel;
-	failure midway -> total rollback. Supervisor only."""
-	raise NotImplementedError("Tahap 4")
+	"""Cancel the whole production in one atomic request (7.7/12); Supervisor
+	only. The docstatus-1 fingerprint is verified after the lock (mismatch ->
+	STATE_CHANGED, no change at all), then the loop walks the fixed order:
+	resolve newest target -> pre-check -> cancel - until no docstatus-1 SE/JC
+	remains - and finally cancels the WO (draft Job Cards stay). Any failure
+	midway propagates: frappe's request rollback wipes everything (10.3)."""
+
+	def fn():
+		access.require_role("Production Supervisor")
+		wo = access.check_wo_access(work_order, "read")
+		reasons, _bom_pct = access.config_blocked_reasons(wo)
+		if reasons:
+			frappe.throw(reasons[0])
+		assert_state(
+			cancel.production_fingerprint(wo.name) == expected_fingerprint,
+			"Daftar dokumen produksi berubah - muat ulang halaman dan konfirmasi ulang.",
+		)
+		cancelled = []
+		# one successful cancel per iteration; the bound keeps the loop finite
+		for _ in range(len(cancel.all_members(wo.name))):
+			target = cancel.next_cancel_target(wo)
+			if target is None:
+				break
+			reason = cancel.precheck_cancel(target)
+			if reason:
+				frappe.throw(reason)
+			try:
+				cancel.cancel_doc(target)
+			except frappe.ValidationError as e:
+				cancel.map_cancel_error(e)
+			cancelled.append({"doctype": target.doctype, "name": target.name})
+
+		wo_doc = cancel.cancel_work_order(wo)
+		return {
+			"work_order": wo.name,
+			"cancelled": cancelled,
+			"status": wo_doc.status,
+			"reference_doctype": "Work Order",
+			"reference_doc": wo.name,
+		}
+
+	return run_mutation(
+		work_order, "cancel_production", idempotency_key, {"expected_fingerprint": expected_fingerprint}, fn
+	)
 
 
 @frappe.whitelist()
