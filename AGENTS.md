@@ -25,9 +25,17 @@ bench build --app production_app                              # only when assets
 
 ## App-specific contracts (binding: design spec Revisi 5.1)
 
-- `wo_summary.py` is the only fully implemented module (Tahap 2).
-  `api.py`, `access.py`, `qty.py`, `cancel.py` are Tahap 3 stubs — keep them
-  raising `NotImplementedError` until then.
+- Backend API (Tahap 3) is COMPLETE — the 9 whitelisted endpoints in
+  `api.py` (spec §7) are the SPA's only backend surface. Do not add
+  endpoints, parameters, or fields outside spec §7/§8; keep error messages
+  Indonesian (operator dictionary §3.1) with the machine codes
+  `STATE_CHANGED` / `NEEDS_ALLOWANCE`.
+- SPA (`vue/`, Tahap 4): build output goes to
+  `production_app/public/production/` (committed, sourcemaps OFF) and
+  `production_app/www/production-app.html`. `yarn test` (node --test) covers
+  the idempotency-key retry semantics; operator-facing labels use the §3.1
+  vocabulary only — technical core terms (fg_completed_qty, process loss,
+  backflush, WIP) must never reach the UI.
 - Stock Entry custom fields `custom_p_*` are app-owned (fixtures). Work Order
   summary fields are the SITE's Customize-Form fields (spec 8.1) — never
   export them from this app: `custom_good_qty_postpacking`,

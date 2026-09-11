@@ -9,14 +9,42 @@ Work Order packing summary kept in sync by Stock Entry hooks).
 - Design authority: `docs/specs/2026-09-10-production-app-design.md` (Revisi 5.1)
   in the project repository (outside this app repo).
 
-## Scope status (Tahap 2)
+## Scope status (Tahap 4)
 
-- **Implemented**: `production_app/wo_summary.py` (Work Order packing summary
-  aggregation, wired via `doc_events` on Stock Entry submit/cancel),
-  `Production Request Log` doctype (idempotency ledger), fixtures (Stock Entry
-  `custom_p_*` fields, roles, Custom DocPerms).
-- **Stubs only (Tahap 3)**: `api.py`, `access.py`, `qty.py`, `cancel.py` raise
-  `NotImplementedError` on purpose. Do not "finish" them outside Tahap 3.
+- **Backend (Tahap 2-3, complete)**: `wo_summary.py`, `access.py`, `qty.py`,
+  `cancel.py`, `mutation.py` and the 9 whitelisted endpoints in `api.py`
+  (see "API Endpoints" below).
+- **Frontend (Tahap 4)**: UI foundation in `vue/` — API layer with
+  idempotency-key retry semantics, central error handling (`STATE_CHANGED`
+  auto-reload, `NEEDS_ALLOWANCE`), the Work Order list screen (spec 9.1) and
+  the detail skeleton with 5-tab bar + smart action bar (spec 9.2),
+  responsive basics (spec 9.3). Tab contents land with tasks 18-19.
+
+## API Endpoints
+
+Module `production_app/api.py` — the SPA's ONLY backend surface (full
+contract: design spec §7). All endpoints are whitelisted without guest and
+gated by `access.py` (roles Production Operator / Production Supervisor);
+error messages are Indonesian; mutating endpoints additionally accept a
+client-generated `idempotency_key` (UUID, spec 10.2: reuse it when retrying
+the same action, regenerate for the next action) and are re-authorized on
+replay.
+
+| Endpoint | Contract (spec) |
+|---|---|
+| `get_open_work_orders(search)` | 7.1 — open Work Orders in the user's scope: item, qty/produced/belum diproduksi, step badge, blocked reasons. |
+| `get_work_order_detail(work_order)` | 7.2 — WO summary, production metadata, materials, operations, job cards, stock entries, packing summary, `next_action`, blocked reasons. |
+| `save_production_data(work_order, data, idempotency_key)` | 7.3 — save editable WO production metadata (strict 8.2 whitelist). |
+| `transfer_material(work_order, items_aktual, idempotency_key)` | 7.4 — material transfer with the operator's ACTUAL picked quantities. |
+| `complete_operation(work_order, job_card, qty, is_final, idempotency_key, started_at, loss)` | 7.5 — one-tap operation completion, actual qty, honest duration. |
+| `finish_production(work_order, packing, idempotency_key)` | 7.6 — packing session = one Manufacture Stock Entry (Jalur A). |
+| `cancel_last_step(work_order, expected_target, idempotency_key)` | 7.7 — Supervisor; cancel the newest step after a state match. |
+| `cancel_production(work_order, expected_fingerprint, idempotency_key)` | 7.7 — Supervisor; cancel the whole production atomically. |
+| `close_work_order(work_order, reason, idempotency_key)` | 7.8 — Supervisor; close the Work Order with a reason. |
+
+Machine-readable error codes: `STATE_CHANGED` (confirmed state moved — the UI
+reloads and the operator re-confirms) and `NEEDS_ALLOWANCE` (result exceeds
+the site's production tolerance).
 
 ## Key contracts
 
@@ -79,8 +107,20 @@ bench build --app production_app
 # Equivalent manual steps:
 cd vue && yarn install && yarn build
 
-# Dev server with hot reload:
-yarn dev   # from vue/ (proxies /api,/assets to the local bench)
+# Dev server with hot reload (from vue/):
+yarn dev
+```
+
+Dev-proxy note: `yarn dev` proxies `/api`, `/assets`, `/files`, ... to the
+local bench web server on `127.0.0.1:8000` (frappe-ui `frappeProxy` reads
+`webserver_port` from `common_site_config.json`). A plain `bench serve`
+always pins THAT port to `default_site` — `posnext.localhost`, the
+PRODUCTION site — so never develop against it. Start a proof-pinned server
+and point the proxy at it instead:
+
+```bash
+bench --site proof.localhost serve --port 8001   # proof site (container)
+FRAPPE_WEB_SERVER_PORT=8001 yarn dev             # from vue/, proxies to proof
 ```
 
 Note: a plain `bench serve` pins the site to `default_site`
