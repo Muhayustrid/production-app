@@ -1158,9 +1158,18 @@ def _parse_start(started_at):
 	if not started_at:
 		return now_datetime()
 	try:
-		return get_datetime(started_at)
+		start = get_datetime(started_at)
 	except Exception:
 		frappe.throw("Waktu mulai tidak valid.")
+	# get_datetime happily parses ISO strings carrying "Z"/"+00:00" into an
+	# AWARE datetime - which then crashes at the naive MySQL write of the
+	# TimeLog from_time (raw 500). The SPA contract is naive DEVICE-LOCAL
+	# time, so anything with a timezone is rejected in Indonesian instead.
+	if start.tzinfo is not None:
+		frappe.throw(
+			"Waktu mulai tidak boleh membawa zona waktu - gunakan waktu perangkat apa adanya."
+		)
+	return start
 
 
 def _sequence_precheck(wo, op, q):

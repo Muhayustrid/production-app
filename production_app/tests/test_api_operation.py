@@ -118,6 +118,22 @@ class TestCompleteOperation(OperationFixture):
 		mins = flt(jc.time_logs[0].time_in_mins)
 		self.assertLessEqual(abs(mins - 30), 1)
 
+	def test_tz_aware_started_at_rejected(self):
+		"""A started_at carrying a timezone ("...Z" / "...+00:00", e.g. a
+		toISOString() client) must be rejected in Indonesian: get_datetime
+		parses it into an AWARE datetime that crashes at the naive MySQL write
+		of the TimeLog from_time (raw 500). The contract is naive device-local
+		time (spec 7.5 P13c)."""
+		from datetime import timezone
+
+		wo, jcs = self._wo()
+		aware = now_datetime().replace(tzinfo=timezone.utc).isoformat()
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			self._complete(wo, jcs[0].name, 100, True, started_at=aware)
+		self.assertIn("zona waktu", str(ctx.exception))
+		# nothing recorded on the card
+		self.assertEqual(frappe.get_doc("Job Card", jcs[0].name).time_logs, [])
+
 	def test_final_partial_does_not_inflate_completed(self):
 		wo, jcs = self._wo(qty=1000)
 		result = self._complete(wo, jcs[0].name, 950, True)

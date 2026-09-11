@@ -160,17 +160,23 @@ class TestTransferMaterial(IntegrationTestCase):
 
 	def test_indicative_stock_shortfall_message(self):
 		wo = factories.make_wo()  # nothing stocked for THIS WO's needs
-		frappe.set_user(self.operator)
-		with self.assertRaises(frappe.ValidationError) as cm:
-			api.transfer_material(wo, None, self._key())
-		message = str(cm.exception)
-		# the class transaction may hold leftovers from earlier tests: the message
-		# must name item, deficit (request - whatever is in Stores), uom, warehouse
+		# Hermetic: pin the indicative Bin level. The check reads Bin directly,
+		# so leftover Stores stock from hand-created fixtures (e.g. a site
+		# receipt) would otherwise swallow the shortfall entirely. No Bin row
+		# -> the check reads 0 and the deficit is the full request.
+		frappe.db.set_value(
+			"Bin", {"item_code": factories.RM1, "warehouse": factories.STORES}, "actual_qty", 3
+		)
 		bin_qty = flt(
 			frappe.db.get_value(
 				"Bin", {"item_code": factories.RM1, "warehouse": factories.STORES}, "actual_qty"
 			)
 		)
+		frappe.set_user(self.operator)
+		with self.assertRaises(frappe.ValidationError) as cm:
+			api.transfer_material(wo, None, self._key())
+		message = str(cm.exception)
+		# the message must name item, deficit (request - whatever is in Stores), uom, warehouse
 		self.assertIn(f"Bahan {factories.RM1} kurang {flt(10 - bin_qty):g} Nos", message)
 		self.assertIn(factories.STORES, message)
 		self.assertIn("hubungi gudang", message)
