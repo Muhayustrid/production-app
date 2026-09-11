@@ -15,7 +15,11 @@ Contract proven per test:
   (newest by posting_datetime), never SE-A;
 - wrong order rejected: core refuses the Transfer-SE cancel while the
   Manufacture SE is active (P8-2, batch-level negative stock) and the app maps
-  it to the Indonesian message; nothing changed;
+  it to the Indonesian message; nothing changed; the same mapping is proven
+  through the FULL endpoint when an external WIP drain is invisible to the
+  WO-scoped pre-check (Task 16 wiring);
+- Stopped WO: refused on BOTH cancel endpoints with the Indonesian message
+  before any target resolution (Task 16);
 - FG consumed by another transaction -> blocked with the "terpakai" reason;
 - Desk return SE (is_return) detected -> blocked with the Desk reason;
 - cancel_production fingerprint mismatch -> STATE_CHANGED, nothing cancelled;
@@ -261,6 +265,29 @@ class TestCancelApi(OperationFixture):
 		self.assertEqual(frappe.db.get_value("Stock Entry", se_m, "docstatus"), 1)
 		self.assertEqual(self._snapshot(), before)
 
+	def test_wrong_order_mapped_through_full_endpoint(self):
+		"""Task 16 wiring: the ENDPOINT's try/except -> map_cancel_error path
+		(the earlier test covers only the helper). The WIP batch was issued out
+		by an external Material Issue - its work_order link is stripped by core,
+		so the WO-scoped WIP-net pre-check still passes and CORE rejects the
+		cancel (negative batch stock); the endpoint surfaces it as the mapped
+		Indonesian message and nothing changes."""
+		self._drain_wip()  # leftovers would keep the batch reversal legal
+		wo, se_t = self._wo_with_transfer()
+		self._issue_out(factories.RM1, factories.WIP, 10, batch_no=factories.BATCH_RM1)
+		before = self._snapshot()
+
+		# savepoint = request boundary: partial reversals before the throw are
+		# undone exactly like the frappe request rollback would (10.3)
+		frappe.db.savepoint("pdtc_endpoint_wrong_order")
+		with self.assertRaises(frappe.ValidationError) as cm:
+			self._cancel_last(wo, se_t)
+		frappe.db.rollback(save_point="pdtc_endpoint_wrong_order")
+
+		self.assertIn("Urutan pembatalan salah", str(cm.exception))
+		self.assertEqual(frappe.db.get_value("Stock Entry", se_t, "docstatus"), 1)
+		self.assertEqual(self._snapshot(), before)
+
 	def _transfer_out_of_wip(self, wo, item, qty, batch_no=None):
 		"""Desk Material Transfer WIP -> Stores linked to the WO. Plain
 		"Material Transfer" is the one purpose core does NOT strip the
@@ -317,6 +344,24 @@ class TestCancelApi(OperationFixture):
 		)
 
 	# ------------------------------------------------------------- pre-checks
+
+	def test_stopped_wo_blocked_in_indonesian_on_both_cancel_endpoints(self):
+		"""Task 16 pre-check: a Stopped WO is refused BEFORE any target is
+		resolved, in Indonesian (core's own rejection only fires at the first
+		SE cancel, in English); nothing is cancelled on either endpoint."""
+		wo, se_t = self._wo_with_transfer()
+		frappe.db.set_value("Work Order", wo, "status", "Stopped")
+		frappe.set_user(self.supervisor)
+
+		with self.assertRaises(frappe.ValidationError) as cm:
+			self._cancel_last(wo, se_t)
+		self.assertIn("Work Order dihentikan", str(cm.exception))
+		with self.assertRaises(frappe.ValidationError) as cm2:
+			self._cancel_production(wo)
+		self.assertIn("Work Order dihentikan", str(cm2.exception))
+
+		self.assertEqual(frappe.db.get_value("Stock Entry", se_t, "docstatus"), 1)
+		self.assertEqual(frappe.db.get_value("Work Order", wo, "docstatus"), 1)
 
 	def test_fg_consumed_by_other_transaction_blocks(self):
 		wo, _se_t = self._wo_with_transfer()

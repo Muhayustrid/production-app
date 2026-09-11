@@ -138,6 +138,38 @@ class TestMutation(IntegrationTestCase):
 		self.assertIn("tidak berhak melihat hasil", str(ctx.exception))
 		self.assertEqual(self._effect_count(key), 1)
 
+	def test_replay_denied_after_supervisor_role_revoked(self):
+		"""Task 16: the replay gate follows the action's role map (_REPLAY_ROLES).
+		A Supervisor runs a cancel, is demoted to Operator, then replays their
+		OWN key: denied - the stored result is not re-readable without the role
+		(the ledger's user binding only blocks OTHER users). The default pair
+		still admits the Operator on Operator-startable actions."""
+		supervisor = factories.make_user("pdtc.mut.supervisor@example.com", roles=["Production Supervisor"])
+		frappe.set_user(supervisor)
+		key, payload = self._key(), {"good": 12}
+		mutation.run_mutation(self.wo, "cancel_last_step", key, payload, self._fn(key))
+
+		frappe.set_user("Administrator")
+		user = frappe.get_doc("User", supervisor)
+		user.roles = [row for row in user.roles if row.role != "Production Supervisor"]
+		user.append("roles", {"role": "Production Operator"})
+		user.save()
+		frappe.set_user(supervisor)
+
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			mutation.run_mutation(self.wo, "cancel_last_step", key, payload, self._fn(key))
+		self.assertIn("tidak berhak melihat hasil", str(ctx.exception))
+		self.assertEqual(self._effect_count(key), 1)  # no second effect
+
+		# default pair unchanged: the same Operator replays an operator action
+		operator_key = self._key()
+		mutation.run_mutation(self.wo, "transfer_material", operator_key, payload, self._fn(operator_key))
+		replay = mutation.run_mutation(
+			self.wo, "transfer_material", operator_key, payload, self._fn(operator_key)
+		)
+		self.assertTrue(replay["duplicate"])
+		self.assertEqual(self._effect_count(operator_key), 1)
+
 	# ------------------------------------------------------- binding mismatch
 
 	def test_same_key_different_payload_rejected(self):
