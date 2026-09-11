@@ -71,3 +71,20 @@ bench build --app production_app                              # only when assets
   factories in `tests/factories.py` (PDTC-prefixed data, idempotent).
   `setUpClass` data is committed by the framework and persists on the test
   site by design; per-test documents are rolled back at class end.
+
+## CodeGraph (mandatory navigation tool)
+
+This repository is indexed with CodeGraph (`.codegraph/`, git-ignored). Use it as the
+PRIMARY tool for understanding, locating, and impact-checking code in this repo —
+BEFORE falling back to grep/Read:
+
+- MCP (preferred in agent sessions): call `codegraph_explore` with
+  `projectPath=/Users/rotiropi/ERPNext-Project/development/frappe-bench/apps/production_app`
+  and a query of symbol names, file names, or a natural-language question. It returns
+  verbatim on-disk source grouped by file plus a blast radius (callers + covering
+  tests) — treat returned source as already-Read; do not re-open those files.
+- CLI (host): `codegraph sync` (after commits), `codegraph status`, `codegraph index`
+  (full rebuild) — run from the repo root.
+- Workflow rule: for any task that touches existing code, start with one
+  `codegraph_explore` covering the symbols you will change; use grep/Read only for
+  what the graph cannot answer (raw strings, templates, non-indexed files).
