@@ -77,7 +77,7 @@ def get_open_work_orders(search=None):
 	user's access. Per WO: item, qty, produced, "belum diproduksi", status,
 	expected_delivery_date, step badge, has_operations, skip_transfer,
 	blocked_reasons. Sorted by expected_delivery_date, untouched first."""
-	access.require_role("Production Operator", "Production Supervisor")
+	access.require_role(*access.PRODUCTION_ROLES)
 	filters = {"docstatus": 1, "status": ("in", OPEN_STATUSES)}
 	order_by = "expected_delivery_date asc, creation asc"
 	or_filters = None
@@ -129,7 +129,7 @@ def get_work_order_detail(work_order):
 	operations; job cards; stock entries incl. custom_p_*; packing_summary
 	(aggregation per 8.1); next_action; blocked_reasons (section 6); cancel
 	bookkeeping (7.7): is_supervisor, cancel_fingerprint, cancel_next_target."""
-	access.require_role("Production Operator", "Production Supervisor")
+	access.require_role(*access.PRODUCTION_ROLES)
 	wo = access.check_wo_access(work_order, "read")
 	reasons, _bom_pct = access.config_blocked_reasons(wo)
 
@@ -202,7 +202,7 @@ def save_production_data(work_order, data, idempotency_key=None):
 		frappe.throw("Data harus berupa objek (dict).", frappe.ValidationError)
 
 	def fn():
-		access.require_role("Production Operator", "Production Supervisor")
+		access.require_role(*access.PRODUCTION_ROLES)
 		wo = access.check_wo_access(work_order, "read")
 		if wo.status in FINISHED_STATUSES:
 			frappe.throw(
@@ -240,7 +240,7 @@ def transfer_material(work_order, items_aktual=None, idempotency_key=None):
 		frappe.throw("Items harus berupa objek (dict) kode bahan -> jumlah.", frappe.ValidationError)
 
 	def fn():
-		access.require_role("Production Operator", "Production Supervisor")
+		access.require_role(*access.PRODUCTION_ROLES)
 		wo = access.check_wo_access(work_order, "read")
 		reasons, _bom_pct = access.config_blocked_reasons(wo)
 		if reasons:
@@ -319,7 +319,7 @@ def complete_operation(work_order, job_card, qty, is_final, idempotency_key=None
 	final = _to_bool(is_final)
 
 	def fn():
-		access.require_role("Production Operator", "Production Supervisor")
+		access.require_role(*access.PRODUCTION_ROLES)
 		wo = access.check_wo_access(work_order, "read")
 		reasons, _bom_pct = access.config_blocked_reasons(wo)
 		if reasons:
@@ -419,7 +419,7 @@ def finish_production(work_order, packing=None, idempotency_key=None):
 		frappe.throw("Packing harus berupa objek (dict).", frappe.ValidationError)
 
 	def fn():
-		access.require_role("Production Operator", "Production Supervisor")
+		access.require_role(*access.PRODUCTION_ROLES)
 		wo = access.check_wo_access(work_order, "read")
 		reasons, _bom_pct = access.config_blocked_reasons(wo)
 		if reasons:
@@ -517,7 +517,7 @@ def cancel_last_step(work_order, expected_target, idempotency_key=None):
 	and costing (P8-1) and the hook re-syncs the packing summary (8.1)."""
 
 	def fn():
-		access.require_role("Production Supervisor")
+		access.require_role(*access.SUPERVISOR_ONLY)
 		wo = access.check_wo_access(work_order, "read")
 		reasons, _bom_pct = access.config_blocked_reasons(wo)
 		if reasons:
@@ -570,12 +570,17 @@ def cancel_production(work_order, expected_fingerprint, idempotency_key=None):
 	midway propagates: frappe's request rollback wipes everything (10.3)."""
 
 	def fn():
-		access.require_role("Production Supervisor")
+		access.require_role(*access.SUPERVISOR_ONLY)
 		wo = access.check_wo_access(work_order, "read")
 		reasons, _bom_pct = access.config_blocked_reasons(wo)
 		if reasons:
 			frappe.throw(reasons[0])
 		cancel.assert_not_stopped(wo)
+		# Task 22: a Closed WO is out of the app's lifecycle - core would only
+		# reject the final WO cancel (LAST in the loop, after the SEs/JCs were
+		# already reversed), so the Indonesian guard comes first.
+		if wo.status == "Closed":
+			frappe.throw("Work Order sudah ditutup.")
 		assert_state(
 			cancel.production_fingerprint(wo.name) == expected_fingerprint,
 			"Daftar dokumen produksi berubah - muat ulang halaman dan konfirmasi ulang.",
@@ -620,7 +625,7 @@ def close_work_order(work_order, reason, idempotency_key=None):
 	reason = str(reason or "").strip()
 
 	def fn():
-		access.require_role("Production Supervisor")
+		access.require_role(*access.SUPERVISOR_ONLY)
 		if not reason:
 			frappe.throw("Alasan penutupan wajib diisi.")
 		wo = access.check_wo_access(work_order, "read")
@@ -644,6 +649,9 @@ def close_work_order(work_order, reason, idempotency_key=None):
 		# work_order.update_status: db_set("status", "Closed") + update_required_items.
 		wo.update_status("Closed")
 		wo.on_close_or_cancel()
+		# parity with core's close_work_order wrapper: push the realtime
+		# doc_update so an open Desk view of this WO refreshes
+		wo.notify_update()
 		wo.add_comment("Comment", text=f"Work Order ditutup. Alasan: {reason}")
 		wo.reload()
 		return {
@@ -1184,9 +1192,7 @@ def _parse_start(started_at):
 	# TimeLog from_time (raw 500). The SPA contract is naive DEVICE-LOCAL
 	# time, so anything with a timezone is rejected in Indonesian instead.
 	if start.tzinfo is not None:
-		frappe.throw(
-			"Waktu mulai tidak boleh membawa zona waktu - gunakan waktu perangkat apa adanya."
-		)
+		frappe.throw("Waktu mulai tidak boleh membawa zona waktu - gunakan waktu perangkat apa adanya.")
 	return start
 
 

@@ -23,6 +23,11 @@ from frappe.utils import cint, flt
 
 RESERVED_STATUSES = ("Stock Reserved", "Stock Partially Reserved")
 
+# 11.1: the app's role names in one place - every endpoint gate imports these
+# instead of repeating string literals (System Manager passes require_role).
+PRODUCTION_ROLES = ("Production Operator", "Production Supervisor")
+SUPERVISOR_ONLY = ("Production Supervisor",)
+
 
 def require_role(*roles):
 	"""Role gate (11.1): pass when the session user holds any of `roles`;

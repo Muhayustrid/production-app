@@ -363,6 +363,20 @@ class TestCancelApi(OperationFixture):
 		self.assertEqual(frappe.db.get_value("Stock Entry", se_t, "docstatus"), 1)
 		self.assertEqual(frappe.db.get_value("Work Order", wo, "docstatus"), 1)
 
+	def test_closed_wo_blocked_on_cancel_production(self):
+		"""Task 22 guard: a Closed WO is refused in Indonesian BEFORE the
+		member loop starts - core would only reject the final WO cancel, after
+		the submitted SEs were already reversed. Nothing is cancelled."""
+		wo, se_t = self._wo_with_transfer()
+		frappe.db.set_value("Work Order", wo, "status", "Closed")
+		frappe.set_user(self.supervisor)
+
+		with self.assertRaises(frappe.ValidationError) as cm:
+			self._cancel_production(wo)
+		self.assertIn("sudah ditutup", str(cm.exception))
+		self.assertEqual(frappe.db.get_value("Stock Entry", se_t, "docstatus"), 1)
+		self.assertEqual(frappe.db.get_value("Work Order", wo, "docstatus"), 1)
+
 	def test_fg_consumed_by_other_transaction_blocks(self):
 		wo, _se_t = self._wo_with_transfer()
 		se_m = self._finish(wo, {"good": 95, "loss_eksplisit": 5})["stock_entry"]
