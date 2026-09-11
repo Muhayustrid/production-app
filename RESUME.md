@@ -20,7 +20,7 @@ Terakhir diperbarui: 2026-09-11 (setelah Task 24 + deploy UX + push GitHub). Fil
 3. Keputusan terbuka (spec §16): #3 good=0, #4 kewenangan supervisor-only, #6 scope akses, #7 parity batch bakery, #10 bahan berlebih Stores. (#9 overproduction 25% sudah aktif.)
 4. Backlog v2: pagination >100 WO, barcode, timer, dsb.
 
-## Dokumen kunci (ada di repo konteks Muhayustrid/ERPNext-Project, host path ../..//docs & ../..//.superpowers relatif bench)
+## Dokumen kunci (ada di repo konteks Muhayustrid/ERPNext-Project; host: /Users/rotiropi/ERPNext-Project/docs dan /Users/rotiropi/ERPNext-Project/.superpowers)
 - Spec final: docs/specs/2026-09-10-production-app-design.md (Revisi 5.1)
 - Implementation plan: docs/plans/2026-09-10-production-app-implementation-plan.md
 - Ledger SDD lengkap (rulings per task): .superpowers/sdd/production-app-implementation-plan/progress.md
