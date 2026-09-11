@@ -71,14 +71,34 @@ _LIST_FIELDS = (
 
 
 @frappe.whitelist()
-def get_open_work_orders(search=None):
+def get_open_work_orders(search=None, date_from=None, date_to=None, item=None):
 	"""List view (7.1): docstatus-1 Work Orders in status Not Started / In
 	Process / Stopped / Stock Reserved / Stock Partially Reserved, scoped to the
 	user's access. Per WO: item, qty, produced, "belum diproduksi", status,
 	expected_delivery_date, step badge, has_operations, skip_transfer,
-	blocked_reasons. Sorted by expected_delivery_date, untouched first."""
+	blocked_reasons. Sorted by expected_delivery_date, untouched first.
+
+	Optional list filters (task 24, all backward compatible - old clients that
+	send none of them get the untouched full list): date_from / date_to bound
+	expected_delivery_date inclusively (WOs WITHOUT a target date drop out
+	while either bound is active), item is an ilike over item_name OR the item
+	code. item_name is never empty: blank WO values fall back to the Item's
+	item_name, then the item code."""
 	access.require_role(*access.PRODUCTION_ROLES)
 	filters = {"docstatus": 1, "status": ("in", OPEN_STATUSES)}
+	# getdate("") -> None (ignored); a garbage date raises a clean
+	# ValidationError from frappe's date parser. Always a two-sided BETWEEN:
+	# a single-bound "<=" compiles to ifnull(col, '0001-01-01') <= X in
+	# frappe's db_query, which MATCHES WOs without a date; between / >= stay
+	# bare and exclude those NULLs.
+	bound_from = getdate(date_from) if date_from else None
+	bound_to = getdate(date_to) if date_to else None
+	if bound_from or bound_to:
+		filters["expected_delivery_date"] = (
+			"between",
+			(bound_from or getdate("2000-01-01"), bound_to or getdate("2999-12-31")),
+		)
+
 	order_by = "expected_delivery_date asc, creation asc"
 	or_filters = None
 	if search and str(search).strip():
@@ -88,6 +108,13 @@ def get_open_work_orders(search=None):
 			["Work Order", "production_item", "like", like],
 			["Work Order", "item_name", "like", like],
 		]
+	if item and str(item).strip():
+		like = f"%{str(item).strip()}%"
+		item_filters = [
+			["Work Order", "item_name", "like", like],
+			["Work Order", "production_item", "like", like],
+		]
+		or_filters = item_filters + (or_filters or [])
 	# Same get_list scope as access.list_wos_scope; the direct call is only
 	# needed because the search needs or_filters (item/item_name/name).
 	if or_filters:
@@ -96,6 +123,16 @@ def get_open_work_orders(search=None):
 		)
 	else:
 		rows = access.list_wos_scope(filters=filters, fields=list(_LIST_FIELDS), order_by=order_by)
+
+	# item_name must never reach the UI empty (the card title is the item
+	# name): fill blanks from Item, then the code as the last resort.
+	missing = {row.production_item for row in rows if not row.item_name}
+	names_by_code = {}
+	if missing:
+		names_by_code = {
+			d.name: d.item_name
+			for d in frappe.get_all("Item", filters=[["name", "in", list(missing)]], fields=["name", "item_name"])
+		}
 
 	names = [r.name for r in rows]
 	ops_by_wo = _operations_by_wo(names)
@@ -106,7 +143,7 @@ def get_open_work_orders(search=None):
 			{
 				"name": row.name,
 				"item": row.production_item,
-				"item_name": row.item_name,
+				"item_name": row.item_name or names_by_code.get(row.production_item) or row.production_item,
 				"qty": row.qty,
 				"produced": row.produced_qty,
 				"belum_diproduksi": flt(flt(row.qty) - flt(row.produced_qty) - flt(row.process_loss_qty), 3),

@@ -87,8 +87,8 @@ class TestGetOpenWorkOrders(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		super().tearDown()
 
-	def _rows(self, search=None):
-		return {w["name"]: w for w in api.get_open_work_orders(search=search)["work_orders"]}
+	def _rows(self, search=None, **params):
+		return {w["name"]: w for w in api.get_open_work_orders(search=search, **params)["work_orders"]}
 
 	# ---------------------------------------------------------------- access
 
@@ -160,6 +160,83 @@ class TestGetOpenWorkOrders(IntegrationTestCase):
 	def test_search_with_whitespace_only_is_ignored(self):
 		frappe.set_user(self.operator)
 		self.assertIn(self.wo, self._rows(search="   "))
+
+	# -------------------------------------------------------- filters (task 24)
+
+	def test_filter_date_range_narrows_and_excludes_undated(self):
+		wo_in = factories.make_wo()
+		wo_out = factories.make_wo()
+		wo_undated = factories.make_wo()
+		frappe.db.set_value("Work Order", wo_in, "expected_delivery_date", "2026-03-15")
+		frappe.db.set_value("Work Order", wo_out, "expected_delivery_date", "2026-04-20")
+		frappe.set_user(self.operator)
+
+		# without any filter everything is visible, including the undated WO
+		rows = self._rows()
+		self.assertIn(wo_in, rows)
+		self.assertIn(wo_out, rows)
+		self.assertIn(wo_undated, rows)
+
+		# narrow range: only wo_in survives; undated WOs drop out while a date
+		# filter is active (both bounds inclusive)
+		rows = self._rows(date_from="2026-03-01", date_to="2026-03-31")
+		self.assertIn(wo_in, rows)
+		self.assertNotIn(wo_out, rows)
+		self.assertNotIn(wo_undated, rows)
+
+		# open-ended bounds behave like half-open ranges
+		rows = self._rows(date_from="2026-03-01")
+		self.assertIn(wo_in, rows)
+		self.assertIn(wo_out, rows)  # 2026-04-20 still >= the from bound
+		self.assertNotIn(wo_undated, rows)
+		rows = self._rows(date_to="2026-03-31")
+		self.assertIn(wo_in, rows)
+		self.assertNotIn(wo_out, rows)
+		self.assertNotIn(wo_undated, rows)
+
+	def test_filter_item_matches_item_name_and_code(self):
+		wo_roti = factories.make_wo()
+		wo_kue = factories.make_wo()
+		frappe.db.set_value("Work Order", wo_roti, "item_name", "Roti Manis Spesial")
+		frappe.db.set_value("Work Order", wo_kue, "item_name", "Kue Kering Kelapa")
+		frappe.set_user(self.operator)
+
+		# by item_name substring
+		rows = self._rows(item="Roti Manis")
+		self.assertIn(wo_roti, rows)
+		self.assertNotIn(wo_kue, rows)
+		# by item code (both share the code fixture)
+		rows = self._rows(item=factories.FG)
+		self.assertIn(wo_roti, rows)
+		self.assertIn(wo_kue, rows)
+		# no match -> empty, and whitespace-only behaves like no filter
+		self.assertEqual(self._rows(item="Brownis Cokelat"), {})
+		self.assertIn(wo_roti, self._rows(item="   "))
+
+	def test_filters_combine_and_no_filter_returns_all(self):
+		wo_hit = factories.make_wo()
+		wo_miss = factories.make_wo()
+		frappe.db.set_value("Work Order", wo_hit, "item_name", "Roti Kombinasi")
+		frappe.db.set_value("Work Order", wo_hit, "expected_delivery_date", "2026-03-10")
+		frappe.db.set_value("Work Order", wo_miss, "item_name", "Roti Kombinasi")
+		frappe.db.set_value("Work Order", wo_miss, "expected_delivery_date", "2026-06-10")
+		frappe.set_user(self.operator)
+
+		rows = self._rows(item="Roti Kombinasi", date_from="2026-03-01", date_to="2026-03-31")
+		self.assertIn(wo_hit, rows)
+		self.assertNotIn(wo_miss, rows)
+
+		# no params at all (old client) -> untouched full list, backward compatible
+		rows = self._rows()
+		self.assertIn(wo_hit, rows)
+		self.assertIn(wo_miss, rows)
+
+	def test_item_name_falls_back_to_item_code(self):
+		wo = factories.make_wo()
+		frappe.db.set_value("Work Order", wo, "item_name", "")
+		frappe.set_user(self.operator)
+		expected = frappe.db.get_value("Item", factories.FG, "item_name") or factories.FG
+		self.assertEqual(self._rows()[wo]["item_name"], expected)
 
 
 class TestGetWorkOrderDetail(IntegrationTestCase):
