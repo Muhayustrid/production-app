@@ -2,7 +2,7 @@
 // Operator vocabulary (3.1) in every operator-facing name; server error
 // messages are already Indonesian.
 
-import { call, createMutation } from "./client";
+import { call, createMutation } from "./client.js";
 
 const ENDPOINT = "production_app.api";
 
@@ -40,7 +40,8 @@ export const transferMaterial = createMutation((workOrder, itemsAktual, key) =>
 );
 
 export const completeOperation = createMutation(
-	(workOrder, jobCard, qty, isFinal, key, startedAt = null, loss = null) =>
+	// key LAST: createMutation appends it after the caller's arguments
+	(workOrder, jobCard, qty, isFinal, startedAt = null, loss = null, key) =>
 		call(
 			`${ENDPOINT}.complete_operation`,
 			{

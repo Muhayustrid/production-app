@@ -154,10 +154,14 @@ function openDialog() {
 }
 
 // items_aktual semantics: only items whose qty the operator actually changed
-// (default per material = sisa perlu is what the server picks otherwise)
-const hasChanges = computed(() =>
-	pendingMaterials.value.some((m) => Number(edits[m.item_code]) !== m.sisa_perlu),
-);
+// (default per material = sisa perlu is what the server picks otherwise).
+// A CLEARED input is not a zero intent - the item is omitted entirely.
+const changed = (material) => {
+	const raw = edits[material.item_code];
+	return raw !== "" && raw != null && Number(raw) !== material.sisa_perlu;
+};
+
+const hasChanges = computed(() => pendingMaterials.value.some(changed));
 
 const submitting = ref(false);
 
@@ -167,9 +171,8 @@ async function submit() {
 	try {
 		const itemsAktual = {};
 		for (const material of pendingMaterials.value) {
-			const value = Number(edits[material.item_code]);
-			if (value !== material.sisa_perlu) {
-				itemsAktual[material.item_code] = value;
+			if (changed(material)) {
+				itemsAktual[material.item_code] = Number(edits[material.item_code]);
 			}
 		}
 		const result = await transferMaterial(props.name, itemsAktual);
