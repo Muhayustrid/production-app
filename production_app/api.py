@@ -127,7 +127,8 @@ def get_work_order_detail(work_order):
 	"""Detail screen (7.2): WO summary + production metadata (8.2); materials
 	(required / transferred net / used / WIP remaining / indicative stock);
 	operations; job cards; stock entries incl. custom_p_*; packing_summary
-	(aggregation per 8.1); next_action; blocked_reasons (section 6)."""
+	(aggregation per 8.1); next_action; blocked_reasons (section 6); cancel
+	bookkeeping (7.7): is_supervisor, cancel_fingerprint, cancel_next_target."""
 	access.require_role("Production Operator", "Production Supervisor")
 	wo = access.check_wo_access(work_order, "read")
 	reasons, _bom_pct = access.config_blocked_reasons(wo)
@@ -146,7 +147,20 @@ def get_work_order_detail(work_order):
 
 	entries = _detail_stock_entries(wo)
 
+	# Cancel bookkeeping for the Riwayat tab (7.7, task 19): the SERVER stays
+	# the sole authority over cancel intent (poka-yoke) - the UI renders the
+	# concrete target / fingerprint but never computes them locally.
+	# is_supervisor gates the supervisor-only buttons client-side; the server
+	# re-checks the role on every cancel/close call regardless.
+	cancel_targets = cancel.resolve_targets(wo)
+	user_roles = set(frappe.get_roles())
+
 	return {
+		"is_supervisor": "System Manager" in user_roles or "Production Supervisor" in user_roles,
+		"cancel_fingerprint": cancel.production_fingerprint(wo.name),
+		"cancel_next_target": (
+			{"doctype": cancel_targets[0].doctype, "name": cancel_targets[0].name} if cancel_targets else None
+		),
 		"work_order": {
 			"name": wo.name,
 			"item": wo.production_item,

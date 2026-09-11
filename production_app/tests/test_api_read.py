@@ -12,11 +12,13 @@ Contract proven per test:
   compute_summary aggregation, next_action in every state, blocked_reasons.
 """
 
+import hashlib
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, flt, today
 
-from production_app import api, wo_summary
+from production_app import api, cancel, wo_summary
 from production_app.tests import factories
 
 OPERATOR = "pdtc.read.operator@example.com"
@@ -315,3 +317,36 @@ class TestGetWorkOrderDetail(IntegrationTestCase):
 		metadata = api.get_work_order_detail(wo)["production_metadata"]
 		allowed = set(api.EDITABLE_METADATA_FIELDS + api.DISPLAY_METADATA_FIELDS)
 		self.assertTrue(set(metadata).issubset(allowed))
+
+	# ---------------------------------------------------------------- cancel
+
+	def test_cancel_bookkeeping_fields(self):
+		"""Riwayat cancel bookkeeping (7.7, task 19): a fresh WO has no target
+		and the fingerprint of the empty docstatus-1 list; with submitted SEs
+		the target is the NEWEST entry of the first fixed type and the
+		fingerprint follows the member list. is_supervisor mirrors the session
+		roles (the server re-checks on every cancel/close call regardless)."""
+		wo = factories.make_wo()
+		frappe.set_user(self.operator)
+		fresh = api.get_work_order_detail(wo)
+		self.assertIsNone(fresh["cancel_next_target"])
+		self.assertEqual(fresh["cancel_fingerprint"], hashlib.sha256(b"").hexdigest())
+		self.assertFalse(fresh["is_supervisor"])
+
+		frappe.set_user("Administrator")
+		wo = _progressed_wo()  # 1 transfer + 2 packing sessions
+		frappe.set_user(self.operator)
+		detail = api.get_work_order_detail(wo)
+
+		self.assertEqual(detail["cancel_next_target"]["doctype"], "Stock Entry")
+		self.assertEqual(detail["cancel_next_target"]["name"], cancel.resolve_targets(wo)[0].name)
+		# newest by posting order, not the first-made one
+		sessions = [e["name"] for e in detail["stock_entries"] if e["purpose"] == "Manufacture"]
+		self.assertEqual(detail["cancel_next_target"]["name"], sessions[-1])
+		self.assertEqual(detail["cancel_fingerprint"], cancel.production_fingerprint(wo))
+		self.assertNotEqual(detail["cancel_fingerprint"], fresh["cancel_fingerprint"])
+
+		frappe.set_user("Administrator")
+		supervisor = factories.make_user("pdtc.read.supervisor@example.com", roles=["Production Supervisor"])
+		frappe.set_user(supervisor)
+		self.assertTrue(api.get_work_order_detail(wo)["is_supervisor"])
