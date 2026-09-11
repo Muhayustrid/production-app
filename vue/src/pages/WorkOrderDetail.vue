@@ -81,21 +81,15 @@
 				</div>
 			</nav>
 
-			<!-- tab content (9.3: 1 column <768px, 2 columns >=768px); Bahan/
-			     Operasi/Produksi are real tabs (tasks 18), Packing/Riwayat are
-			     placeholders (task 19) -->
+			<!-- tab content (9.3: 1 column <768px, 2 columns >=768px); all five
+			     tabs are real (tasks 18-19) -->
 			<main class="flex-1 p-4 pb-24">
 				<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 					<TabBahan v-if="activeTab === 0" :name="name" :detail="entry.data" />
 					<TabOperasi v-else-if="activeTab === 1" :name="name" :detail="entry.data" />
 					<TabProduksi v-else-if="activeTab === 2" :name="name" :detail="entry.data" />
-					<div
-						v-else
-						class="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center text-gray-500 md:col-span-2"
-					>
-						<component :is="TABS[activeTab].icon" class="h-8 w-8 text-gray-400" />
-						<p>Tab {{ TABS[activeTab].label }} menyusul di tahap pengembangan berikutnya.</p>
-					</div>
+					<TabPacking v-else-if="activeTab === 3" :name="name" :detail="entry.data" />
+					<TabRiwayat v-else :name="name" :detail="entry.data" />
 				</div>
 			</main>
 
@@ -144,7 +138,9 @@ import { detailEntry, loadDetail } from "@/stores/workOrders";
 import { formatQty } from "@/lib/format";
 import TabBahan from "@/pages/tabs/TabBahan.vue";
 import TabOperasi from "@/pages/tabs/TabOperasi.vue";
+import TabPacking from "@/pages/tabs/TabPacking.vue";
 import TabProduksi from "@/pages/tabs/TabProduksi.vue";
+import TabRiwayat from "@/pages/tabs/TabRiwayat.vue";
 
 const props = defineProps({
 	name: { type: String, default: "" },
