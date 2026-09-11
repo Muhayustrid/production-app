@@ -508,6 +508,7 @@ def cancel_last_step(work_order, expected_target, idempotency_key=None):
 		reasons, _bom_pct = access.config_blocked_reasons(wo)
 		if reasons:
 			frappe.throw(reasons[0])
+		cancel.assert_not_stopped(wo)
 		target = cancel.next_cancel_target(wo)
 		assert_state(
 			target is not None and target.name == expected_target,
@@ -560,6 +561,7 @@ def cancel_production(work_order, expected_fingerprint, idempotency_key=None):
 		reasons, _bom_pct = access.config_blocked_reasons(wo)
 		if reasons:
 			frappe.throw(reasons[0])
+		cancel.assert_not_stopped(wo)
 		assert_state(
 			cancel.production_fingerprint(wo.name) == expected_fingerprint,
 			"Daftar dokumen produksi berubah - muat ulang halaman dan konfirmasi ulang.",

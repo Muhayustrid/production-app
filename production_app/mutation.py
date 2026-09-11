@@ -45,6 +45,18 @@ ACTIONS = frozenset(
 PROCESSED = "Done"
 PROCESSING = "Processing"
 
+# Replay re-authorization (10.2) per action: Operator-startable actions replay
+# under the default pair; Supervisor-only actions (7.7, 7.8) replay under the
+# Supervisor role ALONE - a former Supervisor must not re-read the stored
+# result of their own cancel/close after the role was revoked (the ledger's
+# user binding already blocks every other user; Task 16).
+_DEFAULT_REPLAY_ROLES = ("Production Operator", "Production Supervisor")
+_REPLAY_ROLES = {
+	"cancel_last_step": ("Production Supervisor",),
+	"cancel_production": ("Production Supervisor",),
+	"close_work_order": ("Production Supervisor",),
+}
+
 # Ledger rows are named by the key (autoname field:), so keep it DocType-name
 # safe: UUIDs (hex + dashes) and similar client-generated tokens pass.
 _KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,139}$")
@@ -142,7 +154,7 @@ def run_mutation(work_order, action, idempotency_key, payload, fn):
 	# Done + bound = replay: light re-authorization (10.2) so a leaked key
 	# cannot hand out someone else's result; the mutation itself never re-runs.
 	try:
-		require_role("Production Operator", "Production Supervisor")
+		require_role(*_REPLAY_ROLES.get(action, _DEFAULT_REPLAY_ROLES))
 		check_wo_access(work_order, "read")
 	except frappe.PermissionError:
 		frappe.throw("Anda tidak berhak melihat hasil aksi ini.", frappe.ValidationError)

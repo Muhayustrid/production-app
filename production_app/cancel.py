@@ -105,6 +105,15 @@ def production_fingerprint(work_order):
 	return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def assert_not_stopped(wo):
+	"""Pre-check on BOTH cancel endpoints (7.7/12), BEFORE any target is
+	resolved: a Stopped Work Order is not cancelable through the app. Core's
+	own rejection would only fire at the first SE cancel - in English - so the
+	Indonesian direction comes first from here (Task 16)."""
+	if wo.status == "Stopped":
+		frappe.throw("Work Order dihentikan — aktifkan dulu lewat Desk / hubungi admin.")
+
+
 def precheck_cancel(target):
 	"""None when the target is clean to cancel, else the Indonesian block
 	reason (12): out-of-pattern Desk documents first, then the stock the
