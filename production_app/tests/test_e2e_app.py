@@ -793,6 +793,54 @@ class TestE2EProofScenarios(E2EFixture):
 		self.assertEqual(frappe.db.get_value("Stock Entry", se_m, "docstatus"), 1)
 		self.assertEqual(self._wo(wo).produced_qty, 40.0)
 
+	# ---------------------------------------------------- T5.4 - payload fuzz
+
+	def test_s13_fuzz_mutated_payloads_rejected_in_indonesian(self):
+		"""T5.4 (task 22): COMBINED malformed payloads (negative + garbage +
+		wrong type in ONE payload) against live endpoints mid-flow - every one
+		rejected with an Indonesian message and NOTHING created or moved. The
+		per-field rejects live in the unit tests; this pins the endpoints'
+		behavior against a mixed battery."""
+		# 1) transfer: negative + garbage numbers in one dict - the negative
+		#    pick is rejected first, no Stock Entry at all (setup as
+		#    Administrator - the roles hold no Work Order/SE create)
+		self._as("Administrator")
+		wo_t = self._make_wo()
+		self._stock_recipe()
+		with self.assertRaises(frappe.ValidationError) as cm:
+			self._transfer(wo_t, {factories.RM1: -5, factories.RM2: "banyak"})
+		self.assertIn("tidak boleh kurang dari 0", str(cm.exception))
+		with self.assertRaises(frappe.ValidationError) as cm2:
+			self._transfer(wo_t, {factories.RM2: "banyak"})
+		self.assertIn("harus berupa angka yang valid", str(cm2.exception))
+		self.assertFalse(frappe.get_all("Stock Entry", filters={"work_order": wo_t, "docstatus": 1}))
+
+		# 2) finish: negative + NaN-string in one payload - good is validated
+		#    first (frappe's flt coerces NaN to 0, which the good>0 gate then
+		#    rejects); and the whole packing payload of the wrong type
+		self._as("Administrator")
+		wo = self._wo_with_transfer()
+		with self.assertRaises(frappe.ValidationError) as cm3:
+			self._finish(wo, {"good": -2, "reject": "NaN"})
+		self.assertIn("Hasil Baik tidak boleh kurang dari 0", str(cm3.exception))
+		with self.assertRaises(frappe.ValidationError) as cm4:
+			self._finish(wo, ["good", 95])
+		self.assertIn("Packing harus berupa objek (dict)", str(cm4.exception))
+		self.assertEqual(len(frappe.get_all("Stock Entry", filters={"work_order": wo, "docstatus": 1})), 1)
+		self.assertEqual(self._wo(wo).produced_qty, 0.0)
+
+		# 3) operation tap: garbage and negative completion quantities
+		self._as("Administrator")
+		wo_ops, jcs = self._wo_two_operations()
+		self._stock_recipe()
+		with self.assertRaises(frappe.ValidationError) as cm5:
+			self._tap(wo_ops, jcs[0].name, "banyak", False)
+		self.assertIn("Jumlah Selesai harus berupa angka yang valid", str(cm5.exception))
+		with self.assertRaises(frappe.ValidationError) as cm6:
+			self._tap(wo_ops, jcs[0].name, -3, False)
+		self.assertIn("tidak boleh kurang dari 0", str(cm6.exception))
+		self.assertFalse(frappe.get_all("Job Card", filters={"work_order": wo_ops, "docstatus": 1}))
+
 
 class TestE2EConcurrency(E2EFixture):
 	"""S8 - T5.2a: two operators finishing the SAME work order in true parallel.

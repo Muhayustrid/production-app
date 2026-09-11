@@ -21,6 +21,8 @@ validate_time_logs rejects taps overlapping another card's windows on the
 SAME workstation (mapped OverlapError in production, avoided in tests here).
 """
 
+from datetime import UTC
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_to_date, flt, now_datetime
@@ -127,7 +129,7 @@ class TestCompleteOperation(OperationFixture):
 		from datetime import timezone
 
 		wo, jcs = self._wo()
-		aware = now_datetime().replace(tzinfo=timezone.utc).isoformat()
+		aware = now_datetime().replace(tzinfo=UTC).isoformat()
 		with self.assertRaises(frappe.ValidationError) as ctx:
 			self._complete(wo, jcs[0].name, 100, True, started_at=aware)
 		self.assertIn("zona waktu", str(ctx.exception))
