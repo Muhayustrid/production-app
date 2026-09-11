@@ -3,8 +3,10 @@
 // state library.
 import { reactive } from "vue";
 
-import { ApiError, reportError } from "@/api/client";
-import { getWorkOrderDetail, getWorkOrders } from "@/api/workOrders";
+// Relative imports with extensions so `node --test` can exercise this module
+// without the Vite "@" alias (same convention as api/).
+import { ApiError, reportError } from "../api/client.js";
+import { getWorkOrderDetail, getWorkOrders } from "../api/workOrders.js";
 
 export const workOrderStore = reactive({
 	search: "",
@@ -26,9 +28,10 @@ export async function loadList(search = workOrderStore.search) {
 		workOrderStore.list = result.work_orders;
 	} catch (error) {
 		workOrderStore.listError = errorMessage(error);
-		// The banner (listError + "Coba Lagi") is the surface when no rows are
-		// shown; only toast when old rows stay visible (no banner then).
-		if (!workOrderStore.list.length) reportError(error);
+		// One surface (task 22): the banner (listError + "Coba Lagi") covers the
+		// no-rows case; the toast fires only when stale rows stay on screen
+		// (no banner then).
+		if (workOrderStore.list.length) reportError(error);
 	} finally {
 		workOrderStore.listLoading = false;
 	}

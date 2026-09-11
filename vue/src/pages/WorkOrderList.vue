@@ -60,7 +60,10 @@
 					</div>
 					<div class="min-w-0 flex-1">
 						<p class="truncate font-semibold">{{ wo.item_name || wo.item }}</p>
-						<p class="truncate text-sm text-gray-500">{{ wo.item }} · {{ wo.name }}</p>
+						<p class="truncate text-sm text-gray-500">{{ wo.item }}</p>
+						<!-- the WO number is the operator's handle: own line, wraps
+						     instead of truncating - it must always be readable -->
+						<p class="break-all text-xs font-medium text-gray-600">{{ wo.name }}</p>
 					</div>
 					<span class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium" :class="badgeClass(wo)">
 						<component :is="badgeIcon(wo)" class="h-3.5 w-3.5" />
@@ -86,8 +89,9 @@
 					</div>
 				</div>
 
-				<div class="mt-2 flex items-center justify-between text-sm">
-					<span class="text-gray-500">Target: {{ formatDate(wo.expected_delivery_date) }}</span>
+				<!-- skip the row entirely when nothing is set (empty Target, no block) -->
+				<div v-if="wo.expected_delivery_date || blockedReason(wo)" class="mt-2 flex items-center justify-between text-sm">
+					<span v-if="wo.expected_delivery_date" class="text-gray-500">Target: {{ formatDate(wo.expected_delivery_date) }}</span>
 					<span v-if="blockedReason(wo)" class="flex items-center gap-1 text-amber-600">
 						<AlertTriangle class="h-3.5 w-3.5" />
 						{{ blockedReason(wo) }}
