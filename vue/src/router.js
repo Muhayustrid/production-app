@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+import { getCookie } from "@/lib/cookies";
+
 const routes = [
 	{
 		path: "/",
@@ -12,6 +14,12 @@ const routes = [
 		component: () => import("@/pages/WorkOrderDetail.vue"),
 		props: true,
 	},
+	// SPA catch-all: any other /production-app/* deep link falls back to the
+	// list screen (unknown WO names render the detail's error state).
+	{
+		path: "/:pathMatch(.*)*",
+		redirect: "/",
+	},
 ];
 
 const router = createRouter({
@@ -23,8 +31,7 @@ const router = createRouter({
 // guard); guests are sent to the core login page. The www page itself is
 // publicly served — the SPA content is what is gated.
 router.beforeEach((to, from, next) => {
-	const cookies = new URLSearchParams(document.cookie.split("; ").join("&"));
-	const user = cookies.get("user_id");
+	const user = getCookie("user_id");
 	if (!user || user === "Guest") {
 		window.location.href = "/login?redirect-to=/production-app";
 		return;

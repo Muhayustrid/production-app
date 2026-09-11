@@ -5,7 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
-		"build": "vite build --base=/assets/production_app/production/"
+		"build": "vite build --base=/assets/production_app/production/",
+		"test": "node --test src/"
 	},
 	"dependencies": {
 		"frappe-ui": "^0.1.278",

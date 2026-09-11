@@ -17,6 +17,10 @@ export default defineConfig({
 				indexHtmlPath: "../production_app/www/production-app.html",
 				outDir: "../production_app/public/production",
 				emptyOutDir: true,
+				// No sourcemaps in the committed build output (Phase 3
+				// carry-forward); must be set HERE - the plugin's config hook
+				// overrides the top-level build config, where the default is true.
+				sourcemap: false,
 			},
 		}),
 		vue(),
