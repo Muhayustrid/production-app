@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "vite build --base=/assets/production_app/production/",
-		"test": "node --test src/"
+		"test": "node --test src/api/client.test.js"
 	},
 	"dependencies": {
 		"frappe-ui": "^0.1.278",

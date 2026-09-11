@@ -75,6 +75,17 @@ export function reloadCurrentDetail() {
 	}
 }
 
+// Post-action refresh (tab mutations): swap in the fresh detail without the
+// skeleton flash - stale data stays on screen if the refresh fails (error is
+// toasted centrally).
+export async function refreshDetail(name) {
+	try {
+		detailEntry(name).data = await getWorkOrderDetail(name);
+	} catch (error) {
+		reportError(error);
+	}
+}
+
 function errorMessage(error) {
 	return error instanceof ApiError ? error.message : "Terjadi kesalahan tak terduga.";
 }
