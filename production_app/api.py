@@ -523,6 +523,7 @@ def cancel_last_step(work_order, expected_target, idempotency_key=None):
 		if reasons:
 			frappe.throw(reasons[0])
 		cancel.assert_not_stopped(wo)
+		cancel.assert_not_closed(wo)
 		target = cancel.next_cancel_target(wo)
 		assert_state(
 			target is not None and target.name == expected_target,
@@ -576,11 +577,7 @@ def cancel_production(work_order, expected_fingerprint, idempotency_key=None):
 		if reasons:
 			frappe.throw(reasons[0])
 		cancel.assert_not_stopped(wo)
-		# Task 22: a Closed WO is out of the app's lifecycle - core would only
-		# reject the final WO cancel (LAST in the loop, after the SEs/JCs were
-		# already reversed), so the Indonesian guard comes first.
-		if wo.status == "Closed":
-			frappe.throw("Work Order sudah ditutup.")
+		cancel.assert_not_closed(wo)
 		assert_state(
 			cancel.production_fingerprint(wo.name) == expected_fingerprint,
 			"Daftar dokumen produksi berubah - muat ulang halaman dan konfirmasi ulang.",

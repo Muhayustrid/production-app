@@ -26,7 +26,7 @@ import re
 
 import frappe
 
-from production_app.access import check_wo_access, require_role
+from production_app.access import PRODUCTION_ROLES, SUPERVISOR_ONLY, check_wo_access, require_role
 from production_app.exceptions import StateChangedError
 
 # All mutating endpoints (10.2); api.py validates `action` against this set.
@@ -50,11 +50,11 @@ PROCESSING = "Processing"
 # Supervisor role ALONE - a former Supervisor must not re-read the stored
 # result of their own cancel/close after the role was revoked (the ledger's
 # user binding already blocks every other user; Task 16).
-_DEFAULT_REPLAY_ROLES = ("Production Operator", "Production Supervisor")
+_DEFAULT_REPLAY_ROLES = PRODUCTION_ROLES
 _REPLAY_ROLES = {
-	"cancel_last_step": ("Production Supervisor",),
-	"cancel_production": ("Production Supervisor",),
-	"close_work_order": ("Production Supervisor",),
+	"cancel_last_step": SUPERVISOR_ONLY,
+	"cancel_production": SUPERVISOR_ONLY,
+	"close_work_order": SUPERVISOR_ONLY,
 }
 
 # Ledger rows are named by the key (autoname field:), so keep it DocType-name

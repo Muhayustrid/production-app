@@ -114,6 +114,17 @@ def assert_not_stopped(wo):
 		frappe.throw("Work Order dihentikan — aktifkan dulu lewat Desk / hubungi admin.")
 
 
+def assert_not_closed(wo):
+	"""Companion of assert_not_stopped on BOTH cancel endpoints (Task 22
+	review): a Closed Work Order is out of the app's lifecycle. Core's SE/Job
+	Card cancel validation would NOT stop the reversal (it only gates the WO
+	cancel itself - on cancel_last_step never reached, on cancel_production
+	LAST in the loop, after every SE/JC was already reversed) - so the
+	Indonesian guard comes first."""
+	if wo.status == "Closed":
+		frappe.throw("Work Order sudah ditutup.")
+
+
 def precheck_cancel(target):
 	"""None when the target is clean to cancel, else the Indonesian block
 	reason (12): out-of-pattern Desk documents first, then the stock the
