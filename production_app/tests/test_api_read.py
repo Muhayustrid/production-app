@@ -267,6 +267,10 @@ class TestGetWorkOrderDetail(IntegrationTestCase):
 		self.assertEqual(len(entries), 3)  # 1 transfer + 2 packing sessions
 		purposes = [e["purpose"] for e in entries]
 		self.assertEqual(purposes.count("Manufacture"), 2)
+		transfer = entries[0]
+		self.assertEqual(transfer["purpose"], "Material Transfer for Manufacture")
+		# chronology qty (9.2): the transfer's core-maintained WO coverage
+		self.assertEqual(transfer["fg_completed_qty"], 100)
 		app_session = entries[-1]
 		self.assertEqual(app_session["petugas_packing"], OPERATOR)
 		self.assertEqual((app_session["good"], app_session["sisa"]), (30, 4))

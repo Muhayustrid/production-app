@@ -935,6 +935,10 @@ def _detail_stock_entries(wo):
 			"posting_datetime": wo_summary._posting_datetime(row),
 			"petugas_packing": row.get("custom_p_petugas_packing") or row.owner,
 			"good": row.get("custom_p_good_qty"),
+			# WO coverage (core-maintained): qty fallback for Desk-made
+			# Manufacture rows (no custom_p_good_qty) and the only per-entry
+			# qty the Transfer/Consumption chronology rows have (task 19).
+			"fg_completed_qty": flt(row.fg_completed_qty, wo.precision("qty")),
 			"reject": row.get("custom_p_reject_qty"),
 			"trial": row.get("custom_p_trial_qty"),
 			"sisa": row.get("custom_p_sisa_qty"),
