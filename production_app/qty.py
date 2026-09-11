@@ -143,7 +143,8 @@ def remaining_target(wo_doc):
 def _normalize(value, precision, label):
 	"""Finite >= 0 at field precision; Indonesian message otherwise.
 	Unparseable input is rejected, never coerced to 0 by flt (API trust
-	boundary); numeric strings and None are still accepted."""
+	boundary); numeric strings and None are still accepted; NaN/Infinity
+	strings are rejected, never coerced."""
 	if value is None or value == "":
 		value = 0
 	elif isinstance(value, str):
@@ -151,9 +152,12 @@ def _normalize(value, precision, label):
 			value = float(value.strip().replace(",", ""))
 		except ValueError:
 			frappe.throw(f"{label} harus berupa angka yang valid.")
-	value = flt(value, precision)
-	if not math.isfinite(value):
+	# isfinite on the PARSED value, BEFORE flt: frappe's flt swallows the
+	# rounding error NaN/inf raise and coerces them to 0 (legacy rounding),
+	# which would silently accept junk like reject="NaN" as reject=0.
+	if not isinstance(value, (int, float)) or not math.isfinite(value):
 		frappe.throw(f"{label} harus berupa angka yang valid.")
+	value = flt(value, precision)
 	if value < 0:
 		frappe.throw(f"{label} tidak boleh kurang dari 0.")
 	return value

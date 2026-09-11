@@ -816,13 +816,19 @@ class TestE2EProofScenarios(E2EFixture):
 		self.assertFalse(frappe.get_all("Stock Entry", filters={"work_order": wo_t, "docstatus": 1}))
 
 		# 2) finish: negative + NaN-string in one payload - good is validated
-		#    first (frappe's flt coerces NaN to 0, which the good>0 gate then
-		#    rejects); and the whole packing payload of the wrong type
+		#    first; NaN/Infinity strings on an OTHERWISE VALID payload are
+		#    rejected by the isfinite gate (flt would coerce them to 0)
 		self._as("Administrator")
 		wo = self._wo_with_transfer()
 		with self.assertRaises(frappe.ValidationError) as cm3:
 			self._finish(wo, {"good": -2, "reject": "NaN"})
 		self.assertIn("Hasil Baik tidak boleh kurang dari 0", str(cm3.exception))
+		with self.assertRaises(frappe.ValidationError) as cm3b:
+			self._finish(wo, {"good": 95, "reject": "NaN"})
+		self.assertIn("Reject harus berupa angka yang valid", str(cm3b.exception))
+		with self.assertRaises(frappe.ValidationError) as cm3c:
+			self._finish(wo, {"good": "Infinity"})
+		self.assertIn("Hasil Baik harus berupa angka yang valid", str(cm3c.exception))
 		with self.assertRaises(frappe.ValidationError) as cm4:
 			self._finish(wo, ["good", 95])
 		self.assertIn("Packing harus berupa objek (dict)", str(cm4.exception))

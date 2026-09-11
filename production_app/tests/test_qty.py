@@ -72,10 +72,13 @@ class TestQty(IntegrationTestCase):
 			qty.validate_packing(wo, {"good": -1})
 		with self.assertRaises(frappe.ValidationError):
 			qty.validate_packing(wo, {"good": 10, "reject": -0.5})
-		with self.assertRaises(frappe.ValidationError):
-			qty.validate_packing(wo, {"good": float("nan")})
-		with self.assertRaises(frappe.ValidationError):
-			qty.validate_packing(wo, {"good": float("inf")})
+		# NaN/Infinity (float AND string) are rejected by the isfinite gate on
+		# the PARSED value - flt would coerce them to 0 under legacy rounding
+		# and silently accept junk like reject="NaN" as 0 (task 22 review)
+		for bad in (float("nan"), float("inf"), float("-inf"), "NaN", "Infinity", "-Infinity"):
+			with self.assertRaises(frappe.ValidationError) as cm:
+				qty.validate_packing(wo, {"good": 10, "reject": bad})
+			self.assertIn("Reject harus berupa angka yang valid", str(cm.exception))
 		# unparseable strings are rejected, never coerced to 0
 		with self.assertRaises(frappe.ValidationError) as cm:
 			qty.validate_packing(wo, {"good": 10, "reject": "abc"})
