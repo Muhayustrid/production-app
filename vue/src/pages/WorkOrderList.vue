@@ -64,7 +64,7 @@
 					</div>
 					<span class="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium" :class="badgeClass(wo)">
 						<component :is="badgeIcon(wo)" class="h-3.5 w-3.5" />
-						{{ wo.badge }}
+						{{ chipLabel(wo) }}
 					</span>
 				</div>
 
@@ -104,6 +104,7 @@ import { onMounted, ref, watch } from "vue";
 
 import { workOrderStore as store, loadList } from "@/stores/workOrders";
 import { formatDate, formatQty } from "@/lib/format";
+import { woStatusId } from "@/lib/status";
 
 const search = ref(store.search);
 let debounce = null;
@@ -126,6 +127,14 @@ function progressWidth(wo) {
 function blockedReason(wo) {
 	if (wo.status === "Stopped") return "Work Order dihentikan";
 	return wo.blocked_reasons?.[0] || "";
+}
+
+// The card chip is the server's Indonesian step badge ("Menunggu Bahan",
+// "Operasi k/N", ...). A Stopped WO's step badge would still read "Menunggu
+// Bahan" - the mapped status tells the truth there (amber styling already
+// applies via isBlocked).
+function chipLabel(wo) {
+	return wo.status === "Stopped" ? woStatusId(wo.status) : wo.badge;
 }
 
 function isBlocked(wo) {

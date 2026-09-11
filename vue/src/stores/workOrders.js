@@ -26,7 +26,9 @@ export async function loadList(search = workOrderStore.search) {
 		workOrderStore.list = result.work_orders;
 	} catch (error) {
 		workOrderStore.listError = errorMessage(error);
-		reportError(error);
+		// The banner (listError + "Coba Lagi") is the surface when no rows are
+		// shown; only toast when old rows stay visible (no banner then).
+		if (!workOrderStore.list.length) reportError(error);
 	} finally {
 		workOrderStore.listLoading = false;
 	}
@@ -60,7 +62,9 @@ export async function loadDetail(name, { force = false } = {}) {
 		entry.data = await getWorkOrderDetail(name);
 	} catch (error) {
 		entry.error = errorMessage(error);
-		reportError(error);
+		// Same one-surface rule: the full-screen error banner covers the
+		// no-data case; toast only when stale cached data stays on screen.
+		if (entry.data) reportError(error);
 	} finally {
 		entry.loading = false;
 	}

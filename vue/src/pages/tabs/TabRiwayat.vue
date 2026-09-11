@@ -92,7 +92,7 @@
 		<!-- Batalkan Langkah Terakhir: names the CONCRETE server-provided target -->
 		<div v-if="cancelStepOpen" class="fixed inset-0 z-30 flex items-end justify-center bg-black/40 sm:items-center">
 			<div
-				class="w-full max-w-md rounded-t-2xl bg-white p-4 sm:rounded-2xl"
+				class="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 sm:rounded-2xl"
 				role="dialog"
 				aria-modal="true"
 				aria-label="Batalkan Langkah Terakhir"
@@ -121,7 +121,7 @@
 		<!-- Batalkan Produksi: 2x confirm + ketik nomor WO (9.2) -->
 		<div v-if="cancelStage" class="fixed inset-0 z-30 flex items-end justify-center bg-black/40 sm:items-center">
 			<div
-				class="w-full max-w-md rounded-t-2xl bg-white p-4 sm:rounded-2xl"
+				class="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 sm:rounded-2xl"
 				role="dialog"
 				aria-modal="true"
 				aria-label="Batalkan Produksi"

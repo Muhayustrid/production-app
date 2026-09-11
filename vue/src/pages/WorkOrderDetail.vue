@@ -15,8 +15,12 @@
 					<p v-else class="h-5 w-2/3 animate-pulse rounded bg-gray-200"></p>
 					<p class="truncate text-sm text-gray-500">{{ name }}</p>
 				</div>
-				<span v-if="wo" class="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
-					{{ wo.status }}
+				<span
+					v-if="wo"
+					class="rounded-full px-2.5 py-1 text-xs font-medium"
+					:class="woStatusClass(wo.status)"
+				>
+					{{ woStatusId(wo.status) }}
 				</span>
 			</div>
 		</header>
@@ -136,6 +140,7 @@ import { computed, onMounted, ref, watch } from "vue";
 
 import { detailEntry, loadDetail } from "@/stores/workOrders";
 import { formatQty } from "@/lib/format";
+import { woStatusClass, woStatusId } from "@/lib/status";
 import TabBahan from "@/pages/tabs/TabBahan.vue";
 import TabOperasi from "@/pages/tabs/TabOperasi.vue";
 import TabPacking from "@/pages/tabs/TabPacking.vue";
