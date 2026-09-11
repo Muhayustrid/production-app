@@ -244,7 +244,11 @@ const cards = computed(() => props.detail?.job_cards || []);
 const chronology = computed(() => {
 	const list = entries.value.map((entry) => {
 		const kind = SE_KINDS[entry.purpose] || { icon: Factory, label: entry.purpose };
-		const qty = entry.purpose === "Manufacture" && entry.good > 0 ? entry.good : null;
+		// Manufacture shows the app-recorded good; Desk-made Manufacture rows
+		// (good 0) and Transfer/Consumption fall back to the core-maintained
+		// WO coverage (fg_completed_qty)
+		const qty =
+			entry.purpose === "Manufacture" && entry.good > 0 ? entry.good : entry.fg_completed_qty || null;
 		return {
 			key: `SE-${entry.name}`,
 			icon: kind.icon,

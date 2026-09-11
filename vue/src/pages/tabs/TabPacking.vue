@@ -305,7 +305,7 @@
 				</p>
 				<button
 					class="mt-2 min-h-[44px] w-full rounded-xl border border-gray-300 font-medium text-gray-700 active:bg-gray-100"
-					@click="closeDecision = null"
+					@click="keepOpen"
 				>
 					Biarkan terbuka
 				</button>
@@ -370,6 +370,8 @@ function initForm() {
 	form.isFinal = false;
 	form.petugas = getCookie("user_id") || "";
 	detailMode.value = false;
+	// final auto-on at load when the untouched default covers the target
+	form.isFinal = belum.value > 0 && (Number(form.good) || 0) === belum.value;
 	Object.keys(edits).forEach((key) => delete edits[key]);
 	for (const material of materials.value) {
 		edits[material.item_code] = material.sisa_wip;
@@ -474,5 +476,11 @@ async function closeWorkOrderNow() {
 	} finally {
 		submitting.value = false;
 	}
+}
+
+// "leave open" still resyncs: the header/summary numbers moved with the session
+async function keepOpen() {
+	closeDecision.value = null;
+	await refreshDetail(props.name);
 }
 </script>
