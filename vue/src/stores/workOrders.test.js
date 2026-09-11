@@ -31,6 +31,7 @@ function reset(toasts) {
 	workOrderStore.list = [];
 	workOrderStore.listLoading = false;
 	workOrderStore.listError = null;
+	workOrderStore.filters = { dateFrom: "", dateTo: "", item: "" };
 	setApiErrorHandler((error) => toasts.push(error instanceof ApiError ? error.message : "?"));
 }
 
@@ -60,4 +61,27 @@ test("stale rows failure: toast only - rows stay, no banner", async () => {
 	assert.equal(workOrderStore.listError, "server rusak");
 	assert.equal(workOrderStore.list.length, 1); // stale rows remain visible
 	assert.deepEqual(toasts, ["server rusak"]);
+});
+
+// Task 24: loadList must carry the store's filters into the request.
+test("loadList sends active filters from the store", async () => {
+	const urls = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url) => {
+		urls.push(url);
+		return { ok: true, json: async () => ({ message: { work_orders: [] } }) };
+	};
+	try {
+		reset([]);
+		workOrderStore.filters.item = "Roti";
+		workOrderStore.filters.dateFrom = "2026-09-01";
+		await loadList("");
+	} finally {
+		globalThis.fetch = originalFetch;
+		reset([]);
+	}
+	const query = new URLSearchParams(urls[0].split("?")[1]);
+	assert.equal(query.get("item"), "Roti");
+	assert.equal(query.get("date_from"), "2026-09-01");
+	assert.equal(query.get("date_to"), null); // unset filter is not sent
 });

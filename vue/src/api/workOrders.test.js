@@ -9,7 +9,7 @@ import test from "node:test";
 
 globalThis.document = { cookie: "csrf_token=t19" };
 
-const { cancelLastStep, cancelProduction, closeWorkOrder, finishProduction } = await import(
+const { cancelLastStep, cancelProduction, closeWorkOrder, finishProduction, getWorkOrders } = await import(
 	"./workOrders.js"
 );
 
@@ -70,4 +70,34 @@ test("closeWorkOrder maps reason to reason", async () => {
 	assert.equal(url, "/api/method/production_app.api.close_work_order");
 	assert.equal(body.work_order, "PDTC-WO-1");
 	assert.equal(body.reason, "hasil kurang, sisa 5");
+});
+
+// Task 24: the list read is a GET - the filters must land in the QUERY STRING.
+test("getWorkOrders maps date range + item filters to query params", async () => {
+	const urls = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (url) => {
+		urls.push(url);
+		return { ok: true, json: async () => ({ message: { work_orders: [] } }) };
+	};
+	try {
+		await getWorkOrders("", { dateFrom: "2026-09-01", dateTo: "2026-09-30", item: "Roti" });
+		await getWorkOrders("PDTC-WO-1", {});
+		await getWorkOrders("", { dateFrom: "", dateTo: "", item: "   " });
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+
+	const query = new URLSearchParams(urls[0].split("?")[1]);
+	assert.equal(urls[0].startsWith("/api/method/production_app.api.get_open_work_orders?"), true);
+	assert.equal(query.get("date_from"), "2026-09-01");
+	assert.equal(query.get("date_to"), "2026-09-30");
+	assert.equal(query.get("item"), "Roti");
+	assert.equal(query.get("search"), null); // empty search is dropped
+
+	// plain search still maps to search
+	assert.equal(new URLSearchParams(urls[1].split("?")[1]).get("search"), "PDTC-WO-1");
+
+	// no real filter values -> bare URL, old unfiltered behavior
+	assert.equal(urls[2], "/api/method/production_app.api.get_open_work_orders");
 });

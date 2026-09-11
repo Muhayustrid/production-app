@@ -10,6 +10,10 @@ import { getWorkOrderDetail, getWorkOrders } from "../api/workOrders.js";
 
 export const workOrderStore = reactive({
 	search: "",
+	// List filters (task 24): ISO date strings from <input type="date"> plus
+	// the combined item name/code search box. Shared here so error retries and
+	// reloads keep them.
+	filters: { dateFrom: "", dateTo: "", item: "" },
 	list: [],
 	listLoading: false,
 	listError: null,
@@ -24,7 +28,7 @@ export async function loadList(search = workOrderStore.search) {
 	workOrderStore.listLoading = true;
 	workOrderStore.listError = null;
 	try {
-		const result = await getWorkOrders(search);
+		const result = await getWorkOrders(search, workOrderStore.filters);
 		workOrderStore.list = result.work_orders;
 	} catch (error) {
 		workOrderStore.listError = errorMessage(error);

@@ -13,7 +13,10 @@
 				<div class="min-w-0 flex-1">
 					<p v-if="wo" class="truncate font-semibold">{{ wo.item_name || wo.item }}</p>
 					<p v-else class="h-5 w-2/3 animate-pulse rounded bg-gray-200"></p>
-					<p class="truncate text-sm text-gray-500">{{ name }}</p>
+					<!-- subtitle = item code (when it differs from the name) + WO no. -->
+					<p class="truncate text-sm text-gray-500">
+						<span v-if="wo && wo.item && wo.item !== (wo.item_name || wo.item)">{{ wo.item }} · </span>{{ name }}
+					</p>
 				</div>
 				<span
 					v-if="wo"

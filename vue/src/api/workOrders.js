@@ -8,8 +8,14 @@ const ENDPOINT = "production_app.api";
 
 // ------------------------------------------------------------- reads (GET)
 
-export function getWorkOrders(search) {
+// Task 24: optional list filters. `filters` = { dateFrom, dateTo, item },
+// mapped to the backend's date_from / date_to / item params; empty values are
+// dropped so a call without them keeps the plain unfiltered list behavior.
+export function getWorkOrders(search, filters = {}) {
 	const params = search && String(search).trim() ? { search } : {};
+	if (filters.dateFrom) params.date_from = filters.dateFrom;
+	if (filters.dateTo) params.date_to = filters.dateTo;
+	if (filters.item && String(filters.item).trim()) params.item = filters.item;
 	return call(`${ENDPOINT}.get_open_work_orders`, params);
 }
 
