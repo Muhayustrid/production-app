@@ -1,0 +1,311 @@
+{
+  "captured_at": "2026-09-13 16:26:06.616432",
+  "custom_fields": [
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_item_name_information",
+      "fieldtype": "Data",
+      "insert_after": "production_item",
+      "label": "Item Name Information",
+      "name": "Work Order-custom_item_name_information",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_qty_in_uom",
+      "fieldtype": "Float",
+      "insert_after": "qty",
+      "label": "Qty in Pack",
+      "name": "Work Order-custom_qty_in_uom",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_uom",
+      "fieldtype": "Link",
+      "insert_after": "reserve_stock",
+      "label": "UOM",
+      "name": "Work Order-custom_uom",
+      "non_negative": 0,
+      "options": "UOM"
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_conversion_factor",
+      "fieldtype": "Float",
+      "insert_after": "custom_uom",
+      "label": "Conversion Factor",
+      "name": "Work Order-custom_conversion_factor",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_column_break_fdsxk",
+      "fieldtype": "Column Break",
+      "insert_after": "custom_conversion_factor",
+      "label": "",
+      "name": "Work Order-custom_column_break_fdsxk",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_adonan_ke",
+      "fieldtype": "Data",
+      "insert_after": "custom_column_break_fdsxk",
+      "label": "Adonan ke",
+      "name": "Work Order-custom_adonan_ke",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_adonan",
+      "fieldtype": "Int",
+      "insert_after": "custom_adonan_ke",
+      "label": "Adonan",
+      "name": "Work Order-custom_adonan",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_jam_adonan",
+      "fieldtype": "Time",
+      "insert_after": "custom_adonan",
+      "label": "Jam Adonan",
+      "name": "Work Order-custom_jam_adonan",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_suhu_adonan",
+      "fieldtype": "Float",
+      "insert_after": "custom_jam_adonan",
+      "label": "Suhu Adonan",
+      "name": "Work Order-custom_suhu_adonan",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_nama_penimbang",
+      "fieldtype": "Link",
+      "insert_after": "custom_suhu_adonan",
+      "label": "Nama Penimbang",
+      "name": "Work Order-custom_nama_penimbang",
+      "non_negative": 0,
+      "options": "User"
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_detail_produksi",
+      "fieldtype": "Section Break",
+      "insert_after": "disassembled_qty",
+      "label": "Detail Produksi",
+      "name": "Work Order-custom_detail_produksi",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_sebelum",
+      "fieldtype": "Column Break",
+      "insert_after": "custom_detail_produksi",
+      "label": "Sebelum (PCS)",
+      "name": "Work Order-custom_sebelum",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_good_qty_prepacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_sebelum",
+      "label": "Good Qty (Pre-Packing)",
+      "name": "Work Order-custom_good_qty_prepacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_reject_qty_prepacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_good_qty_prepacking",
+      "label": "Reject Qty (Pre-Packing)",
+      "name": "Work Order-custom_reject_qty_prepacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_trial_qty_prepacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_reject_qty_prepacking",
+      "label": "Trial Qty (Pre-Packing)",
+      "name": "Work Order-custom_trial_qty_prepacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_sisa_qty_prepacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_trial_qty_prepacking",
+      "label": "Sisa Qty (Pre-Packing)",
+      "name": "Work Order-custom_sisa_qty_prepacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_column_break_khnwb",
+      "fieldtype": "Column Break",
+      "insert_after": "custom_sisa_qty_prepacking",
+      "label": "Sesudah (PCS)",
+      "name": "Work Order-custom_column_break_khnwb",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_good_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_column_break_khnwb",
+      "label": "Good Qty (Post-Packing)",
+      "name": "Work Order-custom_good_qty_postpacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_reject_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_good_qty_postpacking",
+      "label": "Reject Qty (Post-Packing)",
+      "name": "Work Order-custom_reject_qty_postpacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_trial_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_reject_qty_postpacking",
+      "label": "Trial Qty (Post-Packing)",
+      "name": "Work Order-custom_trial_qty_postpacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_sisa_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_trial_qty_postpacking",
+      "label": "Sisa Qty (Post-Packing)",
+      "name": "Work Order-custom_sisa_qty_postpacking",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_section_break_b0phj",
+      "fieldtype": "Section Break",
+      "insert_after": "custom_sisa_qty_postpacking",
+      "label": "",
+      "name": "Work Order-custom_section_break_b0phj",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_jam_pembekuan",
+      "fieldtype": "Time",
+      "insert_after": "custom_section_break_b0phj",
+      "label": "Jam Pembekuan",
+      "name": "Work Order-custom_jam_pembekuan",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_qc_produksi",
+      "fieldtype": "Link",
+      "insert_after": "custom_jam_pembekuan",
+      "label": "QC Produksi",
+      "name": "Work Order-custom_qc_produksi",
+      "non_negative": 0,
+      "options": "User"
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_column_break_8rt2c",
+      "fieldtype": "Column Break",
+      "insert_after": "custom_qc_produksi",
+      "label": "",
+      "name": "Work Order-custom_column_break_8rt2c",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_jam_packing",
+      "fieldtype": "Time",
+      "insert_after": "custom_column_break_8rt2c",
+      "label": "Jam Packing",
+      "name": "Work Order-custom_jam_packing",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_qc_packing",
+      "fieldtype": "Link",
+      "insert_after": "custom_jam_packing",
+      "label": "QC Packing",
+      "name": "Work Order-custom_qc_packing",
+      "non_negative": 0,
+      "options": "User"
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_detail_produksi_lain",
+      "fieldtype": "Section Break",
+      "insert_after": "custom_qc_packing",
+      "label": "Detail Produksi Lain",
+      "name": "Work Order-custom_detail_produksi_lain",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_jumlah_kru",
+      "fieldtype": "Int",
+      "insert_after": "custom_detail_produksi_lain",
+      "label": "Jumlah Kru",
+      "name": "Work Order-custom_jumlah_kru",
+      "non_negative": 0,
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "fieldname": "custom_leader_produksi",
+      "fieldtype": "Int",
+      "insert_after": "custom_jumlah_kru",
+      "label": "Leader Produksi",
+      "name": "Work Order-custom_leader_produksi",
+      "non_negative": 0,
+      "options": null
+    }
+  ],
+  "doctype": "Work Order",
+  "leader_produksi": {
+    "distinct_values": {},
+    "fieldtype": "Int",
+    "rows_with_value": 0
+  }
+}

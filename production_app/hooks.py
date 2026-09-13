@@ -10,6 +10,22 @@ app_license = "mit"
 
 # required_apps = []
 
+# Idempotent Work Order custom-field upgrade (T05); safe on every migrate.
+after_migrate = ["production_app.upgrade.apply"]
+
+# Ikon app di app switcher desk (/apps): klik langsung masuk Production Workspace.
+add_to_apps_screen = [
+	{
+		"name": "production_app",
+		"logo": "/assets/production_app/images/logo.svg",
+		"title": "Production App",
+		"route": "/production_workspace",
+	}
+]
+
+# Route app ini di desk (dipakai boot app_data untuk tile app switcher).
+app_home = "/production_workspace"
+
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
 # 	{
@@ -126,7 +142,7 @@ app_license = "mit"
 # -----------
 # Extra search results: list of dicts with label, description, route, index.
 # route: ["List", "ToDo"], "/desk/docs/some/page", or "https://example.com"
-# awesomebar_search = ["production_app.search.awesomebar_results"]
+awesomebar_search = ["production_app.search.awesomebar_results"]
 
 # Permissions
 # -----------

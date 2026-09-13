@@ -1,0 +1,8 @@
+{
+  "name": "stock_entry_fg_from_wo",
+  "dt": "Stock Entry",
+  "view": "Form",
+  "enabled": 1,
+  "script": "frappe.ui.form.on(\"Stock Entry\", {\n    async onload_post_render(frm) {\n\n        // Hanya untuk Stock Entry baru\n        if (!frm.is_new()) return;\n\n        // Hanya Manufacture\n        if (frm.doc.purpose !== \"Manufacture\") return;\n\n        // Harus berasal dari Work Order\n        if (!frm.doc.work_order) return;\n\n        try {\n            const wo = await frappe.db.get_doc(\n                \"Work Order\",\n                frm.doc.work_order\n            );\n\n            if (!wo.custom_good_qty_postpacking) return;\n\n            frm.doc.items.forEach(row => {\n\n                // Finished Good:\n                // Source Warehouse kosong\n                // Target Warehouse terisi\n                const is_finished_good =\n                    !row.s_warehouse &&\n                    !!row.t_warehouse;\n\n                if (is_finished_good) {\n                    frappe.model.set_value(\n                        row.doctype,\n                        row.name,\n                        \"qty\",\n                        wo.custom_good_qty_postpacking\n                    );\n                }\n            });\n\n            frm.refresh_field(\"items\");\n\n        } catch (e) {\n            console.error(e);\n        }\n    }\n});",
+  "dt_template": null
+}
