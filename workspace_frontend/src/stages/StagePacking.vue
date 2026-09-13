@@ -3,6 +3,7 @@ import { computed, reactive } from 'vue'
 import { PackageCheck } from 'lucide-vue-next'
 import { savePrePacking } from '../store.js'
 import { qtyMain } from '../format.js'
+import LinkInput from '../LinkInput.vue'
 import QtyInput from '../QtyInput.vue'
 
 const props = defineProps({
@@ -11,7 +12,7 @@ const props = defineProps({
   stageKey: String
 })
 
-const qip = props.wo.qtyInPack
+const qip = props.wo
 
 const src = props.wo.prepacking
 const form = reactive({
@@ -20,9 +21,7 @@ const form = reactive({
   trialQty: src.trialQty,
   sisaQty: src.sisaQty,
   jam: src.jam || '',
-  qc: src.qc || '',
-  box1: src.box1,
-  box2: src.box2
+  qc: src.qc || ''
 })
 
 const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false, sisaQty: false })
@@ -36,7 +35,7 @@ const qtyFields = computed(() => [
 
 const qtyValid = computed(() => Object.values(ok).every(Boolean))
 const metaValid = computed(() => form.jam !== '' && String(form.qc).trim() !== '')
-const canSave = computed(() => qtyValid.value && metaValid.value)
+const canSave = computed(() => qtyValid.value && metaValid.value && form.goodQty > 0)
 
 const total = computed(() => {
   const v = [form.goodQty, form.rejectQty, form.trialQty, form.sisaQty]
@@ -53,9 +52,7 @@ function save() {
     trialQty: form.trialQty,
     sisaQty: form.sisaQty,
     jam: form.jam,
-    qc: String(form.qc).trim(),
-    box1: form.box1,
-    box2: form.box2
+    qc: String(form.qc).trim()
   })
 }
 </script>
@@ -65,7 +62,7 @@ function save() {
     <div class="panel-head">
       <span class="p-ico"><PackageCheck :size="15" :stroke-width="1.9" /></span>
       <h2>Pre-Packing</h2>
-      <span class="lead">Klik label satuan pada tiap kolom untuk memilih Pack / PCS secara mandiri.</span>
+      <span class="lead">Klik label satuan untuk mengganti satuan input.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
     </div>
 
@@ -82,44 +79,12 @@ function save() {
           :key="f.key"
           :label="f.label"
           :unit-key="f.key"
-          :qty-in-pack="qip"
+          :units="wo"
           required
           :disabled="review"
           v-model="form[f.key]"
           @update:valid="ok[f.key] = $event"
         />
-      </div>
-
-      <div class="form-grid" style="margin-top: 14px">
-        <div class="field">
-          <label :for="`f-b1-${stageKey}`">Box 1 (kg)</label>
-          <input
-            :id="`f-b1-${stageKey}`"
-            v-model.number="form.box1"
-            class="input"
-            type="number"
-            min="0"
-            step="0.01"
-            inputmode="decimal"
-            :disabled="review"
-            placeholder="opsional"
-          />
-        </div>
-
-        <div class="field">
-          <label :for="`f-b2-${stageKey}`">Box 2 (kg)</label>
-          <input
-            :id="`f-b2-${stageKey}`"
-            v-model.number="form.box2"
-            class="input"
-            type="number"
-            min="0"
-            step="0.01"
-            inputmode="decimal"
-            :disabled="review"
-            placeholder="opsional"
-          />
-        </div>
       </div>
 
       <div class="form-grid" style="margin-top: 14px">
@@ -136,13 +101,8 @@ function save() {
 
         <div class="field">
           <label :for="`f-qc-${stageKey}`">QC Produksi <span class="req">*</span></label>
-          <input
-            :id="`f-qc-${stageKey}`"
-            v-model="form.qc"
-            class="input"
-            type="text"
-            :disabled="review"
-          />
+          <LinkInput :id="`f-qc-${stageKey}`" v-model="form.qc"
+            :display-label="form.qc === src.qc ? src.qcLabel : undefined" :disabled="review" />
         </div>
       </div>
 

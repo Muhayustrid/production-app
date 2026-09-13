@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import { Flag } from 'lucide-vue-next'
-import { completeProduction, producedQty } from '../store.js'
+import { completeProduction, producedQty, state } from '../store.js'
 import { fmtInt, packParts, qtyMain } from '../format.js'
 
 const props = defineProps({
@@ -10,18 +10,17 @@ const props = defineProps({
   stageKey: String
 })
 
-const qip = props.wo.qtyInPack
+const qip = props.wo
 const pre = props.wo.prepacking
 // Barang Jadi = Good Qty Pre-Packing (Post-Packing hanya di alur Serah Terima)
-const fg = computed(() => producedQty(props.wo))
+const fg = computed(() => props.wo.stage === 'completed' ? props.wo.producedStockQty : producedQty(props.wo))
 
 const diff = computed(() => fg.value - props.wo.plannedStockQty)
 const diffText = computed(() => {
-  if (diff.value === 0) return 'Sesuai rencana (0 PCS)'
+  if (diff.value === 0) return `Sesuai rencana (0 ${props.wo.stockUom})`
   const sign = diff.value > 0 ? '+' : '-'
   const a = Math.abs(diff.value)
-  const { str, approx } = packParts(a, qip)
-  return `${sign}${fmtInt(a)} PCS (${sign}${approx ? '≈ ' : ''}${str} Pack)`
+  return `${sign}${qtyMain(a, qip)}`
 })
 const diffCls = computed(() => (diff.value === 0 ? '' : diff.value > 0 ? 'pos' : 'neg'))
 
@@ -33,9 +32,8 @@ function ask() {
 function closeDlg() {
   dlg.value.close()
 }
-function confirmComplete() {
-  completeProduction(props.wo)
-  dlg.value.close()
+async function confirmComplete() {
+  if (await completeProduction(props.wo)) dlg.value.close()
 }
 </script>
 
@@ -55,7 +53,7 @@ function confirmComplete() {
           <span class="v">{{ qtyMain(wo.plannedStockQty, qip) }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Hasil Aktual (Good Qty Pre-Packing)</span>
+          <span class="k">Hasil Aktual</span>
           <span class="v">{{ qtyMain(fg, qip) }}</span>
         </div>
         <div class="sum-row">
@@ -97,7 +95,7 @@ function confirmComplete() {
       <p class="note">
         Saat diselesaikan, Manufacture Stock Entry dibuat di ERPNext: bahan baku dihitung dari
         BOM dan planned qty, jumlah Barang Jadi memakai Good Qty Pre-Packing
-        ({{ fmtInt(fg) }} PCS). Barang jadi masuk Cold Storage dan menunggu serah terima ke
+        ({{ fmtInt(fg) }} {{ wo.stockUom }}). Barang jadi masuk Cold Storage dan menunggu serah terima ke
         Gudang Barang Jadi melalui alur Serah Terima Barang Jadi.
       </p>
     </div>
@@ -115,9 +113,10 @@ function confirmComplete() {
         <strong>{{ wo.warehouse }}</strong> melalui Manufacture Stock Entry di ERPNext, lalu
         menunggu permintaan serah terima dari gudang.
       </p>
+      <p v-if="state.actionError" class="err" role="alert">{{ state.actionError }}</p>
       <div class="dlg-actions">
         <button class="btn" @click="closeDlg">Batal</button>
-        <button class="btn btn-primary" @click="confirmComplete">Ya, Selesaikan</button>
+        <button class="btn btn-primary" :disabled="!!state.pending" @click="confirmComplete">Ya, Selesaikan</button>
       </div>
     </dialog>
   </section>

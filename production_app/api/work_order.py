@@ -5,6 +5,8 @@
 # / has_permission. The stage is ALWAYS derived from current documents here —
 # the UI never saves or sends a stage.
 
+import math
+
 import frappe
 from frappe import _
 from frappe.utils import flt
@@ -32,6 +34,8 @@ LIST_FIELDS = [
 	"custom_conversion_factor",
 	"custom_qty_in_uom",
 	"custom_prepacking_confirmed",
+	"custom_adonan_ke",
+	"skip_transfer",
 ]
 
 STAGE_PERSIAPAN = "persiapan"
@@ -54,14 +58,13 @@ def _overproduction_allowance():
 	)
 
 
-def _operations_complete(operations, wo_qty, allowance):
-	"""Mirror the native check_if_operations_completed tolerance per operation."""
-	for op in operations:
-		completed = flt(op.get("completed_qty")) + flt(op.get("process_loss_qty"))
-		allowed = flt(op.get("completed_qty")) + (allowance / 100 * flt(op.get("completed_qty")))
-		if completed < wo_qty and completed < allowed:
-			return False
-	return True
+def _operations_complete(operations):
+	"""True when every operation is natively Completed. Native
+	`update_operation_status` sets Completed only once completed_qty +
+	process_loss_qty reaches the WO qty (or the overproduction allowance),
+	so an operation short of plan must record its shortfall as process
+	loss on its Job Card before the stage can advance."""
+	return all(op.get("status") == "Completed" for op in operations)
 
 
 def _has_operations(name):
@@ -91,11 +94,11 @@ def derive_stage(wo, operations=None):
 			fields=["completed_qty", "process_loss_qty", "status"],
 		)
 
-	if operations and not _operations_complete(operations, qty, _overproduction_allowance()):
-		return STAGE_OPERASI
-
-	if flt(wo.get("material_transferred_for_manufacturing")) < qty:
+	if not wo.get("skip_transfer") and flt(wo.get("material_transferred_for_manufacturing")) < qty:
 		return STAGE_MATERIAL
+
+	if operations and not _operations_complete(operations):
+		return STAGE_OPERASI
 
 	if not wo.get("custom_prepacking_confirmed"):
 		return STAGE_PREPACKING
@@ -169,6 +172,7 @@ def wo_list(search=None, production_item=None, stage=None, start=0, page_len=20)
 		rows = [r for r in rows if derive_stage(r) == stage]
 
 	_batch_enrich(rows)
+	_enrich_units(rows)
 	for row in rows:
 		row["stage"] = derive_stage(row)
 	return rows[start : start + page_len] if stage else rows
@@ -199,6 +203,36 @@ def _batch_enrich(rows):
 		r.has_operations = r.name in with_ops
 
 
+
+def _enrich_units(rows):
+	"""Resolve the warehouse display UOM separately from stored stock quantities."""
+	items = {}
+	for row in rows:
+		code = row.get("production_item")
+		if code not in items:
+			items[code] = frappe.get_cached_doc("Item", code)
+		item = items[code]
+		stock = item.stock_uom
+		alternate = item.get("custom_default_uom_warehouse") or row.get("custom_uom") or stock
+		factor = 1.0 if alternate == stock else None
+		if alternate != stock:
+			conversions = item.uoms
+			if item.variant_of:
+				conversions = list(conversions) + list(frappe.get_cached_doc("Item", item.variant_of).uoms)
+			for conversion in conversions:
+				if conversion.uom == alternate:
+					value = flt(conversion.conversion_factor)
+					factor = value if math.isfinite(value) and value > 0 else None
+					break
+		row["stock_uom"] = stock
+		row["display_uom"] = alternate
+		row["display_conversion_factor"] = factor
+		row["stock_uom_whole_number"] = bool(frappe.get_cached_value("UOM", stock, "must_be_whole_number"))
+		row["uom_warning"] = (
+			_("Konversi {0} ke {1} belum valid di Item {2}; gunakan {1}.").format(alternate, stock, code)
+			if factor is None else None
+		)
+
 @frappe.whitelist()
 def wo_detail(name):
 	"""Full workspace detail for one Work Order; independent permission check."""
@@ -207,18 +241,24 @@ def wo_detail(name):
 
 	wo = frappe.get_doc(DOCTYPE, name)
 	data = wo.as_dict()
+	# the WO table has no production_item_name column on this site — always
+	# resolve the operator-facing item name from the Item master
+	data["production_item_name"] = (
+		frappe.db.get_value("Item", wo.production_item, "item_name") or wo.production_item
+	)
+	_enrich_units([data])
 	allowance = _overproduction_allowance()
 
 	operations = frappe.get_all(
 		"Work Order Operation",
 		filters={"parent": name},
-		fields=["name", "operation", "status", "completed_qty", "process_loss_qty", "pending_qty"],
+		fields=["name", "operation", "status", "completed_qty", "process_loss_qty", "pending_qty", "workstation"],
 		order_by="idx",
 	)
 
 	job_cards = frappe.get_all(
 		"Job Card",
-		filters={"work_order": name},
+		filters={"work_order": name, "docstatus": ("<", 2)},
 		fields=[
 			"name",
 			"operation",
@@ -230,7 +270,6 @@ def wo_detail(name):
 			"pending_qty",
 			"process_loss_qty",
 			"workstation",
-			"time_logs",
 		],
 		order_by="creation",
 	)
@@ -244,7 +283,7 @@ def wo_detail(name):
 		employee_names = frappe.get_all(
 			"Job Card Employee",
 			filters={"parent": card.name},
-			fields=["employee_name"],
+			fields=["employee", "employee_name"],
 		)
 		card["employees"] = employee_names
 
@@ -340,23 +379,73 @@ def _validate_prep_values(values):
 	return cleaned
 
 
+# Production App warehouse defaults (Custom Fields on Manufacturing Settings).
+# Applied by prepare() to Work Orders whose warehouse fields are still empty;
+# they never override values already on the Work Order.
+WAREHOUSE_DEFAULT_FIELDS = {
+	"source_warehouse": "custom_default_source_warehouse",
+	"wip_warehouse": "custom_default_wip_warehouse",
+	"fg_warehouse": "custom_default_fg_warehouse",
+	"scrap_warehouse": "custom_default_scrap_warehouse",
+}
+
+
+def _warehouse_defaults():
+	return {
+		key: (frappe.db.get_single_value("Manufacturing Settings", fieldname) or None)
+		for key, fieldname in WAREHOUSE_DEFAULT_FIELDS.items()
+	}
+
+
+@frappe.whitelist()
+def warehouse_defaults():
+	"""Read the Production App warehouse defaults."""
+	return _warehouse_defaults()
+
+
+@frappe.whitelist()
+def warehouse_defaults_save(
+	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None
+):
+	"""Save the Production App warehouse defaults (empty string clears)."""
+	frappe.has_permission("Manufacturing Settings", "write", throw=True)
+	payload = {
+		"source_warehouse": source_warehouse,
+		"wip_warehouse": wip_warehouse,
+		"fg_warehouse": fg_warehouse,
+		"scrap_warehouse": scrap_warehouse,
+	}
+	for key, value in payload.items():
+		if value in (None, ""):
+			payload[key] = None
+		elif not frappe.db.exists("Warehouse", value):
+			frappe.throw(_("Gudang tidak ditemukan: {0}").format(value))
+	settings = frappe.get_doc("Manufacturing Settings")
+	for key, value in payload.items():
+		settings.set(WAREHOUSE_DEFAULT_FIELDS[key], value)
+	settings.save()
+	return _warehouse_defaults()
+
+
 def _fill_warehouse_defaults(wo):
-	"""Server-side mirror of the Auto Pick Warehouse behavior: fill empty WO
-	warehouses from the production item's defaults (never override user data)."""
+	"""Fill EMPTY Work Order warehouses: Production App defaults
+	(Manufacturing Settings) first, then the production item's defaults.
+	Never overrides a value already on the document."""
+	settings = _warehouse_defaults()
 	item = frappe.db.get_value(
 		"Item",
 		wo.production_item,
 		["custom_default_source_warehouse", "custom_default_wip_warehouse", "custom_default_fg_warehouse"],
 		as_dict=True,
 	)
-	if not item:
-		return
-	if not wo.source_warehouse and item.custom_default_source_warehouse:
-		wo.source_warehouse = item.custom_default_source_warehouse
-	if not wo.wip_warehouse and item.custom_default_wip_warehouse:
-		wo.wip_warehouse = item.custom_default_wip_warehouse
-	if not wo.fg_warehouse and item.custom_default_fg_warehouse:
-		wo.fg_warehouse = item.custom_default_fg_warehouse
+	for wo_field in WAREHOUSE_DEFAULT_FIELDS:
+		if getattr(wo, wo_field, None):
+			continue
+		value = settings.get(wo_field)
+		if not value and item:
+			value = item.get(f"custom_default_{wo_field}")
+		if value:
+			setattr(wo, wo_field, value)
 
 
 @frappe.whitelist()
@@ -497,26 +586,35 @@ def jobcard_start(name, job_card, start_time=None, employees=None):
 
 
 @frappe.whitelist()
-def jobcard_complete(name, job_card, qty=None, end_time=None, auto_submit=1, pending_qty=None, process_loss_qty=None):
-	"""Complete (a cycle of) this Job Card with quantity; delegates to the
-	native complete_job_card, which enforces docstatus, overlaps and the
-	per-operation overproduction allowance."""
+def jobcard_complete(name, job_card, qty=None, end_time=None, auto_submit=1, process_loss_qty=None):
+	"""Close this Job Card in ONE action (decision 2026-09-13): `qty` is the
+	actual completed output and `process_loss_qty` (susut) records the shortfall
+	against the card target, so the operation reaches native Completed status
+	even below plan. qty + susut must cover the remaining card quantity."""
 	card = _locked_job_card(name, job_card)
+	if card.docstatus == 0 and flt(card.total_completed_qty) > 0:
+		frappe.throw(
+			_("Job Card {0} sudah memiliki penyelesaian sebelumnya; selesaikan lewat dokumennya").format(job_card)
+		)
 	qty = flt(qty) if qty is not None else 0
+	loss = flt(process_loss_qty) if process_loss_qty is not None else 0
 	remaining = flt(card.for_quantity) - flt(card.total_completed_qty)
-	if pending_qty is None and process_loss_qty is None:
-		# single-action completion: everything not completed this cycle is pending
-		pending_qty = remaining - qty
-	if pending_qty is not None and pending_qty < 0 or qty > remaining:
+	if qty > remaining:
 		frappe.throw(
 			_("Qty selesai ({0}) melebihi sisa qty Job Card ({1})").format(qty, remaining)
+		)
+	if qty + loss < remaining:
+		frappe.throw(
+			_("Qty selesai ({0}) + susut ({1}) belum menutup sisa qty Job Card ({2}); isi sisanya sebagai susut agar operasi selesai").format(
+				qty, loss, remaining
+			)
 		)
 	kwargs = frappe._dict(
 		qty=qty,
 		for_quantity=flt(card.for_quantity),  # forces the native qty-split validation
 		end_time=end_time or frappe.utils.now(),
-		pending_qty=pending_qty,
-		process_loss_qty=process_loss_qty,
+		pending_qty=0,  # one-shot closure: the remainder is produced or recorded as susut
+		process_loss_qty=loss,
 		auto_submit=frappe.utils.cint(auto_submit),
 	)
 	card.complete_job_card(**kwargs)
@@ -542,8 +640,6 @@ PREPACKING_FIELD_MAP = {
 	"sisa": "custom_sisa_qty_prepacking",
 	"jam_pembekuan": "custom_jam_pembekuan",  # Time
 	"qc_produksi": "custom_qc_produksi",  # Link User
-	"box_1": "custom_box_1",  # kg, display-only weight
-	"box_2": "custom_box_2",
 }
 
 
@@ -561,7 +657,7 @@ def _validate_prepacking(values):
 			if good != good or good in (float("inf"), float("-inf")) or good <= 0:
 				frappe.throw(_("Good Qty pre-packing harus angka lebih besar dari 0"))
 			cleaned[fieldname] = good
-		elif key in ("reject", "trial", "sisa", "box_1", "box_2"):
+		elif key in ("reject", "trial", "sisa"):
 			amount = float(value)
 			if amount != amount or amount in (float("inf"), float("-inf")) or amount < 0:
 				frappe.throw(_("{0} harus angka desimal >= 0").format(key))
@@ -606,8 +702,6 @@ def confirm_prepacking(name, values):
 		"name": wo.name,
 		"stage": derive_stage(wo),
 		"good": flt(wo.custom_good_qty_prepacking),
-		"box_1": flt(wo.custom_box_1),
-		"box_2": flt(wo.custom_box_2),
 	}
 
 
@@ -640,19 +734,30 @@ def finish(name):
 	allowance = flt(
 		frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order")
 	)
-	if good > flt(wo.qty) * (1 + allowance / 100):
+	if flt(wo.produced_qty) + good > flt(wo.qty) * (1 + allowance / 100):
 		frappe.throw(
 			_("Good Qty {0} melebihi batas overproduksi ({1})").format(
 				good, flt(wo.qty) * (1 + allowance / 100)
 			)
 		)
 
-	# native guards (operations complete, duplicate entry, overproduction) throw
-	# from the builder itself — surfaced to the operator as-is
-	se = frappe.get_doc(make_wo_stock_entry(name, "Manufacture", qty=good))
+	if derive_stage(wo) != STAGE_FINISH:
+		frappe.throw(_("Finish belum tersedia; selesaikan tahap sebelumnya."))
 
-	# workspace consumption rule (plan non-negotiable #2): restore RM rows to
-	# the transferred (planned) quantities — native backflush prorates to yield
+	# native guards (operations complete, duplicate entry, overproduction) throw
+	# from the builder itself — surfaced to the operator as-is.
+	# One-shot finish (decision 2026-09-13): the entry covers the whole remaining
+	# target — `good` is produced, the shortfall becomes process loss natively
+	# (header qty minus finished-item rows), which also completes a legacy
+	# partially-produced WO in a single submission.
+	remaining_target = max(flt(wo.qty) - flt(wo.produced_qty) - flt(wo.process_loss_qty), 0)
+	se = frappe.get_doc(make_wo_stock_entry(name, "Manufacture", qty=max(good, remaining_target)))
+
+	# workspace consumption rule (plan non-negotiable #2): raw materials follow
+	# the plan, not the yield — restore RM rows to the still-unconsumed planned
+	# quantity (transferred − consumed). Native backflush prorates to yield.
+	# For the normal one-shot flow consumed is 0, so this equals the full
+	# transferred quantity; a legacy partially-produced WO keeps its balance.
 	transferred = frappe._dict()
 	for r in frappe.get_all(
 		"Stock Entry Detail",
@@ -668,18 +773,25 @@ def finish(name):
 			)),
 			"docstatus": 1,
 		},
-		fields=["item_code", "qty"],
+		fields=["item_code", "transfer_qty"],
 	):
-		transferred[r.item_code] = transferred.get(r.item_code, 0.0) + flt(r.qty)
+		transferred[r.item_code] = transferred.get(r.item_code, 0.0) + flt(r.transfer_qty)
+	consumed = frappe._dict()
+	for r in wo.required_items:
+		consumed[r.item_code] = consumed.get(r.item_code, 0.0) + flt(r.consumed_qty)
 
 	fg_item = wo.production_item
 	for row in se.items:
 		if row.is_finished_item:
 			if row.item_code != fg_item:
 				frappe.throw(_("Baris barang jadi tidak valid: {0}").format(row.item_code))
-		elif row.item_code in transferred:
-			row.qty = transferred[row.item_code]
-			row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
+			row.qty = good / flt(row.conversion_factor or 1)
+			row.transfer_qty = good
+		elif row.s_warehouse and not row.t_warehouse and row.item_code in transferred:
+			target = flt(transferred[row.item_code]) - flt(consumed.get(row.item_code, 0.0))
+			if target > 0:
+				row.transfer_qty = target
+				row.qty = row.transfer_qty / flt(row.conversion_factor or 1)
 
 	se.insert()
 	se.submit()  # StockOverProductionError / valuation failures roll the request back

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import WorkOrderList from './WorkOrderList.vue'
 import Workspace from './Workspace.vue'
+import WarehouseSettings from './WarehouseSettings.vue'
 import { workOrders, loadList, state } from './store.js'
 import { ClipboardCheck, Settings, HelpCircle, Factory } from 'lucide-vue-next'
 
@@ -23,10 +24,12 @@ onUnmounted(() => window.removeEventListener('hashchange', onHash))
 const woId = computed(() =>
   hash.value.startsWith('#/wo/') ? decodeURIComponent(hash.value.slice(5)) : null
 )
-const section = computed(() => 'workorder')
+const section = computed(() => (hash.value.startsWith('#/settings') ? 'settings' : 'workorder'))
 
 // drawer ala YouTube: tutup default, burger di top bar membuka/menutup
 const navOpen = ref(false)
+const currentUser = window.workspace_user || 'Pengguna ERPNext'
+const initials = currentUser.split(' ').slice(0, 2).map(s => s[0]).join('')
 const activeCount = computed(() => workOrders.filter((w) => w.stage !== 'completed').length)
 onMounted(() => { loadList() })
 
@@ -51,10 +54,10 @@ function onNavClick() {
         </div>
       </div>
       <div class="topuser">
-        <span class="avatar">AR</span>
+        <span class="avatar">{{ initials }}</span>
         <span class="uinfo">
-          <span class="uname">Andi Rahman</span>
-          <span class="urole">Production Manager</span>
+          <span class="uname">{{ currentUser }}</span>
+          <span class="urole">ERPNext</span>
         </span>
       </div>
     </header>
@@ -87,10 +90,16 @@ function onNavClick() {
           <span class="navbadge">{{ activeCount }}</span>
         </a>
         <div class="navsection">Sistem</div>
-        <span class="navitem disabled" title="Belum tersedia di mockup">
+        <a
+          href="#/settings"
+          class="navitem"
+          :class="{ on: section === 'settings' }"
+          :aria-current="section === 'settings' ? 'page' : undefined"
+          @click="onNavClick"
+        >
           <Settings :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Pengaturan</span>
-        </span>
+        </a>
         <span class="navitem disabled" title="Belum tersedia di mockup">
           <HelpCircle :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Bantuan</span>
@@ -117,6 +126,7 @@ function onNavClick() {
     <div class="maincol">
       <div class="content">
         <div v-if="state.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ state.error }} — <a href="#" @click.prevent="loadList()">coba lagi</a></div>
+        <WarehouseSettings v-else-if="section === 'settings'" />
         <Workspace v-else-if="woId" :key="woId" :id="woId" />
         <WorkOrderList v-else />
         <footer class="appfoot">

@@ -690,16 +690,12 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 				"sisa": 0,
 				"jam_pembekuan": "09:15:00",
 				"qc_produksi": "Administrator",
-				"box_1": 1.25,
-				"box_2": 2.5,
 			},
 		)
 		self.assertEqual(result["stage"], "finish")
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_prepacking), 100)
 		self.assertEqual(wo.custom_reject_qty_prepacking, 0)
-		self.assertEqual(flt(wo.custom_box_1), 1.25)
-		self.assertEqual(flt(wo.custom_box_2), 2.5)
 		self.assertEqual(wo.custom_prepacking_confirmed, 1)
 		self.assertEqual(str(wo.custom_jam_pembekuan), "9:15:00")
 
@@ -709,7 +705,6 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_prepacking), 100)
 		self.assertEqual(wo.custom_prepacking_confirmed, 1)
-		self.assertEqual(flt(wo.custom_box_1), 1.25)
 
 		# no finish document may exist yet
 		self.assertFalse(frappe.get_all(
@@ -801,14 +796,104 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		result = finish(wo.name)
 		wo.reload()
 		self.assertEqual(flt(wo.produced_qty), 80)
-		self.assertEqual(flt(wo.process_loss_qty), 0)
-		self.assertEqual(wo.status, "In Process")  # below plan: no forced completion
-		self.assertEqual(result["stage"], "finish")  # remaining 20 may still be produced
+		self.assertEqual(flt(wo.process_loss_qty), 20)
+		self.assertEqual(wo.status, "Completed")
+		self.assertEqual(result["stage"], "selesai")
 
 		# raw materials were consumed at planned quantities, not prorated
 		se = frappe.get_doc("Stock Entry", result["stock_entry"])
 		rm = sorted([(r.item_code, flt(r.qty)) for r in se.items if not r.is_finished_item])
 		self.assertEqual(rm, [(self.rm1, 200.0), (self.rm2, 100.0)])
+
+	def test_t11_finish_closes_legacy_partially_produced_wo(self):
+		from production_app.api.work_order import (
+			confirm_prepacking,
+			finish,
+			transfer_materials,
+		)
+
+		self._receipt(self.rm1, 1000)
+		self._receipt(self.rm2, 1000)
+		wo = self._make_wo(100)
+		transfer_materials(wo.name)
+
+		# legacy state: a native prorated Manufacture already produced half the plan
+		first = frappe.get_doc(make_wo_stock_entry(wo.name, "Manufacture", qty=50))
+		first.insert()
+		first.submit()
+		wo.reload()
+		self.assertEqual(flt(wo.produced_qty), 50)
+		self.assertEqual(wo.status, "In Process")
+
+		# one-shot finish closes the remainder: good produced, shortfall = loss
+		confirm_prepacking(wo.name, values={"good": 30})
+		result = finish(wo.name)
+		wo.reload()
+		self.assertEqual(flt(wo.produced_qty), 80)
+		self.assertEqual(flt(wo.process_loss_qty), 20)
+		self.assertEqual(wo.status, "Completed")
+		self.assertEqual(result["stage"], "selesai")
+
+		# RM rows restored to the still-unconsumed plan (transferred − consumed)
+		se = frappe.get_doc("Stock Entry", result["stock_entry"])
+		rm = sorted([(r.item_code, flt(r.qty)) for r in se.items if not r.is_finished_item])
+		self.assertEqual(rm, [(self.rm1, 100.0), (self.rm2, 50.0)])
+
+	def test_t07_prepare_applies_warehouse_default_settings(self):
+		from production_app.api.work_order import prepare, warehouse_defaults_save
+
+		# set the Production App defaults on Manufacturing Settings (test tx)
+		saved = warehouse_defaults_save(
+			source_warehouse=self.src_wh,
+			wip_warehouse=self.wip_wh,
+			fg_warehouse=self.fg_wh,
+			scrap_warehouse=self.fg_wh,
+		)
+		self.assertEqual(saved["fg_warehouse"], self.fg_wh)
+
+		wo = frappe.get_doc(
+			{
+				"doctype": "Work Order",
+				"production_item": self.fg,
+				"bom_no": self.bom,
+				"qty": 10,
+				"company": self.company,
+				"wip_warehouse": self.fg_wh,  # explicit value must never be overridden
+				"stock_uom": self.uom,
+				"planned_start_date": now(),
+				"transfer_material_against": "Work Order",
+				"use_multi_level_bom": 0,
+			}
+		)
+		wo.get_items_and_operations_from_bom()
+		wo.insert()
+
+		prepare(wo.name, values={"adonan_ke": "1", "jam_adonan": "08:00:00"}, submit=1)
+		wo.reload()
+		self.assertEqual(wo.docstatus, 1)
+		self.assertEqual(wo.source_warehouse, self.src_wh)
+		self.assertEqual(wo.wip_warehouse, self.fg_wh)  # explicit value kept
+		self.assertEqual(wo.fg_warehouse, self.fg_wh)
+		self.assertEqual(wo.scrap_warehouse, self.fg_wh)
+
+		# clearing is allowed (empty string -> None)
+		cleared = warehouse_defaults_save(
+			source_warehouse="", wip_warehouse="", fg_warehouse="", scrap_warehouse=""
+		)
+		self.assertIsNone(cleared["fg_warehouse"])
+
+	def test_t07_warehouse_defaults_save_requires_permission(self):
+		from production_app.api.work_order import warehouse_defaults_save
+
+		user = frappe.get_doc(
+			{"doctype": "User", "email": "testwhd@prodapp.example.com", "first_name": "TWD"}
+		).insert().name
+		frappe.set_user(user)
+		try:
+			with self.assertRaises(frappe.PermissionError):
+				warehouse_defaults_save(fg_warehouse=self.fg_wh)
+		finally:
+			frappe.set_user("Administrator")
 
 	def test_t12_permission_denied_on_actions(self):
 		from production_app.api.work_order import (
@@ -896,6 +981,26 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self.assertEqual(wo.docstatus, 2)
 		from production_app.api.work_order import wo_detail
 		self.assertEqual(wo_detail(wo.name)["stage"], "cancelled")
+
+	def test_workspace_uom_uses_item_factor_not_converted_quantity(self):
+		from production_app.api.work_order import wo_detail, _enrich_units
+		item = frappe.get_doc("Item", self.fg)
+		alternate = frappe.db.get_value("UOM", {"name": ("!=", self.uom)}, "name")
+		item.custom_default_uom_warehouse = alternate
+		item.append("uoms", {"uom": alternate, "conversion_factor": 12})
+		item.save()
+		wo = self._make_wo(216, submit=False)
+		data = wo_detail(wo.name)
+		self.assertEqual(data["display_uom"], alternate)
+		self.assertEqual(data["display_conversion_factor"], 12)
+		self.assertEqual(data["qty"], 216)
+		rows = [frappe._dict(name=wo.name, production_item=self.fg)]
+		_enrich_units(rows)
+		self.assertEqual(rows[0].display_conversion_factor, 12)
+		item.uoms = [row for row in item.uoms if row.uom != alternate]
+		item.save()
+		self.assertIsNone(wo_detail(wo.name)["display_conversion_factor"])
+
 
 	def test_t05_box_kg_and_leader_name_persist_after_submit(self):
 		self._receipt(self.rm1, 1000)
@@ -1212,6 +1317,45 @@ class TestWorkOrderOperationsProof(IntegrationTestCase):
 		card = frappe.get_doc("Job Card", card["name"])
 		self.assertEqual(card.docstatus, 0)
 		self.assertEqual(flt(card.total_completed_qty), 0)
+
+	def test_t09_complete_below_plan_with_loss_then_one_shot_finish(self):
+		from production_app.api.work_order import (
+			confirm_prepacking,
+			finish,
+			jobcard_complete,
+			jobcard_start,
+			transfer_materials,
+		)
+
+		self._receipt(self.rm1, 1000)
+		wo = self._make_wo(100)
+		transfer_materials(wo.name)
+
+		card = self._job_cards(wo)[0]
+		jobcard_start(wo.name, card.name, employees=[{"employee": self._fresh_employee()}])
+
+		# below plan without susut must not silently leave the operation open
+		with self.assertRaises(frappe.ValidationError):
+			jobcard_complete(wo.name, card.name, qty=60, auto_submit=1)
+
+		# qty + susut closes the card AND the operation natively (below plan)
+		done = jobcard_complete(wo.name, card.name, qty=60, process_loss_qty=40, auto_submit=1)
+		self.assertEqual(done["docstatus"], 1)
+		wo.reload()
+		self.assertEqual(wo.operations[0].status, "Completed")
+		self.assertEqual(flt(wo.operations[0].completed_qty), 60)
+		self.assertEqual(flt(wo.operations[0].process_loss_qty), 40)
+		# operation loss does not leak into the WO-level loss
+		self.assertEqual(flt(wo.process_loss_qty), 0)
+		self.assertEqual(done["work_order_stage"], "pre_packing")
+
+		confirm_prepacking(wo.name, values={"good": 55, "reject": 5})
+		result = finish(wo.name)
+		wo.reload()
+		self.assertEqual(flt(wo.produced_qty), 55)
+		self.assertEqual(flt(wo.process_loss_qty), 45)
+		self.assertEqual(wo.status, "Completed")
+		self.assertEqual(result["stage"], "selesai")
 
 	def test_t04_job_cards_created_on_submit(self):
 		wo = self._make_wo(100)

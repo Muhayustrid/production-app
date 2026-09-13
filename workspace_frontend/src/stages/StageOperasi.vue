@@ -1,8 +1,9 @@
 <script setup>
-import { nextTick, ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { Cog } from 'lucide-vue-next'
-import { confirmOperations, finishOperation, opsAllDone, startOperation } from '../store.js'
+import { confirmOperations, finishOperation, opsAllDone, startOperation, state } from '../store.js'
 import { fmtInt, packParts, qtyMain } from '../format.js'
+import LinkInput from '../LinkInput.vue'
 import QtyInput from '../QtyInput.vue'
 
 const props = defineProps({
@@ -11,7 +12,7 @@ const props = defineProps({
   stageKey: String
 })
 
-const qip = props.wo.qtyInPack
+const qip = props.wo
 
 function statusMeta(s) {
   if (s === 'done') return { cls: 'chip-ok', label: 'Selesai' }
@@ -19,13 +20,9 @@ function statusMeta(s) {
   return { cls: 'chip-off', label: 'Belum Mulai' }
 }
 
+const employee = ref('')
 function ratio(done, planned) {
-  const d = packParts(done, qip)
-  const p = packParts(planned, qip)
-  return {
-    main: `${d.approx ? '≈ ' : ''}${d.str} / ${p.approx ? '≈ ' : ''}${p.str} Pack`,
-    sub: `${fmtInt(done)} / ${fmtInt(planned)} PCS`
-  }
+  return { main: qtyMain(done, qip), sub: `Rencana: ${qtyMain(planned, qip)}` }
 }
 
 function timeText(op) {
@@ -34,26 +31,37 @@ function timeText(op) {
   return '-'
 }
 
-// dialog selesaikan operasi: konfirmasi jumlah selesai (default = rencana)
+// dialog selesaikan operasi: konfirmasi jumlah selesai (default = rencana).
+// Susut diusulkan otomatis = sisa rencana; operator dapat mengubahnya.
 const dlg = ref(null)
 const dlgOp = ref(null)
 const donePcs = ref(null)
 const doneValid = ref(true)
+const lossPcs = ref(0)
+const lossValid = ref(true)
+const lossDirty = ref(false)
 
 function openFinish(op) {
   dlgOp.value = op
   donePcs.value = op.plannedPcs
   doneValid.value = true
+  lossPcs.value = 0
+  lossValid.value = true
+  lossDirty.value = false
   nextTick(() => dlg.value.showModal())
 }
 function closeDlg() {
   dlg.value.close()
   dlgOp.value = null
 }
-function confirmFinish() {
-  if (!doneValid.value || donePcs.value == null) return
-  finishOperation(props.wo, dlgOp.value, donePcs.value)
-  closeDlg()
+watch(donePcs, (qty) => {
+  if (!lossDirty.value && dlgOp.value) {
+    lossPcs.value = Math.max((dlgOp.value.plannedPcs || 0) - (qty || 0), 0)
+  }
+})
+async function confirmFinish() {
+  if (!doneValid.value || !lossValid.value || donePcs.value == null) return
+  if (await finishOperation(props.wo, dlgOp.value, donePcs.value, lossPcs.value || 0)) closeDlg()
 }
 </script>
 
@@ -67,6 +75,10 @@ function confirmFinish() {
     </div>
 
     <div class="panel-body">
+      <div v-if="!review" class="field">
+        <label for="operation-employee">Karyawan untuk memulai operasi</label>
+        <LinkInput id="operation-employee" v-model="employee" doctype="Employee" />
+      </div>
       <div class="op-thead">
         <span>Operasi</span>
         <span style="text-align: right">Selesai</span>
@@ -75,7 +87,7 @@ function confirmFinish() {
         <span></span>
       </div>
 
-      <div v-for="op in wo.operations" :key="op.name" class="op-row">
+      <div v-for="op in wo.operations" :key="op.id" class="op-row">
         <div class="oname">
           {{ op.name }}
           <small>{{ op.workstation }} · {{ op.operator }}</small>
@@ -84,6 +96,7 @@ function confirmFinish() {
           <span class="slabel">Selesai</span>
           <span class="sval" :class="{ dim: op.completedPcs === 0 }">{{ ratio(op.completedPcs, op.plannedPcs).main }}</span>
           <span class="ssub">{{ ratio(op.completedPcs, op.plannedPcs).sub }}</span>
+          <span v-if="op.lossQty > 0" class="ssub">Susut: {{ qtyMain(op.lossQty, qip) }}</span>
         </div>
         <div class="otimes">{{ timeText(op) }}</div>
         <div class="ostat st-stat">
@@ -93,7 +106,7 @@ function confirmFinish() {
           <button
             v-if="!review && op.status === 'pending'"
             class="btn btn-sm"
-            @click="startOperation(wo, op)"
+            @click="startOperation(wo, op, employee)"
           >
             Mulai
           </button>
@@ -119,21 +132,32 @@ function confirmFinish() {
       <h3 v-if="dlgOp">Selesaikan {{ dlgOp.name }}?</h3>
       <p v-if="dlgOp">
         Catat jumlah yang diselesaikan operator. Rencana:
-        {{ qtyMain(dlgOp.plannedPcs, qip) }}.
+        {{ qtyMain(dlgOp.plannedPcs, qip) }}. Selisih rencana yang tidak
+        diproduksi dicatat sebagai susut agar operasi selesai.
       </p>
       <div v-if="dlgOp" style="margin-top: 12px; max-width: 240px">
         <QtyInput
           label="Jumlah Selesai"
           unit-key="opSelesai"
           required
-          :qty-in-pack="qip"
+          :units="wo"
           v-model="donePcs"
           @update:valid="doneValid = $event"
         />
       </div>
+      <div v-if="dlgOp" style="margin-top: 12px; max-width: 240px">
+        <QtyInput
+          label="Susut / Rusak"
+          unit-key="opSusut"
+          :units="wo"
+          v-model="lossPcs"
+          @update:valid="lossValid = $event"
+        />
+      </div>
+      <p v-if="state.actionError" class="err" role="alert">{{ state.actionError }}</p>
       <div class="dlg-actions">
         <button class="btn" @click="closeDlg">Batal</button>
-        <button class="btn btn-primary" :disabled="!doneValid || donePcs == null" @click="confirmFinish">
+        <button class="btn btn-primary" :disabled="!!state.pending || !doneValid || !lossValid || donePcs == null" @click="confirmFinish">
           Selesaikan
         </button>
       </div>

@@ -109,9 +109,9 @@ def snapshot():
 	return path
 
 
-def _upsert_field(spec):
+def _upsert_field(dt, spec):
 	existing = frappe.db.get_value(
-		"Custom Field", {"dt": DOCTYPE, "fieldname": spec["fieldname"]}, "name"
+		"Custom Field", {"dt": dt, "fieldname": spec["fieldname"]}, "name"
 	)
 	if existing:
 		changed = False
@@ -122,9 +122,120 @@ def _upsert_field(spec):
 				changed = True
 		return ("updated" if changed else "unchanged", existing)
 
-	doc = frappe.get_doc({"doctype": "Custom Field", "dt": DOCTYPE, **spec})
+	doc = frappe.get_doc({"doctype": "Custom Field", "dt": dt, **spec})
 	doc.insert()
 	return ("created", doc.name)
+
+
+# Production App warehouse defaults live on the native Manufacturing Settings
+# single (no new DocType); applied by prepare() to Work Orders with empty
+# warehouse fields. Fieldnames mirror the Work Order form fields.
+WAREHOUSE_DEFAULT_FIELDS = [
+	{
+		"fieldname": "custom_default_source_warehouse",
+		"label": "Default Source Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang bahan baku default untuk Work Order",
+	},
+	{
+		"fieldname": "custom_default_wip_warehouse",
+		"label": "Default WIP Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang proses produksi (WIP) default",
+	},
+	{
+		"fieldname": "custom_default_fg_warehouse",
+		"label": "Default Target Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang barang jadi default",
+	},
+	{
+		"fieldname": "custom_default_scrap_warehouse",
+		"label": "Default Scrap Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang scrap default",
+	},
+]
+
+
+def ensure_warehouse_default_fields():
+	"""Create the Production App warehouse-default custom fields on
+	Manufacturing Settings, anchored after the doctype's current last field.
+	Idempotent; existing fields are never moved or relabeled."""
+	anchor = frappe.get_all(
+		"DocField",
+		filters={"parent": "Manufacturing Settings"},
+		order_by="idx desc",
+		limit=1,
+		pluck="fieldname",
+	)[0]
+	out = []
+	for spec in WAREHOUSE_DEFAULT_FIELDS:
+		existing = frappe.db.get_value(
+			"Custom Field",
+			{"dt": "Manufacturing Settings", "fieldname": spec["fieldname"]},
+			"name",
+		)
+		if existing:
+			out.append(f"{spec['fieldname']}: unchanged")
+			continue
+		doc = frappe.get_doc({
+			"doctype": "Custom Field",
+			"dt": "Manufacturing Settings",
+			"insert_after": anchor,
+			**spec,
+		})
+		doc.insert()
+		anchor = spec["fieldname"]
+		out.append(f"{spec['fieldname']}: created")
+	if out:
+		frappe.clear_cache(doctype="Manufacturing Settings")
+	return out
+
+
+def ensure_batch_permission():
+	"""Manufacturing User (operator workspace role) must read/create Batch:
+	native Work Order submission creates the FG batch for batch-tracked items,
+	and the doctype's stock DocPerm only grants Item Manager — without this the
+	Persiapan submit fails for every operator. Minimal grant: read + create."""
+	snap_path = os.path.join(SNAPSHOT_DIR, "T18-batch-perms-pre.json")
+	if not os.path.exists(snap_path):
+		os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+		with open(snap_path, "w") as f:
+			json.dump(
+				{
+					"captured_at": frappe.utils.now(),
+					"docperm": frappe.get_all(
+						"DocPerm", filters={"parent": "Batch"},
+						fields=["role", "permlevel", "read", "write", "create", "submit"],
+					),
+					"custom_docperm": frappe.get_all(
+						"Custom DocPerm", filters={"parent": "Batch"},
+						fields=["role", "permlevel", "read", "write", "create", "submit"],
+					),
+				},
+				f, indent=2, sort_keys=True, default=str,
+			)
+
+	existing = frappe.db.get_value(
+		"Custom DocPerm", {"parent": "Batch", "role": "Manufacturing User"}, "name"
+	)
+	if existing:
+		return "unchanged"
+	frappe.get_doc({
+		"doctype": "Custom DocPerm",
+		"parent": "Batch",
+		"role": "Manufacturing User",
+		"permlevel": 0,
+		"read": 1,
+		"create": 1,
+	}).insert()
+	frappe.clear_cache(doctype="Batch")
+	return "created"
 
 
 def apply():
@@ -132,7 +243,7 @@ def apply():
 	result = {"fields": [], "leader": "unchanged"}
 
 	for spec in WORKSPACE_FIELDS:
-		action, name = _upsert_field(spec)
+		action, name = _upsert_field(DOCTYPE, spec)
 		result["fields"].append(f"{spec['fieldname']}: {action}")
 
 	for fieldname in ALLOW_ON_SUBMIT_FIELDS:
@@ -157,6 +268,8 @@ def apply():
 	sidebar = ensure_workspace_sidebar()
 	result["workspace_sidebar"] = sidebar["workspace_sidebar"]
 	result["desktop_icon"] = ensure_desktop_icon()
+	result["batch_permission"] = ensure_batch_permission()
+	result["warehouse_default_fields"] = ensure_warehouse_default_fields()
 	frappe.clear_cache(doctype=DOCTYPE)
 	frappe.db.commit()
 	return result

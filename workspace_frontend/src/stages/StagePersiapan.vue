@@ -1,6 +1,7 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { ClipboardList } from 'lucide-vue-next'
+import LinkInput from '../LinkInput.vue'
 import { startProduction } from '../store.js'
 
 const props = defineProps({
@@ -13,7 +14,7 @@ const p = props.wo.persiapan
 const nowHHMM = () => new Date().toTimeString().slice(0, 5)
 const form = reactive({
   adonanKe: p.adonanKe ?? '',
-  jamAdonan: p.jamAdonan || nowHHMM(),
+  jamAdonan: p.jamAdonan || (props.review ? '' : nowHHMM()),
   suhuAdonan: p.suhuAdonan ?? '',
   namaPenimbang: p.namaPenimbang || '',
   jumlahKru: p.jumlahKru ?? '',
@@ -87,7 +88,7 @@ function submit() {
         <div class="form-grid cols3">
           <div class="field">
             <label for="f-penimbang">Nama Penimbang <span class="req">*</span></label>
-            <input id="f-penimbang" v-model="form.namaPenimbang" class="input" type="text" :disabled="review" />
+            <LinkInput id="f-penimbang" v-model="form.namaPenimbang" :display-label="form.namaPenimbang === p.namaPenimbang ? p.penimbangLabel : undefined" :disabled="review" />
             <div v-if="tried && errors.namaPenimbang" class="err">{{ errors.namaPenimbang }}</div>
           </div>
 
@@ -108,7 +109,7 @@ function submit() {
 
     <div v-if="!review" class="panel-foot">
       <button class="btn btn-primary" @click="submit">Mulai Produksi</button>
-      <span class="why">Mengaktifkan Work Order di ERPNext (Draft → In Process) dan membuka tahap Material.</span>
+      <span class="why">Menyimpan persiapan dan membuka tahap berikutnya sesuai dokumen ERPNext.</span>
     </div>
   </section>
 </template>

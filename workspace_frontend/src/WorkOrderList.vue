@@ -13,7 +13,7 @@ const fFrom = ref('')
 const fTo = ref('')
 const filterOpen = ref(false)
 
-const products = [...new Set(workOrders.map((w) => w.product))]
+const products = computed(() => [...new Set(workOrders.map((w) => w.product))])
 const today = new Date().toLocaleDateString('id-ID', {
   weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
 })
@@ -192,8 +192,8 @@ function stageLabel(w) {
       <span class="c-status"><span class="badge" :class="statusClass(w.status)">{{ w.status }}</span></span>
       <span class="c-stage"><span class="chip">{{ stageLabel(w) }}</span></span>
       <span class="wo-qty c-qty">
-        <span class="qmain">{{ qtyStack(w.plannedStockQty, w.qtyInPack).main }}</span>
-        <span class="qsub">{{ qtyStack(w.plannedStockQty, w.qtyInPack).sub }}</span>
+        <span class="qmain">{{ qtyStack(w.plannedStockQty, w).main }}</span>
+        <span class="qsub">{{ qtyStack(w.plannedStockQty, w).sub }}</span>
       </span>
       <span class="c-arrow"><ChevronRight :size="16" :stroke-width="2" /></span>
     </button>

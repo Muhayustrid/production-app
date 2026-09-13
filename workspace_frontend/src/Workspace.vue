@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { getWo, workOrders, STAGE_LABELS, openWo } from './store.js'
+import { getWo, workOrders, STAGE_LABELS, openWo, state } from './store.js'
 import { fmtDate, qtyMain, qtyStack } from './format.js'
 import { ChevronLeft, Check, CheckCircle2 } from 'lucide-vue-next'
 import StagePersiapan from './stages/StagePersiapan.vue'
@@ -12,16 +12,18 @@ import StageFinish from './stages/StageFinish.vue'
 const props = defineProps({ id: { type: String, required: true } })
 
 const wo = computed(() => getWo(props.id))
-const loading = ref(false)
+const loading = ref(true)
+const error = ref('')
 async function load() {
   loading.value = true
-  try { await openWo(props.id) } catch (e) { console.error(e) } finally { loading.value = false }
+  state.actionError = null
+  try { await openWo(props.id) } catch (e) { error.value = e.message } finally { loading.value = false }
 }
 onMounted(load)
 
 // stage aktif datang dari "server" (wo.stage). view hanya untuk meninjau tahap selesai.
 const view = ref(null)
-watch(() => wo.value.stage, () => { view.value = null })
+watch(() => wo.value?.stage, () => { view.value = null })
 
 const order = computed(() => [
   'persiapan',
@@ -32,13 +34,13 @@ const order = computed(() => [
 ])
 
 const activeStage = computed(() =>
-  wo.value.stage === 'completed' ? 'finish' : wo.value.stage
+  ['completed', 'review', 'cancelled'].includes(wo.value.stage) ? 'finish' : wo.value.stage
 )
 const displayed = computed(() => view.value || activeStage.value)
-const review = computed(() => displayed.value !== activeStage.value || wo.value.stage === 'completed')
+const review = computed(() => displayed.value !== activeStage.value || ['completed', 'review', 'cancelled'].includes(wo.value.stage))
 
 function stepState(s) {
-  if (wo.value.stage === 'completed') return 'done'
+  if (['completed', 'review', 'cancelled'].includes(wo.value.stage)) return 'done'
   const idx = order.value.indexOf(s)
   const cur = order.value.indexOf(wo.value.stage)
   if (idx < cur) return 'done'
@@ -66,8 +68,8 @@ const statusClass = computed(() =>
 )
 
 // Barang Jadi manufaktur = Good Qty Pre-Packing (masuk Cold Storage)
-const fgQty = computed(() => wo.value.prepacking.goodQty ?? 0)
-const plan = computed(() => qtyStack(wo.value.plannedStockQty, wo.value.qtyInPack))
+const fgQty = computed(() => wo.value.producedStockQty)
+const plan = computed(() => qtyStack(wo.value.plannedStockQty, wo.value))
 
 // chip WO aktif langsung tercenter di strip switcher saat halaman dibuka
 const switchEl = ref(null)
@@ -79,7 +81,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-if="wo">
+  <div v-if="loading" class="empty" role="status">Memuat detail Work Order…</div>
+  <div v-else-if="error" class="err" role="alert">{{ error }} <button class="btn" @click="load">Coba lagi</button></div>
+  <div v-else-if="wo">
     <a class="back" href="#/"><ChevronLeft :size="16" :stroke-width="2" /> Daftar Perintah Kerja</a>
 
     <nav ref="switchEl" class="wo-switch" aria-label="Pindah Work Order">
@@ -119,7 +123,7 @@ onMounted(() => {
       <CheckCircle2 :size="17" :stroke-width="2" />
       <div>
         Produksi selesai{{ wo.finishedAt ? ` pada ${wo.finishedAt}` : '' }} · Barang jadi
-        {{ qtyMain(fgQty, wo.qtyInPack) }} di {{ wo.warehouse }}
+        {{ qtyMain(fgQty, wo) }} di {{ wo.warehouse }}
 
       </div>
     </div>
@@ -144,6 +148,10 @@ onMounted(() => {
       </template>
     </nav>
 
+    <p v-if="wo.uomWarning" class="callout">{{ wo.uomWarning }}</p>
+    <p v-if="review" class="hint">Data tersimpan di ERPNext. Kolom kosong berarti belum tercatat.</p>
+    <div v-if="state.actionError" class="callout" role="alert">{{ state.actionError }}</div>
+    <fieldset class="stage-form" :disabled="!!state.pending">
     <component
       :is="stageComp"
       :key="displayed"
@@ -152,6 +160,8 @@ onMounted(() => {
       :stage-key="displayed"
     />
 
+    </fieldset>
+    <p v-if="state.pending" role="status">Menyimpan ke ERPNext…</p>
     <p class="srcnote">
       Tahap aktif dikembalikan server berdasarkan dokumen ERPNext terkini (Work Order, Stock Entry,
       Job Card). Tahap selesai dapat ditinjau dari bar tahap di atas.

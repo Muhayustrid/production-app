@@ -32,11 +32,11 @@ const STAGE_UI = {
 export const fieldUnits = reactive({})
 export const listPrefs = reactive({ view: 'tabel' })
 
-export const state = reactive({ loading: false, error: null, loaded: false })
+export const state = reactive({ loading: false, error: null, loaded: false, pending: null, actionError: null })
 export const workOrders = reactive([])
 
 function hhmm(v) {
-  return v ? String(v).slice(0, 5) : ''
+  return v ? (String(v).match(/(?:^|[ T])(\d{1,2}):([0-9]{2})/)?.slice(1).map(x => x.padStart(2, '0')).join(':') || '') : ''
 }
 
 export function mapDetail(d) {
@@ -50,7 +50,11 @@ export function mapDetail(d) {
     status: d.status,
     stage: STAGE_UI[d.stage] || d.stage,
     hasOperations: (d.operations || []).length > 0,
-    qtyInPack: d.custom_qty_in_uom ?? 0,
+    qtyInPack: d.display_conversion_factor ?? null,
+    displayUom: d.display_uom || d.stock_uom,
+    wholeNumber: !!d.stock_uom_whole_number,
+    uomWarning: d.uom_warning,
+    producedStockQty: d.produced_qty ?? 0,
     plannedStockQty: d.qty ?? 0,
     stockUom: d.stock_uom,
     conversionFactor: d.custom_conversion_factor ?? 1,
@@ -64,7 +68,8 @@ export function mapDetail(d) {
       adonanKe: d.custom_adonan_ke ?? null,
       jamAdonan: hhmm(d.custom_jam_adonan),
       suhuAdonan: d.custom_suhu_adonan ?? null,
-      namaPenimbang: d.custom_nama_penimbang_full || d.custom_nama_penimbang || '',
+      namaPenimbang: d.custom_nama_penimbang || '',
+      penimbangLabel: d.custom_nama_penimbang_full || d.custom_nama_penimbang || '',
       jumlahKru: d.custom_jumlah_kru ?? null,
       leaderProduksi: d.custom_leader_produksi || ''
     },
@@ -77,22 +82,19 @@ export function mapDetail(d) {
         uom: i.stock_uom
       }))
     },
-    operations: (d.operations || []).map((o) => {
-      const cards = (d.job_cards || []).filter((c) => c.operation_id === o.name)
-      const primary = cards.find((c) => c.docstatus === 1) || cards[0] || {}
-      const times = (primary.time_logs || [])
+    operations: (d.job_cards || []).map((card) => {
+      const operation = (d.operations || []).find(o => o.name === card.operation_id) || {}
+      const times = card.time_logs || []
       return {
-        id: primary.name || null,
-        cardIds: cards.map((c) => c.name),
-        name: o.operation,
-        workstation: o.workstation || primary.workstation || '',
-        operator: (primary.employees || [])[0]?.employee_name || '',
-        plannedPcs: primary.for_quantity ?? d.qty,
-        completedPcs: primary.total_completed_qty ?? o.completed_qty ?? 0,
-        status:
-          o.status === 'Completed' ? 'done'
-          : primary.status === 'Work In Progress' || times.some((t) => t.from_time && !t.to_time) ? 'in_progress'
-          : 'pending',
+        id: card.name,
+        name: card.operation,
+        workstation: card.workstation || operation.workstation || '',
+        employees: card.employees || [],
+        operator: (card.employees || []).map(e => e.employee_name).join(', '),
+        plannedPcs: card.for_quantity ?? d.qty,
+        completedPcs: card.total_completed_qty ?? 0,
+        lossQty: card.process_loss_qty ?? 0,
+        status: card.docstatus === 1 ? 'done' : times.some(t => t.from_time && !t.to_time) ? 'in_progress' : 'pending',
         start: hhmm(times[0]?.from_time),
         end: hhmm(times[times.length - 1]?.to_time)
       }
@@ -103,9 +105,8 @@ export function mapDetail(d) {
       trialQty: d.custom_trial_qty_prepacking ?? null,
       sisaQty: d.custom_sisa_qty_prepacking ?? null,
       jam: hhmm(d.custom_jam_pembekuan),
-      qc: d.custom_qc_produksi_full || d.custom_qc_produksi || '',
-      box1: d.custom_box_1 ?? null,
-      box2: d.custom_box_2 ?? null,
+      qc: d.custom_qc_produksi || '',
+      qcLabel: d.custom_qc_produksi_full || d.custom_qc_produksi || '',
       confirmed: !!d.custom_prepacking_confirmed
     },
     requiredItemsLoaded: true,
@@ -125,10 +126,10 @@ function applyDetail(mapped) {
   const i = workOrders.findIndex((w) => w.id === mapped.id)
   if (i === -1) workOrders.push(mapped)
   else Object.assign(workOrders[i], mapped)
-  return mapped
+  return workOrders.find(w => w.id === mapped.id)
 }
 
-async function call(method, args) {
+export async function call(method, args) {
   const res = await fetch(`/api/method/${method}`, {
     method: 'POST',
     headers: {
@@ -154,23 +155,11 @@ export async function loadList() {
   try {
     const rows = await call('production_app.api.work_order.wo_list', { page_len: 200 })
     // baris list dipakai untuk tabel/kanban; detail diambil saat WO dibuka
-    workOrders.splice(0, workOrders.length, ...rows.map((r) => ({
-      id: r.name,
-      name: r.name,
-      product: r.production_item_name || r.production_item,
-      itemCode: r.production_item,
-      plannedDate: (r.planned_start_date || '').slice(0, 10),
-      status: r.status,
-      stage: STAGE_UI[r.stage] || r.stage,
-      hasOperations: !!r.has_operations,
-      qtyInPack: r.custom_qty_in_uom ?? 0,
-      plannedStockQty: r.qty ?? 0,
-      stockUom: r.stock_uom,
-      warehouse: r.fg_warehouse || '',
-      persiapan: { adonanKe: null },
-      material: { items: [] },
-      prepacking: {}
-    })))
+    // Do not replace a detail already loaded while the initial list request was pending.
+    const details = new Map(workOrders.filter(w => w.requiredItemsLoaded).map(w => [w.id, w]))
+    const mapped = rows.map(r => details.get(r.name) || { ...mapDetail(r), hasOperations: !!r.has_operations, requiredItemsLoaded: false })
+    for (const [id, detail] of details) if (!mapped.some(w => w.id === id)) mapped.push(detail)
+    workOrders.splice(0, workOrders.length, ...mapped)
     state.loaded = true
   } catch (e) {
     state.error = e.message
@@ -188,10 +177,7 @@ export function getWo(id) {
   return workOrders.find((w) => w.id === id) || null
 }
 
-export async function openWo(id) {
-  if (!getWo(id)?.requiredItemsLoaded) return refreshWo(id)
-  return getWo(id)
-}
+export async function openWo(id) { return refreshWo(id) }
 
 // ---- helper material (bentuk mapped) ----
 export function materialShortages(w) {
@@ -207,83 +193,46 @@ export function producedQty(w) {
   return w.prepacking?.goodQty ?? 0
 }
 
-// ---- aksi (endpoint server, state di-refresh dari respons) ----
-export async function startProduction(w, data) {
-  await call('production_app.api.work_order.prepare', {
-    name: w.id,
+// Shared by workspace panels and kanban dialogs. Errors remain visible in the form.
+async function perform(w, method, args = {}) {
+  if (state.pending) return null
+  state.pending = w.id
+  state.actionError = null
+  try {
+    await call(`production_app.api.work_order.${method}`, { name: w.id, ...args })
+    return await refreshWo(w.id)
+  } catch (error) {
+    state.actionError = error.message
+    return null
+  } finally {
+    state.pending = null
+  }
+}
+
+export function startProduction(w, data) {
+  return perform(w, 'prepare', {
     values: {
-      adonan_ke: data.adonanKe,
-      jam_adonan: data.jamAdonan,
-      suhu_adonan: data.suhuAdonan,
-      penimbang: data.penimbang,
-      jumlah_kru: data.jumlahKru,
-      leader: data.leaderProduksi
-    },
-    submit: 1
+      adonan_ke: data.adonanKe, jam_adonan: data.jamAdonan,
+      suhu_adonan: data.suhuAdonan, penimbang: data.namaPenimbang,
+      jumlah_kru: data.jumlahKru, leader: data.leaderProduksi
+    }, submit: 1
   })
-  return refreshWo(w.id)
 }
-
-export async function transferAll(w) {
-  await call('production_app.api.work_order.transfer_materials', { name: w.id })
-  return refreshWo(w.id)
-}
-
-export async function confirmMaterial(w) {
-  return refreshWo(w.id) // stage murni server-side; cukup segarkan
-}
-
-async function completeCard(w, op, qty) {
-  const cardId = op.cardIds?.[op.cardIds.length - 1] || op.id
-  if (!cardId) throw new Error('Job Card tidak ditemukan untuk operasi ini')
-  const res = await call('production_app.api.work_order.jobcard_complete', {
-    name: w.id,
-    job_card: cardId,
-    qty,
-    auto_submit: 1
+export function transferAll(w) { return perform(w, 'transfer_materials') }
+export function confirmMaterial(w) { return refreshWo(w.id) }
+export function confirmOperations(w) { return refreshWo(w.id) }
+export function startOperation(w, op, employee) {
+  return perform(w, 'jobcard_start', {
+    job_card: op.id, employees: employee ? [{ employee }] : op.employees
   })
-  await refreshWo(w.id)
-  return res
 }
-
-export async function startOperation(w, op) {
-  const cardId = op.cardIds?.[0] || op.id
-  if (!cardId) throw new Error('Job Card tidak ditemukan untuk operasi ini')
-  await call('production_app.api.work_order.jobcard_start', { name: w.id, job_card: cardId })
-  return refreshWo(w.id)
+export function finishOperation(w, op, qty, loss = 0) {
+  return perform(w, 'jobcard_complete', { job_card: op.id, qty, process_loss_qty: loss, auto_submit: 1 })
 }
-
-export function finishOperation(w, op, completedPcs) {
-  return completeCard(w, op, completedPcs)
+export function savePrePacking(w, data) {
+  return perform(w, 'confirm_prepacking', { values: {
+    good: data.goodQty, reject: data.rejectQty, trial: data.trialQty, sisa: data.sisaQty,
+    jam_pembekuan: data.jam, qc_produksi: data.qc
+  } })
 }
-
-export async function confirmOperations(w) {
-  return refreshWo(w.id)
-}
-
-export async function savePrePacking(w, data) {
-  await call('production_app.api.work_order.confirm_prepacking', {
-    name: w.id,
-    values: {
-      good: data.goodQty,
-      reject: data.rejectQty,
-      trial: data.trialQty,
-      sisa: data.sisaQty,
-      jam_pembekuan: data.jam,
-      qc_produksi: data.qc,
-      box_1: data.box1,
-      box_2: data.box2
-    }
-  })
-  return refreshWo(w.id)
-}
-
-export async function completeProduction(w) {
-  return refreshWoAfterFinish(w)
-}
-
-async function refreshWoAfterFinish(w) {
-  const res = await call('production_app.api.work_order.finish', { name: w.id })
-  const mapped = await refreshWo(w.id)
-  return { res, mapped, finishedAt: mapped.finishedAt }
-}
+export function completeProduction(w) { return perform(w, 'finish') }

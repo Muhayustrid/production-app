@@ -8,8 +8,13 @@ Execution documents: `TASKS.md` defines the ordered work packages; `PROJECT_STAT
 
 - Overproduction follows the effective ERPNext settings and validations. The observed 25% is a historical snapshot, not an application constant. Do not add a separate limit or change the setting.
 - Leader Produksi stores a person's name: use Data text, not Int and not a mandatory User link.
-- Box 1 and Box 2 store weight in **kg**: proposed fieldnames `custom_box_1` and `custom_box_2`, type Float. They are not box identifiers or counts.
+- Box 1 and Box 2 store weight in **kg**: proposed fieldnames `custom_box_1` and `custom_box_2`, type Float. They are not box identifiers or counts. **Superseded 2026-09-13**: the Box 1/2 inputs were removed from the Pre-Packing form at the user's request; the DocType fields remain (existing data preserved) but are no longer written by the workspace.
 - Zero production output is not saved: when good prepacking is zero, reject the prepacking save/confirmation and Finish before any writes. Keep the current form input available for correction; preserve previously stored values. This does not prohibit legitimate zero reject/trial/sisa values.
+- ADDENDUM 2026-09-13 (explicit user rulings, superseding earlier interpretations below where they conflict):
+  - **One-shot Finish**: the Manufacture closes the whole remaining target in a single entry — good is produced and the shortfall (remaining target − good) becomes process loss natively. A legacy partially-produced Work Order is closed the same way (header = remaining target, raw materials restored to transferred − consumed).
+  - **Operations may complete below plan**: the shortfall is recorded as susut (`process_loss_qty`) when closing the Job Card; qty + susut must cover the remaining card quantity. Stage Operasi passes on the native `operation.status == "Completed"`.
+  - **Legacy Work Orders are shown honestly**: empty step fields are displayed as not recorded ("Kolom kosong berarti belum tercatat"); no backfilling.
+- ADDENDUM 2026-09-13 (warehouse defaults, user-requested feature): the workspace "Pengaturan" menu holds four warehouse defaults (Source / WIP / Target / Scrap), stored as Custom Fields on Manufacturing Settings and editable only by users with write permission there. `prepare()` applies them to Work Orders whose corresponding warehouse fields are still empty (settings first, then the Item defaults), never overriding existing values.
 
 ## 1. Approved outcome and scope
 
