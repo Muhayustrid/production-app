@@ -10,21 +10,21 @@ const props = defineProps({
 })
 
 const p = props.wo.persiapan
-const nowHHMM = () => new Date().toTimeString().slice(0, 5)
+// FU11: jam adonan boleh kosong (server mengisi jam saat simpan);
+// penimbang/leader di-suggest dari nilai tercatat terakhir (bisa diubah)
 const form = reactive({
   adonanKe: p.adonanKe ?? '',
-  jamAdonan: p.jamAdonan || (props.review ? '' : nowHHMM()),
+  jamAdonan: p.jamAdonan || '',
   suhuAdonan: p.suhuAdonan ?? '',
-  namaPenimbang: p.namaPenimbang || '',
+  namaPenimbang: p.namaPenimbang || (!props.review && p.penimbangSuggested) || '',
   jumlahKru: p.jumlahKru ?? '',
-  leaderProduksi: p.leaderProduksi || ''
+  leaderProduksi: p.leaderProduksi || (!props.review && p.leaderSuggested) || ''
 })
 const errors = reactive({})
 const tried = ref(false)
 
 function validate() {
   errors.adonanKe = !(Number(form.adonanKe) >= 1) ? 'Isi nomor adonan (min. 1).' : ''
-  errors.jamAdonan = !form.jamAdonan ? 'Isi jam adonan.' : ''
   errors.suhuAdonan = form.suhuAdonan === '' || form.suhuAdonan == null ? 'Isi suhu adonan.' : ''
   errors.namaPenimbang = !String(form.namaPenimbang).trim() ? 'Isi nama penimbang.' : ''
   errors.jumlahKru = !(Number(form.jumlahKru) >= 1) ? 'Isi jumlah kru (min. 1).' : ''
@@ -66,9 +66,8 @@ function submit() {
           </div>
 
           <div class="field">
-            <label for="f-jamadonan">Jam Adonan <span class="req">*</span></label>
+            <label for="f-jamadonan">Jam Adonan</label>
             <input id="f-jamadonan" v-model="form.jamAdonan" class="input" type="time" :disabled="review" />
-            <div v-if="tried && errors.jamAdonan" class="err">{{ errors.jamAdonan }}</div>
           </div>
 
           <div class="field">

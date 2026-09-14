@@ -14,11 +14,15 @@ const props = defineProps({
 const qip = props.wo
 
 const src = props.wo.prepacking
+// FU11: form baru (belum confirmed) mulai KOSONG — angka 0 default DB tidak
+// ditampilkan agar operator mengisi hasil nyata. Mode Tinjauan dan data yang
+// sudah confirmed SELALU menampilkan nilai tersimpan (termasuk legacy).
+const start = (v) => (src.confirmed || props.review ? v : (v || null))
 const form = reactive({
-  goodQty: src.goodQty,
-  rejectQty: src.rejectQty,
-  trialQty: src.trialQty,
-  sisaQty: src.sisaQty,
+  goodQty: start(src.goodQty),
+  rejectQty: start(src.rejectQty),
+  trialQty: start(src.trialQty),
+  sisaQty: start(src.sisaQty),
   jam: src.jam || '',
   qc: src.qc || ''
 })
@@ -26,14 +30,15 @@ const form = reactive({
 const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false, sisaQty: false })
 
 const qtyFields = computed(() => [
-  { key: 'goodQty', label: 'Good Qty' },
-  { key: 'rejectQty', label: 'Reject Qty' },
-  { key: 'trialQty', label: 'Trial Qty' },
-  { key: 'sisaQty', label: 'Sisa Qty' }
+  { key: 'goodQty', label: 'Good Qty', required: true },
+  { key: 'rejectQty', label: 'Reject Qty', required: false },
+  { key: 'trialQty', label: 'Trial Qty', required: false },
+  { key: 'sisaQty', label: 'Sisa Qty', required: false }
 ])
 
-const qtyValid = computed(() => Object.values(ok).every(Boolean))
-const metaValid = computed(() => form.jam !== '' && String(form.qc).trim() !== '')
+const qtyValid = computed(() => ok.goodQty)
+// jam kosong = jam saat disimpan (diisi server); QC tetap wajib
+const metaValid = computed(() => String(form.qc).trim() !== '')
 const canSave = computed(() => qtyValid.value && metaValid.value && form.goodQty > 0)
 
 const total = computed(() => {
@@ -43,13 +48,16 @@ const total = computed(() => {
 })
 const over = computed(() => total.value != null && total.value > props.wo.plannedStockQty)
 
+// FU12: panel dibuka ulang dari bar tahap setelah tahap ini lewat — mode perbaikan
+const reedit = computed(() => !props.review && ['postpacking', 'finish'].includes(props.wo.stage))
+
 function save() {
   if (!canSave.value) return
   savePrePacking(props.wo, {
     goodQty: form.goodQty,
-    rejectQty: form.rejectQty,
-    trialQty: form.trialQty,
-    sisaQty: form.sisaQty,
+    rejectQty: form.rejectQty ?? 0,
+    trialQty: form.trialQty ?? 0,
+    sisaQty: form.sisaQty ?? 0,
     jam: form.jam,
     qc: String(form.qc).trim()
   })
@@ -63,6 +71,7 @@ function save() {
       <h2>Pre-Packing</h2>
       <span class="lead">Hasil produksi sebelum Post-Packing. Klik label satuan untuk mengganti satuan input.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
+      <span v-else-if="reedit" class="chip chip-info" style="margin-left: auto">Perbaikan</span>
     </div>
 
     <div class="panel-body">
@@ -79,7 +88,7 @@ function save() {
           :label="f.label"
           :unit-key="f.key"
           :units="wo"
-          required
+          :required="f.required"
           :disabled="review"
           v-model="form[f.key]"
           @update:valid="ok[f.key] = $event"
@@ -88,7 +97,7 @@ function save() {
 
       <div class="form-grid" style="margin-top: 14px">
         <div class="field">
-          <label :for="`f-jam-${stageKey}`">Jam Pembekuan <span class="req">*</span></label>
+          <label :for="`f-jam-${stageKey}`">Jam Pembekuan</label>
           <input
             :id="`f-jam-${stageKey}`"
             v-model="form.jam"
@@ -123,7 +132,7 @@ function save() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" :disabled="!canSave" @click="save">Simpan &amp; Lanjut ke Post-Packing</button>
+      <button class="btn btn-primary" :disabled="!canSave" @click="save">{{ reedit ? 'Simpan Perbaikan' : 'Simpan &amp; Lanjut ke Post-Packing' }}</button>
       <span v-if="!canSave" class="why">Lengkapi semua kolom untuk melanjutkan.</span>
     </div>
   </section>

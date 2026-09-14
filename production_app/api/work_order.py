@@ -330,6 +330,31 @@ def wo_detail(name):
 	data["job_cards"] = job_cards
 	data["stock_entries"] = stock_entries
 	data["stage"] = derive_stage(data, operations)
+
+	# FU11: saran isi form Persiapan — nilai penimbang/leader tercatat TERAKHIR
+	# di WO mana pun (tim produksi biasanya sama antar WO). Hanya dihitung untuk
+	# kolom yang kosong; murni saran, operator bebas mengubah di form.
+	data["suggested_penimbang"] = None
+	data["suggested_leader"] = None
+	if not data.get("custom_nama_penimbang"):
+		rows = frappe.get_all(
+			DOCTYPE,
+			filters={"custom_nama_penimbang": ("is", "set")},
+			pluck="custom_nama_penimbang",
+			order_by="creation desc",
+			limit_page_length=1,
+		)
+		data["suggested_penimbang"] = rows[0] if rows else None
+	if not data.get("custom_leader_produksi"):
+		rows = frappe.get_all(
+			DOCTYPE,
+			filters={"custom_leader_produksi": ("is", "set")},
+			pluck="custom_leader_produksi",
+			order_by="creation desc",
+			limit_page_length=1,
+		)
+		data["suggested_leader"] = rows[0] if rows else None
+
 	data["remaining_transfer"] = max(
 		flt(data["qty"]) - flt(data["material_transferred_for_manufacturing"]), 0
 	)
@@ -380,6 +405,9 @@ def _validate_prep_values(values):
 		elif key == "jam_adonan":
 			frappe.utils.get_time(value)  # raises on garbage
 			cleaned[fieldname] = value
+	# FU11: jam kosong -> jam saat penyimpanan
+	if PREP_FIELD_MAP["jam_adonan"] not in cleaned:
+		cleaned[PREP_FIELD_MAP["jam_adonan"]] = frappe.utils.nowtime()
 	return cleaned
 
 
@@ -685,6 +713,9 @@ def _validate_prepacking(values):
 			else:
 				frappe.utils.get_time(value)  # raises on garbage
 				cleaned[fieldname] = value
+	# FU11: jam kosong -> jam saat penyimpanan
+	if PREPACKING_FIELD_MAP["jam_pembekuan"] not in cleaned:
+		cleaned[PREPACKING_FIELD_MAP["jam_pembekuan"]] = frappe.utils.nowtime()
 	return cleaned
 
 
@@ -692,7 +723,10 @@ def _validate_prepacking(values):
 def confirm_prepacking(name, values):
 	"""Save/confirm the prepacking block. good must be finite and > 0 — the
 	validation completes BEFORE anything is written. Zero reject/trial/sisa is
-	valid. Postpacking fields are never touched here."""
+	valid. Postpacking fields are never touched here. FU12: re-edit is allowed
+	at post_packing/finish — salah input masih bisa diperbaiki sampai Manufacture
+	dijalankan (setelah itu WO Completed dan aksi ditolak); pre good baru tidak
+	boleh lebih kecil dari total hasil Post-Packing yang sudah dikonfirmasi."""
 	frappe.has_permission(DOCTYPE, "write", doc=name, throw=True)
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
 	wo = frappe.get_doc(DOCTYPE, name)
@@ -700,11 +734,7 @@ def confirm_prepacking(name, values):
 		frappe.throw(_("Pre-packing tidak tersedia untuk Work Order {0}").format(name))
 
 	stage = derive_stage(wo)
-	if stage not in (STAGE_PREPACKING, STAGE_POST_PACKING):
-		if stage == STAGE_FINISH:
-			frappe.throw(
-				_("Pre-packing tidak bisa diubah lagi: Post-Packing sudah dikonfirmasi, perbaikan dilakukan lewat Post-Packing")
-			)
+	if stage not in (STAGE_PREPACKING, STAGE_POST_PACKING, STAGE_FINISH):
 		frappe.throw(
 			_("Pre-packing belum tersedia: tahap sekarang {0} (selesaikan material/operasi dulu)").format(stage)
 		)
@@ -712,6 +742,18 @@ def confirm_prepacking(name, values):
 	cleaned = _validate_prepacking(frappe.parse_json(values) or {})
 	if PREPACKING_FIELD_MAP["good"] not in cleaned:
 		frappe.throw(_("Good Qty pre-packing wajib diisi (> 0)"))
+
+	if wo.custom_postpacking_confirmed:
+		post_total = (
+			flt(wo.custom_good_qty_postpacking)
+			+ flt(wo.custom_reject_qty_postpacking)
+			+ flt(wo.custom_trial_qty_postpacking)
+		)
+		new_good = cleaned[PREPACKING_FIELD_MAP["good"]]
+		if post_total > new_good:
+			frappe.throw(
+				_("Total hasil Post-Packing terkonfirmasi ({0}) melebihi Good Pre-Packing baru ({1}); perbaiki lewat Post-Packing").format(post_total, new_good)
+			)
 
 	for fieldname, value in cleaned.items():
 		wo.set(fieldname, value)
@@ -731,16 +773,17 @@ POSTPACKING_FIELD_MAP = {
 	"good": "custom_good_qty_postpacking",
 	"reject": "custom_reject_qty_postpacking",
 	"trial": "custom_trial_qty_postpacking",
+	"sisa": "custom_sisa_qty_postpacking",  # FU11: manual input (bukan dihitung server)
 	"jam_packing": "custom_jam_packing",  # Time
 	"qc_packing": "custom_qc_packing",  # Link User
 }
-# "sisa" is never in the map — it is always computed server-side.
 
 
 def _validate_postpacking(values, pre_good):
-	"""Validate the ENTIRE payload before any mutation. Returns cleaned dict
-	including the server-computed sisa. `pre_good` is the confirmed prepacking
-	good quantity, read from the WO row the caller locked for update."""
+	"""Validate the ENTIRE payload before any mutation. Returns cleaned dict.
+	`pre_good` is the confirmed prepacking good quantity, read from the WO row
+	the caller locked for update. FU11: sisa is a MANUAL input (finite >= 0),
+	not computed; jam kosong default ke jam saat penyimpanan."""
 	if pre_good <= 0:
 		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
 	cleaned = {}
@@ -757,7 +800,7 @@ def _validate_postpacking(values, pre_good):
 			if good > pre_good:
 				frappe.throw(_("Good Qty post-packing melebihi Good Qty pre-packing"))
 			cleaned[fieldname] = good
-		elif key in ("reject", "trial"):
+		elif key in ("reject", "trial", "sisa"):
 			amount = float(value)
 			if amount != amount or amount in (float("inf"), float("-inf")) or amount < 0:
 				frappe.throw(_("{0} harus angka desimal >= 0").format(key))
@@ -777,7 +820,9 @@ def _validate_postpacking(values, pre_good):
 	trial = flt(cleaned.get("custom_trial_qty_postpacking"))
 	if good + reject + trial > pre_good:
 		frappe.throw(_("Total Good + Reject + Trial melebihi Good Qty pre-packing"))
-	cleaned["custom_sisa_qty_postpacking"] = pre_good - good - reject - trial
+	# FU11: jam kosong -> jam saat penyimpanan
+	if POSTPACKING_FIELD_MAP["jam_packing"] not in cleaned:
+		cleaned[POSTPACKING_FIELD_MAP["jam_packing"]] = frappe.utils.nowtime()
 	return cleaned
 
 
@@ -785,9 +830,9 @@ def _validate_postpacking(values, pre_good):
 def confirm_postpacking(name, values):
 	"""Save/confirm the postpacking block. good must be finite, > 0 and
 	<= confirmed prepacking good — the validation completes BEFORE anything is
-	written. Sisa is computed server-side (pre_good - good - reject - trial).
-	Re-edit at the finish stage is allowed; prepacking fields are never
-	touched here."""
+	written. FU11: sisa is a manual input (finite >= 0), jam kosong default ke
+	jam saat penyimpanan. Re-edit at the finish stage is allowed; prepacking
+	fields are never touched here."""
 	frappe.has_permission(DOCTYPE, "write", doc=name, throw=True)
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
 	wo = frappe.get_doc(DOCTYPE, name)

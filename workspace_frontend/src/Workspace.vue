@@ -39,7 +39,16 @@ const activeStage = computed(() =>
   ['completed', 'review', 'cancelled'].includes(wo.value.stage) ? 'finish' : wo.value.stage
 )
 const displayed = computed(() => view.value || activeStage.value)
-const review = computed(() => displayed.value !== activeStage.value || ['completed', 'review', 'cancelled'].includes(wo.value.stage))
+// FU12: Pre/Post-Packing masih bisa DIPERBAIKI dari bar tahap selama WO belum
+// diselesaikan (panel tahap lampau dibuka editable, bukan Tinjauan); setelah
+// "Selesaikan Produksi" (stage completed) semua kembali read-only.
+const finishedStage = computed(() => ['completed', 'review', 'cancelled'].includes(wo.value.stage))
+const reeditable = computed(() =>
+  !finishedStage.value && ['prepacking', 'postpacking'].includes(displayed.value)
+)
+const review = computed(() =>
+  (displayed.value !== activeStage.value && !reeditable.value) || finishedStage.value
+)
 
 function stepState(s) {
   if (['completed', 'review', 'cancelled'].includes(wo.value.stage)) return 'done'

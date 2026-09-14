@@ -74,8 +74,10 @@ export function mapDetail(d) {
       suhuAdonan: d.custom_suhu_adonan ?? null,
       namaPenimbang: d.custom_nama_penimbang || '',
       penimbangLabel: d.custom_nama_penimbang_full || d.custom_nama_penimbang || '',
+      penimbangSuggested: d.suggested_penimbang || '',
       jumlahKru: d.custom_jumlah_kru ?? null,
-      leaderProduksi: d.custom_leader_produksi || ''
+      leaderProduksi: d.custom_leader_produksi || '',
+      leaderSuggested: d.suggested_leader || ''
     },
     material: {
       items: (d.required_items || []).map((i) => ({
@@ -239,14 +241,16 @@ export function finishOperation(w, op, qty, loss = 0) {
 }
 export function savePrePacking(w, data) {
   return perform(w, 'confirm_prepacking', { values: {
-    good: data.goodQty, reject: data.rejectQty, trial: data.trialQty, sisa: data.sisaQty,
+    // kolom opsional kosong dikirim sebagai 0 (valid menurut kontrak T10)
+    good: data.goodQty, reject: data.rejectQty ?? 0, trial: data.trialQty ?? 0, sisa: data.sisaQty ?? 0,
     jam_pembekuan: data.jam, qc_produksi: data.qc
   } })
 }
-// sisa tidak dikirim — dihitung server (pre_good - good - reject - trial)
+// sisa kini input manual (FU11); jam kosong diisi server dgn jam saat simpan
 export function confirmPostPacking(w, data) {
   return perform(w, 'confirm_postpacking', { values: {
-    good: data.goodQty, reject: data.rejectQty, trial: data.trialQty,
+    good: data.goodQty, reject: data.rejectQty ?? 0, trial: data.trialQty ?? 0,
+    sisa: data.sisaQty ?? 0,
     jam_packing: data.jam, qc_packing: data.qc
   } })
 }

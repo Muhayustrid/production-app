@@ -19,41 +19,48 @@ const src = props.wo.postpacking
 // saja — tidak ada backfill), POSTPACKING_PLAN §7.
 const legacyReview = props.review && props.wo.stage === 'completed' && src.goodQty == null
 const display = legacyReview ? pre : src
+// FU11: form baru (belum confirmed) mulai KOSONG, tetapi Good di-suggest dari
+// Good Pre-Packing (bisa diubah); sisa kini INPUT MANUAL, bukan otomatis.
+// Mode Tinjauan dan data yang sudah confirmed SELALU menampilkan nilai
+// tersimpan (termasuk legacy mirror pra-T28 yang belum confirmed).
+const start = (v) => (src.confirmed || props.review ? v : (v || null))
 const form = reactive({
-  goodQty: display.goodQty,
-  rejectQty: display.rejectQty,
-  trialQty: display.trialQty,
+  goodQty: start(display.goodQty) ?? pre.goodQty ?? null,
+  rejectQty: start(display.rejectQty),
+  trialQty: start(display.trialQty),
+  sisaQty: start(display.sisaQty),
   jam: display.jam || '',
   qc: display.qc || ''
 })
 
-const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false })
+const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false, sisaQty: false })
 
 const preQty = computed(() => pre.goodQty)
 const preAvailable = computed(() => preQty.value != null)
 
-// Sisa otomatis = Good Pre-Packing − Good − Reject − Trial (server menghitung ulang)
 const total = computed(() => {
   const v = [form.goodQty, form.rejectQty, form.trialQty]
   return v.some((x) => x == null) ? null : v.reduce((a, b) => a + b, 0)
 })
-const sisa = computed(() => {
-  if (legacyReview) return display.sisaQty
-  return total.value == null || !preAvailable.value ? null : preQty.value - total.value
-})
-const over = computed(() => sisa.value != null && sisa.value < 0)
+const over = computed(() =>
+  total.value != null && preAvailable.value && total.value > preQty.value)
 const overGood = computed(() => preAvailable.value && form.goodQty != null && form.goodQty > preQty.value)
-const metaValid = computed(() => form.jam !== '' && String(form.qc).trim() !== '')
+// jam kosong = jam saat disimpan (diisi server); QC tetap wajib
+const metaValid = computed(() => String(form.qc).trim() !== '')
 const canSave = computed(() =>
   Object.values(ok).every(Boolean) && metaValid.value && form.goodQty > 0 && !over.value && !overGood.value
 )
+
+// FU12: panel dibuka ulang dari bar tahap saat sudah di finish — mode perbaikan
+const reedit = computed(() => !props.review && props.wo.stage === 'finish')
 
 function save() {
   if (!canSave.value) return
   confirmPostPacking(props.wo, {
     goodQty: form.goodQty,
-    rejectQty: form.rejectQty,
-    trialQty: form.trialQty,
+    rejectQty: form.rejectQty ?? 0,
+    trialQty: form.trialQty ?? 0,
+    sisaQty: form.sisaQty ?? 0,
     jam: form.jam,
     qc: String(form.qc).trim()
   })
@@ -67,6 +74,7 @@ function save() {
       <h2>Post-Packing</h2>
       <span class="lead">Hasil akhir Work Order setelah packing.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
+      <span v-else-if="reedit" class="chip chip-info" style="margin-left: auto">Perbaikan</span>
     </div>
 
     <div class="panel-body">
@@ -82,7 +90,7 @@ function save() {
         </div>
       </div>
 
-      <!-- kuantitas 1 baris di desktop, bertumpuk di mobile; Sisa otomatis (disabled) -->
+      <!-- kuantitas 1 baris di desktop, bertumpuk di mobile; Sisa input manual -->
       <div class="form-grid cols4" style="margin-top: 14px">
         <QtyInput
           label="Good Qty"
@@ -97,7 +105,6 @@ function save() {
           label="Reject Qty"
           unit-key="postRejectQty"
           :units="wo"
-          required
           :disabled="review"
           v-model="form.rejectQty"
           @update:valid="ok.rejectQty = $event"
@@ -106,17 +113,17 @@ function save() {
           label="Trial Qty"
           unit-key="postTrialQty"
           :units="wo"
-          required
           :disabled="review"
           v-model="form.trialQty"
           @update:valid="ok.trialQty = $event"
         />
         <QtyInput
-          label="Sisa Qty (otomatis)"
+          label="Sisa Qty"
           unit-key="postSisaQty"
           :units="wo"
-          :model-value="sisa"
-          disabled
+          :disabled="review"
+          v-model="form.sisaQty"
+          @update:valid="ok.sisaQty = $event"
         />
       </div>
 
@@ -125,7 +132,7 @@ function save() {
 
       <div class="form-grid" style="margin-top: 14px">
         <div class="field">
-          <label :for="`f-post-jam-${stageKey}`">Jam Packing <span class="req">*</span></label>
+          <label :for="`f-post-jam-${stageKey}`">Jam Packing</label>
           <input
             :id="`f-post-jam-${stageKey}`"
             v-model="form.jam"
@@ -160,7 +167,7 @@ function save() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" :disabled="!canSave" @click="save">Simpan &amp; Lanjut ke Finish</button>
+      <button class="btn btn-primary" :disabled="!canSave" @click="save">{{ reedit ? 'Simpan Perbaikan' : 'Simpan &amp; Lanjut ke Finish' }}</button>
       <span v-if="!canSave" class="why">Lengkapi kuantitas dan pencatatan untuk melanjutkan.</span>
     </div>
   </section>

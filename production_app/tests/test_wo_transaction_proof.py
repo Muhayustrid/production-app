@@ -771,18 +771,19 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 				"good": 90,
 				"reject": 5,
 				"trial": 2,
+				"sisa": 7,  # FU11: manual — sengaja ≠ 100-90-5-2 untuk membuktikan bukan auto
 				"jam_packing": "14:30:00",
 				"qc_packing": "Administrator",
 			},
 		)
 		self.assertEqual(result["stage"], "finish")
 		self.assertEqual(result["good"], 90)
-		self.assertEqual(result["sisa"], 3)  # 100 - 90 - 5 - 2
+		self.assertEqual(result["sisa"], 7)
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_postpacking), 90)
 		self.assertEqual(flt(wo.custom_reject_qty_postpacking), 5)
 		self.assertEqual(flt(wo.custom_trial_qty_postpacking), 2)
-		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 3)
+		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 7)
 		self.assertEqual(str(wo.custom_jam_packing), "14:30:00")
 		self.assertEqual(wo.custom_qc_packing, "Administrator")
 		self.assertEqual(wo.custom_postpacking_confirmed, 1)
@@ -826,8 +827,8 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self.assertEqual(flt(wo.custom_good_qty_postpacking), 0)
 		self.assertFalse(wo.custom_postpacking_confirmed)
 
-		# the boundary good + reject + trial == pre_good is valid (sisa 0)
-		confirm_postpacking(wo.name, values={"good": 90, "reject": 5, "trial": 5})
+		# the boundary good + reject + trial == pre_good is valid (sisa manual 0)
+		confirm_postpacking(wo.name, values={"good": 90, "reject": 5, "trial": 5, "sisa": 0})
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_postpacking), 90)
 		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 0)
@@ -852,17 +853,56 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 			confirm_postpacking(wo.name, values={"good": 50, "qc_packing": "bukan-user@example.com"})
 		with self.assertRaises(ValueError):  # get_time raises the parser error as-is
 			confirm_postpacking(wo.name, values={"good": 50, "jam_packing": "bukan-jam"})
-		# "sisa" is server-computed — never an accepted payload key
+		# FU11: sisa is a manual payload key now — only NEGATIVE values are rejected
 		with self.assertRaises(frappe.ValidationError):
-			confirm_postpacking(wo.name, values={"good": 50, "sisa": 5})
+			confirm_postpacking(wo.name, values={"good": 50, "sisa": -1})
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_postpacking), 0)
 		self.assertFalse(wo.custom_postpacking_confirmed)
+
+	def test_fu11_manual_sisa_jam_defaults_and_prep_suggestions(self):
+		"""FU11: (1) sisa postpacking manual; (2) jam adonan/pembekuan/packing
+		kosong diisi server dgn jam saat simpan; (3) wo_detail men-suggest
+		penimbang/leader dari nilai tercatat TERAKHIR utk kolom yang kosong."""
+		from production_app.api.work_order import (
+			confirm_postpacking,
+			prepare,
+			wo_detail,
+		)
+
+		# jam adonan kosong -> jam saat simpan; WO ini jadi sumber saran
+		wo_src = self._make_wo(100, submit=False)
+		prepare(
+			wo_src.name,
+			values={"penimbang": "Rina Wijaya", "leader": "Budi Santoso"},
+			submit=1,
+		)
+		wo_src.reload()
+		self.assertIsNotNone(wo_src.custom_jam_adonan, "jam adonan kosong harus diisi server")
+
+		# WO dgn prep kosong: saran = nilai tercatat terakhir (wo_src, terbaru)
+		wo = self._postpacking_ready_wo(100)  # prep kosong + prepacking confirmed
+		self.assertIsNotNone(wo.custom_jam_pembekuan, "jam pembekuan kosong harus diisi server")
+		detail = wo_detail(wo.name)
+		self.assertEqual(detail["suggested_penimbang"], "Rina Wijaya")
+		self.assertEqual(detail["suggested_leader"], "Budi Santoso")
+		# WO yang SUDAH punya nilai tidak diberi saran
+		self.assertIsNone(wo_detail(wo_src.name)["suggested_penimbang"])
+
+		# sisa manual + jam packing kosong -> jam saat simpan
+		confirm_postpacking(
+			wo.name,
+			values={"good": 90, "reject": 5, "trial": 2, "sisa": 7, "qc_packing": "Administrator"},
+		)
+		wo.reload()
+		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 7)  # manual, bukan 100-90-5-2=3
+		self.assertIsNotNone(wo.custom_jam_packing, "jam packing kosong harus diisi server")
 
 	def test_t27_stage_guards_and_reedit_at_finish(self):
 		from production_app.api.work_order import (
 			confirm_postpacking,
 			confirm_prepacking,
+			finish,
 			transfer_materials,
 		)
 
@@ -880,18 +920,34 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		confirm_prepacking(wo.name, values={"good": 100})
 		confirm_postpacking(wo.name, values={"good": 80})  # stage now finish
 
-		# confirm_prepacking AFTER postpacking confirmed -> rejected, nothing changed
+		# FU12: prepacking re-edit at finish IS allowed, but the new pre good may
+		# not undercut the confirmed Post-Packing totals (80)
 		with self.assertRaises(frappe.ValidationError):
 			confirm_prepacking(wo.name, values={"good": 60})
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_prepacking), 100)
-		self.assertEqual(flt(wo.custom_good_qty_postpacking), 80)
+		result = confirm_prepacking(wo.name, values={"good": 95})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_prepacking), 95)
+		self.assertEqual(result["stage"], "finish")  # masih finish, tidak mundur
 
-		# re-edit postpacking at the finish stage is allowed
-		confirm_postpacking(wo.name, values={"good": 70, "reject": 5})
+		# re-edit postpacking at the finish stage is allowed (sisa manual, FU11)
+		confirm_postpacking(wo.name, values={"good": 70, "reject": 5, "sisa": 25})
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_postpacking), 70)
 		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 25)
+
+		# FU12: setelah "Selesaikan Produksi" (finish dieksekusi) kedua blok terkunci
+		finish(wo.name)
+		wo.reload()
+		self.assertEqual(wo.status, "Completed")
+		with self.assertRaises(frappe.ValidationError):
+			confirm_prepacking(wo.name, values={"good": 90})
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"good": 60})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_prepacking), 95)
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 70)
 
 	def test_t27_finish_uses_postpacking_good(self):
 		from production_app.api.work_order import confirm_postpacking, finish
