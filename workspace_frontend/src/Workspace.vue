@@ -163,7 +163,6 @@ onMounted(() => {
 
     <p v-if="wo.uomWarning" class="callout">{{ wo.uomWarning }}</p>
     <p v-if="review" class="hint">Data tersimpan di ERPNext. Kolom kosong berarti belum tercatat.</p>
-    <div v-if="state.actionError" class="callout" role="alert">{{ state.actionError }}</div>
     <fieldset class="stage-form" :disabled="!!state.pending">
     <component
       :is="stageComp"

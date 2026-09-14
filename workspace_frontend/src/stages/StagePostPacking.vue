@@ -1,9 +1,8 @@
 <script setup>
 import { computed, reactive } from 'vue'
 import { PackageCheck } from 'lucide-vue-next'
-import { confirmPostPacking } from '../store.js'
+import { confirmPostPacking, suggestionPreferences } from '../store.js'
 import { qtyMain } from '../format.js'
-import LinkInput from '../LinkInput.vue'
 import QtyInput from '../QtyInput.vue'
 
 const props = defineProps({
@@ -30,7 +29,7 @@ const form = reactive({
   trialQty: start(display.trialQty),
   sisaQty: start(display.sisaQty),
   jam: display.jam || '',
-  qc: display.qc || ''
+  qc: display.qc || ((!props.review && suggestionPreferences.enabled) ? src.qcSuggested : '') || ''
 })
 
 const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false, sisaQty: false })
@@ -144,8 +143,8 @@ function save() {
 
         <div class="field">
           <label :for="`f-post-qc-${stageKey}`">QC Packing <span class="req">*</span></label>
-          <LinkInput :id="`f-post-qc-${stageKey}`" v-model="form.qc"
-            :display-label="form.qc === src.qc ? src.qcLabel : undefined" :disabled="review" />
+          <input :id="`f-post-qc-${stageKey}`" v-model="form.qc" class="input" type="text" :disabled="review" />
+          <div v-if="!review && suggestionPreferences.enabled && src.qcSuggested" class="hint">Saran: {{ src.qcSuggested }}{{ props.wo.suggestionSources.qc_packing ? ` dari ${props.wo.suggestionSources.qc_packing}` : '' }}</div>
         </div>
       </div>
 

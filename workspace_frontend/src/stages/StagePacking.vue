@@ -1,7 +1,7 @@
 <script setup>
 import { computed, reactive } from 'vue'
 import { PackageCheck } from 'lucide-vue-next'
-import { savePrePacking } from '../store.js'
+import { savePrePacking, suggestionPreferences } from '../store.js'
 import { qtyMain } from '../format.js'
 import QtyInput from '../QtyInput.vue'
 
@@ -24,7 +24,7 @@ const form = reactive({
   trialQty: start(src.trialQty),
   sisaQty: start(src.sisaQty),
   jam: src.jam || '',
-  qc: src.qc || ''
+  qc: src.qc || ((!props.review && suggestionPreferences.enabled) ? props.wo.persiapan.qcProduksiSuggested : '') || ''
 })
 
 const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false, sisaQty: false })
@@ -110,6 +110,7 @@ function save() {
         <div class="field">
           <label :for="`f-qc-${stageKey}`">QC Produksi <span class="req">*</span></label>
           <input :id="`f-qc-${stageKey}`" v-model="form.qc" class="input" type="text" :disabled="review" />
+          <div v-if="!review && suggestionPreferences.enabled && props.wo.persiapan.qcProduksiSuggested" class="hint">Saran: {{ props.wo.persiapan.qcProduksiSuggested }}{{ props.wo.suggestionSources.qc_produksi ? ` dari ${props.wo.suggestionSources.qc_produksi}` : '' }}</div>
         </div>
       </div>
 

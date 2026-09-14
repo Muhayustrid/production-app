@@ -9,9 +9,19 @@ import math
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.defaults import get_user_default, set_user_default
+from frappe.utils import cint, flt
 
 DOCTYPE = "Work Order"
+SUGGESTION_DEFAULT_KEY = "production_app_metadata_suggestions"
+LIST_PREFERENCES_KEY = "production_app_work_order_list_preferences"
+SUGGESTION_FIELDS = {
+	"penimbang": "custom_nama_penimbang",
+	"leader": "custom_leader_produksi",
+	"jumlah_kru": "custom_jumlah_kru",
+	"qc_produksi": "custom_qc_produksi",
+	"qc_packing": "custom_qc_packing",
+}
 
 LIST_FIELDS = [
 	"name",
@@ -51,7 +61,7 @@ STAGE_REVIEW = "review"
 
 # stage-filter scan cap: exact stage needs child-table truth, so stage-filtered
 # lists scan at most this many permission-visible rows before slicing a page
-STAGE_SCAN_LIMIT = 500
+STAGE_SCAN_LIMIT = 2500
 
 
 def _overproduction_allowance():
@@ -109,7 +119,7 @@ def derive_stage(wo, operations=None):
 	return STAGE_FINISH
 
 
-def _base_filters(search=None, production_item=None):
+def _base_filters(search=None, production_item=None, status=None, start_date=None, end_date=None):
 	filters, or_filters = [], []
 	if search:
 		or_filters.extend(
@@ -120,6 +130,12 @@ def _base_filters(search=None, production_item=None):
 		)
 	if production_item:
 		filters.append([DOCTYPE, "production_item", "=", production_item])
+	if status:
+		filters.append([DOCTYPE, "status", "=", status])
+	if start_date:
+		filters.append([DOCTYPE, "planned_start_date", ">=", start_date])
+	if end_date:
+		filters.append([DOCTYPE, "planned_start_date", "<=", f"{end_date} 23:59:59"])
 	return filters, or_filters
 
 
@@ -151,10 +167,10 @@ def _stage_filters(stage):
 
 
 @frappe.whitelist()
-def wo_list(search=None, production_item=None, stage=None, start=0, page_len=20):
+def wo_list(search=None, production_item=None, status=None, start_date=None, end_date=None, stage=None, start=0, page_len=20, meta=0):
 	"""Permission-filtered, paginated Work Order list for the workspace."""
-	start, page_len = int(start), int(page_len)
-	filters, or_filters = _base_filters(search, production_item)
+	start, page_len = max(int(start), 0), max(min(int(page_len), 2500), 1)
+	filters, or_filters = _base_filters(search, production_item, status, start_date, end_date)
 	if stage:
 		filters.extend(_stage_filters(stage))
 
@@ -170,20 +186,45 @@ def wo_list(search=None, production_item=None, stage=None, start=0, page_len=20)
 				page_length=limit,
 			)
 		except frappe.PermissionError:
-			# user cannot read Work Orders at all — empty list, not a hard error
 			return []
 
 	if not stage:
 		rows = fetch(start, page_len)
+		try:
+			total = len(frappe.get_list(
+				DOCTYPE,
+				filters=filters,
+				or_filters=or_filters or None,
+				fields=["name"],
+				limit_page_length=0,
+			))
+		except frappe.PermissionError:
+			total = 0
 	else:
 		rows = fetch(0, STAGE_SCAN_LIMIT)
 		rows = [r for r in rows if derive_stage(r) == stage]
+		total = len(rows)
+		rows = rows[start : start + page_len]
 
 	_batch_enrich(rows)
 	_enrich_units(rows)
 	for row in rows:
 		row["stage"] = derive_stage(row)
-	return rows[start : start + page_len] if stage else rows
+	if int(meta):
+		return {"rows": rows, "total": total, "start": start, "page_len": page_len}
+	return rows
+
+
+@frappe.whitelist()
+def list_preferences():
+	return frappe.parse_json(get_user_default(LIST_PREFERENCES_KEY) or "{}") or {}
+
+
+@frappe.whitelist()
+def list_preferences_save(values):
+	values = frappe.parse_json(values) or {}
+	set_user_default(LIST_PREFERENCES_KEY, frappe.as_json(values))
+	return values
 
 
 def _batch_enrich(rows):
@@ -312,9 +353,8 @@ def wo_detail(name):
 		order_by="idx",
 	)
 
-	# display names for people fields — FU10 made penimbang/qc_produksi free
-	# text, so this only decorates LEGACY rows whose stored value is a User id;
-	# free-text names fall through to the raw value
+	# FU10/FU13: these fields are free text names; legacy User ids remain honest
+	# text and are not rewritten or guessed into names.
 	users = [d for d in (data.get("custom_nama_penimbang"), data.get("custom_qc_produksi"), data.get("custom_qc_packing")) if d]
 	full = frappe._dict(
 		[(u.name, u.full_name) for u in frappe.get_all(
@@ -331,29 +371,17 @@ def wo_detail(name):
 	data["stock_entries"] = stock_entries
 	data["stage"] = derive_stage(data, operations)
 
-	# FU11: saran isi form Persiapan — nilai penimbang/leader tercatat TERAKHIR
-	# di WO mana pun (tim produksi biasanya sama antar WO). Hanya dihitung untuk
-	# kolom yang kosong; murni saran, operator bebas mengubah di form.
-	data["suggested_penimbang"] = None
-	data["suggested_leader"] = None
-	if not data.get("custom_nama_penimbang"):
-		rows = frappe.get_all(
-			DOCTYPE,
-			filters={"custom_nama_penimbang": ("is", "set")},
-			pluck="custom_nama_penimbang",
-			order_by="creation desc",
-			limit_page_length=1,
-		)
-		data["suggested_penimbang"] = rows[0] if rows else None
-	if not data.get("custom_leader_produksi"):
-		rows = frappe.get_all(
-			DOCTYPE,
-			filters={"custom_leader_produksi": ("is", "set")},
-			pluck="custom_leader_produksi",
-			order_by="creation desc",
-			limit_page_length=1,
-		)
-		data["suggested_leader"] = rows[0] if rows else None
+	data["suggestions_enabled"] = _suggestions_enabled()
+	data["suggestion_sources"] = {}
+	for key, fieldname in SUGGESTION_FIELDS.items():
+		data[f"suggested_{key}"] = None
+	if data["suggestions_enabled"]:
+		previous = _previous_same_item(name, wo.production_item)
+		if previous:
+			for key, fieldname in SUGGESTION_FIELDS.items():
+				if not data.get(fieldname) and previous["values"].get(fieldname):
+					data[f"suggested_{key}"] = previous["values"][fieldname]
+					data["suggestion_sources"][key] = previous["sources"][fieldname]
 
 	data["remaining_transfer"] = max(
 		flt(data["qty"]) - flt(data["material_transferred_for_manufacturing"]), 0
@@ -365,6 +393,45 @@ def wo_detail(name):
 	data["allowance_percentage"] = allowance
 
 	return data
+
+
+def _suggestions_enabled():
+	return cint(get_user_default(SUGGESTION_DEFAULT_KEY) or 1) == 1
+
+
+def _previous_same_item(name, production_item):
+	rows = frappe.get_all(
+		DOCTYPE,
+		filters={
+			"production_item": production_item,
+			"name": ("!=", name),
+			"docstatus": ("<", 2),
+		},
+		fields=["name", "creation", *SUGGESTION_FIELDS.values()],
+		order_by="creation desc",
+		limit_page_length=20,
+	)
+	values = {}
+	sources = {}
+	for fieldname in SUGGESTION_FIELDS.values():
+		for row in rows:
+			if row.get(fieldname) not in (None, ""):
+				values[fieldname] = row.get(fieldname)
+				sources[fieldname] = row.name
+				break
+	return {"values": values, "sources": sources} if values else None
+
+
+@frappe.whitelist()
+def suggestion_preferences():
+	return {"enabled": _suggestions_enabled()}
+
+
+@frappe.whitelist()
+def suggestion_preferences_save(enabled=1):
+	value = 1 if cint(enabled) else 0
+	set_user_default(SUGGESTION_DEFAULT_KEY, value)
+	return {"enabled": bool(value)}
 
 
 # --------------------------------------------------------------- T07 prepare
@@ -775,7 +842,7 @@ POSTPACKING_FIELD_MAP = {
 	"trial": "custom_trial_qty_postpacking",
 	"sisa": "custom_sisa_qty_postpacking",  # FU11: manual input (bukan dihitung server)
 	"jam_packing": "custom_jam_packing",  # Time
-	"qc_packing": "custom_qc_packing",  # Link User
+	"qc_packing": "custom_qc_packing",  # Data (person's name, FU13)
 }
 
 
@@ -806,9 +873,9 @@ def _validate_postpacking(values, pre_good):
 				frappe.throw(_("{0} harus angka desimal >= 0").format(key))
 			cleaned[fieldname] = amount
 		elif key == "qc_packing":
-			if not frappe.db.exists("User", value) or not frappe.db.get_value("User", value, "enabled"):
-				frappe.throw(_("QC Packing harus User aktif: {0}").format(value))
-			cleaned[fieldname] = value
+			name = str(value).strip()
+			if name:
+				cleaned[fieldname] = name
 		elif key == "jam_packing":
 			frappe.utils.get_time(value)  # raises on garbage
 			cleaned[fieldname] = value

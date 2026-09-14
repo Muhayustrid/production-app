@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { ClipboardList } from 'lucide-vue-next'
-import { startProduction } from '../store.js'
+import { startProduction, suggestionPreferences } from '../store.js'
 
 const props = defineProps({
   wo: { type: Object, required: true },
@@ -16,9 +16,9 @@ const form = reactive({
   adonanKe: p.adonanKe ?? '',
   jamAdonan: p.jamAdonan || '',
   suhuAdonan: p.suhuAdonan ?? '',
-  namaPenimbang: p.namaPenimbang || (!props.review && p.penimbangSuggested) || '',
-  jumlahKru: p.jumlahKru ?? '',
-  leaderProduksi: p.leaderProduksi || (!props.review && p.leaderSuggested) || ''
+  namaPenimbang: p.namaPenimbang || (!props.review && suggestionPreferences.enabled && p.penimbangSuggested) || '',
+  jumlahKru: p.jumlahKru ?? ((!props.review && suggestionPreferences.enabled) ? p.jumlahKruSuggested : '') ?? '',
+  leaderProduksi: p.leaderProduksi || (!props.review && suggestionPreferences.enabled && p.leaderSuggested) || ''
 })
 const errors = reactive({})
 const tried = ref(false)
@@ -87,18 +87,21 @@ function submit() {
           <div class="field">
             <label for="f-penimbang">Nama Penimbang <span class="req">*</span></label>
             <input id="f-penimbang" v-model="form.namaPenimbang" class="input" type="text" :disabled="review" />
+            <div v-if="!review && suggestionPreferences.enabled && p.penimbangSuggested" class="hint">Saran: {{ p.penimbangSuggested }}{{ props.wo.suggestionSources.penimbang ? ` dari ${props.wo.suggestionSources.penimbang}` : '' }}</div>
             <div v-if="tried && errors.namaPenimbang" class="err">{{ errors.namaPenimbang }}</div>
           </div>
 
           <div class="field">
             <label for="f-kru">Jumlah Kru <span class="req">*</span></label>
             <input id="f-kru" v-model="form.jumlahKru" class="input" type="number" min="1" step="1" :disabled="review" />
+            <div v-if="!review && suggestionPreferences.enabled && p.jumlahKruSuggested != null" class="hint">Saran: {{ p.jumlahKruSuggested }} kru{{ props.wo.suggestionSources.jumlah_kru ? ` dari ${props.wo.suggestionSources.jumlah_kru}` : '' }}</div>
             <div v-if="tried && errors.jumlahKru" class="err">{{ errors.jumlahKru }}</div>
           </div>
 
           <div class="field">
             <label for="f-leader">Leader Produksi <span class="req">*</span></label>
             <input id="f-leader" v-model="form.leaderProduksi" class="input" type="text" :disabled="review" />
+            <div v-if="!review && suggestionPreferences.enabled && p.leaderSuggested" class="hint">Saran: {{ p.leaderSuggested }}{{ props.wo.suggestionSources.leader ? ` dari ${props.wo.suggestionSources.leader}` : '' }}</div>
             <div v-if="tried && errors.leaderProduksi" class="err">{{ errors.leaderProduksi }}</div>
           </div>
         </div>

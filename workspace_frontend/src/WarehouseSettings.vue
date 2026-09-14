@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { Warehouse } from 'lucide-vue-next'
-import { call } from './store.js'
+import { call, loadSuggestionPreferences, saveSuggestionPreferences, suggestionPreferences } from './store.js'
 import LinkInput from './LinkInput.vue'
 
 const fields = [
@@ -23,16 +23,33 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const savedAt = ref('')
+const suggestionSaving = ref(false)
 
 onMounted(async () => {
   try {
-    Object.assign(form, await call('production_app.api.work_order.warehouse_defaults'))
+    await Promise.all([
+      call('production_app.api.work_order.warehouse_defaults').then(values => Object.assign(form, values)),
+      loadSuggestionPreferences()
+    ])
   } catch (e) {
     error.value = e.message
   } finally {
     loading.value = false
   }
 })
+
+async function toggleSuggestions() {
+  suggestionSaving.value = true
+  error.value = ''
+  try {
+    await saveSuggestionPreferences(suggestionPreferences.enabled)
+  } catch (e) {
+    suggestionPreferences.enabled = !suggestionPreferences.enabled
+    error.value = e.message
+  } finally {
+    suggestionSaving.value = false
+  }
+}
 
 async function save() {
   saving.value = true
@@ -65,6 +82,19 @@ async function save() {
 
       <div v-if="loading" class="empty">Memuat pengaturan…</div>
       <template v-else>
+        <div class="settings-block">
+          <div class="settings-block-head">
+            <div>
+              <h3>Saran isian berulang</h3>
+              <p class="hint">Gunakan nilai dari Work Order sebelumnya dengan produk yang sama untuk nama tim, jumlah kru, dan QC.</p>
+            </div>
+            <label class="toggle-control">
+              <input v-model="suggestionPreferences.enabled" type="checkbox" :disabled="suggestionSaving" @change="toggleSuggestions" />
+              <span>{{ suggestionPreferences.enabled ? 'Aktif' : 'Nonaktif' }}</span>
+            </label>
+          </div>
+        </div>
+
         <div class="form-grid cols2">
           <div v-for="f in fields" :key="f.key" class="field">
             <label :for="`wh-${f.key}`">{{ f.label }}</label>

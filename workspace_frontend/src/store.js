@@ -35,8 +35,71 @@ const STAGE_UI = {
 
 export const fieldUnits = reactive({})
 export const listPrefs = reactive({ view: 'tabel' })
+export const PAGE_SIZE_OPTIONS = [20, 100, 500, 1000, 2500]
+export function normalizePageSize(value) {
+  const size = Number(value)
+  return PAGE_SIZE_OPTIONS.includes(size) ? size : PAGE_SIZE_OPTIONS[0]
+}
+export const listState = reactive({ total: 0, page: 1, pageSize: PAGE_SIZE_OPTIONS[0] })
+export const savedListPreferences = reactive({ workOrder: {}, handover: {} })
+export const listPreferencesState = reactive({ loaded: false })
 
 export const state = reactive({ loading: false, error: null, loaded: false, pending: null, actionError: null })
+
+const ACTION_LABELS = {
+  prepare: 'Persiapan',
+  transfer_materials: 'Transfer Material',
+  jobcard_start: 'Mulai Operasi',
+  jobcard_complete: 'Selesaikan Operasi',
+  confirm_prepacking: 'Pre-Packing',
+  confirm_postpacking: 'Post-Packing',
+  finish: 'Finish'
+}
+
+function decodeErrorText(value) {
+  return String(value || '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function errorDetails(raw) {
+  const text = decodeErrorText(raw)
+  const shortage = text.match(/^(.+?)\s+units? of (.+?) needed in (.+?) to complete this transaction\.?$/i)
+  if (shortage) {
+    return {
+      title: 'Transfer Material Gagal',
+      message: 'Stok tidak cukup untuk menyelesaikan transfer material.',
+      details: [
+        `Kebutuhan: ${shortage[1]}`,
+        `Material: ${shortage[2]}`,
+        `Gudang: ${shortage[3]}`
+      ],
+      hint: 'Tambahkan stok atau gunakan gudang sumber lain, lalu coba lagi.'
+    }
+  }
+  return {
+    title: 'Aksi Tidak Berhasil',
+    message: text || 'ERPNext menolak aksi ini. Periksa data Work Order lalu coba lagi.',
+    details: [],
+    hint: ''
+  }
+}
+
+export function setActionError(error, method = '') {
+  const info = errorDetails(error?.message || error)
+  if (method && ACTION_LABELS[method] && info.title === 'Aksi Tidak Berhasil') {
+    info.title = `${ACTION_LABELS[method]} Gagal`
+  }
+  state.actionError = info
+}
+
 export const workOrders = reactive([])
 
 function hhmm(v) {
@@ -76,8 +139,11 @@ export function mapDetail(d) {
       penimbangLabel: d.custom_nama_penimbang_full || d.custom_nama_penimbang || '',
       penimbangSuggested: d.suggested_penimbang || '',
       jumlahKru: d.custom_jumlah_kru ?? null,
+      jumlahKruSuggested: d.suggested_jumlah_kru ?? null,
       leaderProduksi: d.custom_leader_produksi || '',
-      leaderSuggested: d.suggested_leader || ''
+      leaderSuggested: d.suggested_leader || '',
+      qcProduksiSuggested: d.suggested_qc_produksi || '',
+      suggestionSources: d.suggestion_sources || {}
     },
     material: {
       items: (d.required_items || []).map((i) => ({
@@ -124,6 +190,7 @@ export function mapDetail(d) {
       jam: hhmm(d.custom_jam_packing),
       qc: d.custom_qc_packing || '',
       qcLabel: d.custom_qc_packing_full || d.custom_qc_packing || '',
+      qcSuggested: d.suggested_qc_packing || '',
       confirmed: !!d.custom_postpacking_confirmed
     },
     finishedAt: d.actual_end_date ? String(d.actual_end_date).slice(0, 10) : ''
@@ -157,16 +224,44 @@ export async function call(method, args) {
   return data.message
 }
 
-export async function loadList() {
+export const suggestionPreferences = reactive({ enabled: true })
+
+export async function loadSuggestionPreferences() {
+  try {
+    const result = await call('production_app.api.work_order.suggestion_preferences')
+    suggestionPreferences.enabled = !!result.enabled
+  } catch (error) {
+    state.error = error.message
+  }
+  return suggestionPreferences.enabled
+}
+
+export async function saveSuggestionPreferences(enabled) {
+  const result = await call('production_app.api.work_order.suggestion_preferences_save', { enabled: enabled ? 1 : 0 })
+  suggestionPreferences.enabled = !!result.enabled
+  return suggestionPreferences.enabled
+}
+
+export async function loadList(filters = {}) {
   state.loading = true
   state.error = null
   try {
-    const rows = await call('production_app.api.work_order.wo_list', { page_len: 200 })
-    // baris list dipakai untuk tabel/kanban; detail diambil saat WO dibuka
-    // Do not replace a detail already loaded while the initial list request was pending.
+    const result = await call('production_app.api.work_order.wo_list', {
+      search: filters.search || null,
+      production_item: filters.productionItem || null,
+      status: filters.status || null,
+      start_date: filters.startDate || null,
+      end_date: filters.endDate || null,
+      stage: filters.stage || null,
+      start: filters.start ?? 0,
+      page_len: filters.pageLen ?? listState.pageSize,
+      meta: 1
+    })
+    const rows = result.rows || []
+    listState.total = result.total ?? rows.length
+    listState.page = Math.floor((result.start || 0) / (result.page_len || listState.pageSize)) + 1
     const details = new Map(workOrders.filter(w => w.requiredItemsLoaded).map(w => [w.id, w]))
     const mapped = rows.map(r => details.get(r.name) || { ...mapDetail(r), hasOperations: !!r.has_operations, requiredItemsLoaded: false })
-    for (const [id, detail] of details) if (!mapped.some(w => w.id === id)) mapped.push(detail)
     workOrders.splice(0, workOrders.length, ...mapped)
     state.loaded = true
   } catch (e) {
@@ -174,6 +269,22 @@ export async function loadList() {
   } finally {
     state.loading = false
   }
+}
+
+export async function loadListPreferences() {
+  try {
+    Object.assign(savedListPreferences, await call('production_app.api.work_order.list_preferences'))
+    listPreferencesState.loaded = true
+  } catch (e) {
+    state.error = e.message
+  }
+  return savedListPreferences
+}
+
+export async function saveListPreferences(values) {
+  const result = await call('production_app.api.work_order.list_preferences_save', { values })
+  Object.assign(savedListPreferences, result)
+  return result
 }
 
 export async function refreshWo(id) {
@@ -212,7 +323,7 @@ async function perform(w, method, args = {}) {
     await call(`production_app.api.work_order.${method}`, { name: w.id, ...args })
     return await refreshWo(w.id)
   } catch (error) {
-    state.actionError = error.message
+    setActionError(error, method)
     return null
   } finally {
     state.pending = null
@@ -261,7 +372,7 @@ export function completeProduction(w) { return perform(w, 'finish') }
 // Kontrak payload: .superpowers/sdd/HANDOVER_PLAN/task-23-report.md.
 // ============================================================================
 
-export const handoverState = reactive({ loading: false, error: null, loaded: false, pending: null })
+export const handoverState = reactive({ loading: false, error: null, loaded: false, pending: null, coldPage: 1, coldPageSize: 20 })
 export const handoverBoard = reactive({ targetWarehouse: null, roles: { is_gudang: false, is_produksi: false } })
 export const handoverLots = reactive([])
 export const handoverRequests = reactive([])

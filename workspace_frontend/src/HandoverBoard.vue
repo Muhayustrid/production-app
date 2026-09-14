@@ -2,10 +2,10 @@
 // Adapted from the mockup HandoverBoard.vue (read-only source): role simulation
 // strip and fail-injection removed; roles, lots, lanes and warehouses come from
 // the server board payload (T23/T24) — the UI never writes lane state.
-import { computed, nextTick, reactive, onMounted, ref } from 'vue'
+import { computed, nextTick, reactive, onMounted, ref, watch } from 'vue'
 import {
   cancelRequest, createRequest, handoverBoard, handoverLots, handoverRequests, handoverState,
-  loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, savePostPacking, sendHandover
+  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, savePostPacking, sendHandover
 } from './store.js'
 import { fmtInt, fmtStampShort, packParts, qtyMain } from './format.js'
 import {
@@ -126,34 +126,43 @@ function doneCard(r) {
 // lane null + flag draft/cancelled = riwayat Desk — tidak digambar di papan;
 // stopped TANPA SE tetap terlihat di Request Gudang (kartu mati).
 
-// ---- filter tanggal lot (default HARI INI, tanggal lokal browser) ----
-// hanya lane Cold Storage yang difilter (tanggal MASUK lot = tanggal produksi WO);
-// lane Request/Siap/Terkirim adalah antrean kerja hidup — tidak pernah disembunyikan.
+// Filter only Cold Storage lots; work queues remain visible regardless of date.
 const todayISO = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-const lotFrom = ref(todayISO())
-const lotTo = ref(todayISO())
+const lotFrom = ref('')
+const lotTo = ref('')
 const lotFilterOpen = ref(false)
+const coldPageSize = ref(PAGE_SIZE_OPTIONS[0])
+const coldPage = ref(1)
+const saveHandoverPreferences = () => saveListPreferences({
+  workOrder: savedListPreferences.workOrder || {},
+  handover: { from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value }
+})
+function setColdPageSize(value) {
+  coldPageSize.value = normalizePageSize(value)
+  coldPage.value = 1
+  saveHandoverPreferences()
+}
 const lotFilterCount = computed(() => (lotFrom.value ? 1 : 0) + (lotTo.value ? 1 : 0))
 const lotDateActive = computed(() => !!(lotFrom.value || lotTo.value))
-const filteredLots = computed(() =>
-  handoverLots.filter((l) => {
-    if (!lotDateActive.value) return true
-    const day = (l.enteredAt || '').slice(0, 10)
-    if (!day) return false
-    return (!lotFrom.value || day >= lotFrom.value) && (!lotTo.value || day <= lotTo.value)
-  })
-)
+const filteredLots = computed(() => handoverLots.filter((l) => {
+  if (!lotDateActive.value) return true
+  const day = (l.enteredAt || '').slice(0, 10)
+  if (!day) return false
+  return (!lotFrom.value || day >= lotFrom.value) && (!lotTo.value || day <= lotTo.value)
+}))
+const coldLots = computed(() => filteredLots.value.filter((l) => l.unsupported || lotAvailablePcs(l) > 0))
+const coldTotalPages = computed(() => Math.max(1, Math.ceil(coldLots.value.length / coldPageSize.value)))
+const pagedColdLots = computed(() => coldLots.value.slice((coldPage.value - 1) * coldPageSize.value, coldPage.value * coldPageSize.value))
+watch([lotFrom, lotTo], () => { coldPage.value = 1; saveHandoverPreferences() })
 function lotToday() { lotFrom.value = todayISO(); lotTo.value = todayISO() }
-function lotAllDates() { lotFrom.value = ''; lotTo.value = '' }
-function lotReset() { lotToday() }
+function lotAllDates() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
+function lotReset() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
 
 const byLane = computed(() => ({
-  cold: filteredLots.value
-    .filter((l) => l.unsupported || lotAvailablePcs(l) > 0)
-    .map(lotCard),
+  cold: pagedColdLots.value.map(lotCard),
   request: handoverRequests
     .filter((r) => r.lane === 'request' && r.flag !== 'cancelled' && r.flag !== 'draft')
     .map(reqCard),
@@ -443,7 +452,19 @@ function chooseCancel() {
   openCancelDialog(id)
 }
 
-onMounted(() => { loadBoard() })
+onMounted(() => {
+  const apply = () => {
+    const p = savedListPreferences.handover || {}
+    lotFrom.value = p.from || ''; lotTo.value = p.to || ''
+    coldPageSize.value = normalizePageSize(p.pageSize)
+    loadBoard()
+  }
+  if (listPreferencesState.loaded) apply()
+  else {
+    const timer = setInterval(() => { if (listPreferencesState.loaded) { clearInterval(timer); apply() } }, 25)
+    setTimeout(() => clearInterval(timer), 2000)
+  }
+})
 </script>
 
 <template>
@@ -483,11 +504,11 @@ onMounted(() => { loadBoard() })
               <input v-model="lotTo" class="input" type="date" />
             </div>
           </div>
-          <div class="frow2">
+          <div class="frow2 filter-actions">
             <button class="linkbtn" type="button" @click="lotToday">Hari ini</button>
             <button class="linkbtn" type="button" @click="lotAllDates">Semua tanggal</button>
           </div>
-          <button class="linkbtn" type="button" @click="lotReset">Hapus semua filter</button>
+          <button class="linkbtn filter-clear" type="button" @click="lotReset">Hapus semua filter</button>
         </div>
       </Transition>
     </div>
@@ -547,6 +568,15 @@ onMounted(() => { loadBoard() })
         </div>
       </TransitionGroup>
     </section>
+  </div>
+
+  <div class="pagination-bar pagination-footer cold-pagination">
+    <label class="page-size-control">
+      <span>Tampilkan</span>
+      <select class="select" :value="coldPageSize" aria-label="Jumlah lot Cold Storage per halaman" @change="setColdPageSize($event.target.value)">
+        <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+      </select>
+    </label>
   </div>
 
   <!-- ============ dialog: buat Material Request (Gudang) ============ -->

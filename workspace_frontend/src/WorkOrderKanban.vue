@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { state, openWo, getWo } from './store.js'
+import { state, openWo, getWo, setActionError } from './store.js'
 import { fmtDate, qtyStack } from './format.js'
 import { Boxes, CheckCircle2, ClipboardList, Cog, Flag, GripVertical, Inbox, PackageCheck } from 'lucide-vue-next'
 import StagePersiapan from './stages/StagePersiapan.vue'
@@ -94,7 +94,7 @@ async function openAction(w) {
     openedStage.value = detail.stage
     await nextTick()
     dialog.value.showModal()
-  } catch (e) { state.actionError = e.message }
+  } catch (e) { setActionError(e, 'open') }
   finally { opening.value = false }
 }
 function close() {
@@ -112,7 +112,6 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
 </script>
 <template>
   <p v-if="opening" role="status">Memuat detail Work Order…</p>
-  <p v-if="state.actionError && !selected" class="err" role="alert">{{ state.actionError }}</p>
   <div class="kb" :class="{ dragging: !!drag }">
     <section
       v-for="l in lanes"
@@ -158,7 +157,7 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
           </div>
           <div class="kb-foot">
             <span class="kb-meta">
-              {{ w.stage === 'completed' ? `Selesai ${w.finishedAt || ''}` : `Jadwal ${fmtDate(w.plannedDate, true)}` }}
+              {{ w.stage === 'completed' ? `Selesai ${w.finishedAt || ''}` : `Jadwal ${fmtDate(w.plannedDate)}` }}
             </span>
             <span class="badge" :class="badgeClass(w.status)">{{ w.status }}</span>
           </div>
@@ -188,7 +187,6 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
         <button class="btn kanban-dialog-close" :disabled="!!state.pending" @click="close">Tutup</button>
       </header>
       <p v-if="selected.uomWarning" class="callout">{{ selected.uomWarning }}</p>
-      <p v-if="state.actionError" class="err" role="alert">{{ state.actionError }}</p>
       <div class="kanban-dialog-content">
         <fieldset class="stage-form" :disabled="!!state.pending">
           <component :is="panels[openedStage]" :key="selected.id + openedStage" :wo="selected" :stage-key="openedStage" />

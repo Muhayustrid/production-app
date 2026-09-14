@@ -154,7 +154,6 @@ async function confirmFinish() {
           @update:valid="lossValid = $event"
         />
       </div>
-      <p v-if="state.actionError" class="err" role="alert">{{ state.actionError }}</p>
       <div class="dlg-actions">
         <button class="btn" @click="closeDlg">Batal</button>
         <button class="btn btn-primary" :disabled="!!state.pending || !doneValid || !lossValid || donePcs == null" @click="confirmFinish">

@@ -1,10 +1,10 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import WorkOrderList from './WorkOrderList.vue'
 import Workspace from './Workspace.vue'
 import WarehouseSettings from './WarehouseSettings.vue'
 import HandoverBoard from './HandoverBoard.vue'
-import { workOrders, loadList, state, handoverBoard, handoverRequests, handoverState, loadBoard } from './store.js'
+import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, state, handoverBoard, handoverRequests, handoverState, loadBoard } from './store.js'
 import { ClipboardCheck, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
 
 // router hash minimal: '#/' + '#/wo/<id>' (work order), '#/handover' (stock entry)
@@ -50,13 +50,30 @@ watch(() => handoverState.loaded, (loaded) => {
 
 // drawer ala YouTube: tutup default, burger di top bar membuka/menutup
 const navOpen = ref(false)
+const errorDialog = ref(null)
+const errorClose = ref(null)
 const currentUser = window.workspace_user || 'Pengguna ERPNext'
 const initials = currentUser.split(' ').slice(0, 2).map(s => s[0]).join('')
 const activeCount = computed(() => workOrders.filter((w) => w.stage !== 'completed').length)
 const handoverCount = computed(() =>
   handoverRequests.filter((r) => r.lane === 'request' || r.lane === 'siap_kirim').length
 )
-onMounted(() => { loadList(); loadBoard() })
+onMounted(async () => {
+  await loadListPreferences()
+  loadList(); loadBoard(); loadSuggestionPreferences()
+})
+watch(() => state.actionError, error => {
+  if (!error) return
+  nextTick(() => {
+    if (!errorDialog.value?.open) errorDialog.value?.showModal()
+    errorClose.value?.focus()
+  })
+})
+
+function closeError() {
+  if (errorDialog.value?.open) errorDialog.value.close()
+  state.actionError = null
+}
 
 function onNavClick() {
   navOpen.value = false
@@ -185,5 +202,18 @@ function onNavClick() {
         </footer>
       </div>
     </div>
+
+    <dialog ref="errorDialog" class="dialog error-dialog" aria-labelledby="error-dialog-title" @cancel.prevent="closeError" @click.self="closeError">
+      <div class="error-dialog-icon" aria-hidden="true">!</div>
+      <h2 id="error-dialog-title">{{ state.actionError?.title }}</h2>
+      <p class="error-dialog-message">{{ state.actionError?.message }}</p>
+      <ul v-if="state.actionError?.details?.length" class="error-dialog-details">
+        <li v-for="detail in state.actionError.details" :key="detail">{{ detail }}</li>
+      </ul>
+      <p v-if="state.actionError?.hint" class="error-dialog-hint">{{ state.actionError.hint }}</p>
+      <div class="dlg-actions">
+        <button ref="errorClose" class="btn btn-primary" @click="closeError">Tutup</button>
+      </div>
+    </dialog>
   </div>
 </template>

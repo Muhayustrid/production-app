@@ -849,16 +849,22 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 
 		wo = self._postpacking_ready_wo(100)
 
-		with self.assertRaises(frappe.ValidationError):
-			confirm_postpacking(wo.name, values={"good": 50, "qc_packing": "bukan-user@example.com"})
 		with self.assertRaises(ValueError):  # get_time raises the parser error as-is
-			confirm_postpacking(wo.name, values={"good": 50, "jam_packing": "bukan-jam"})
+			confirm_postpacking(wo.name, values={"good": 50, "jam_packing": "bukan-jam", "qc_packing": "Ugy"})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 0)
+		self.assertFalse(wo.custom_postpacking_confirmed)
+
+		result = confirm_postpacking(wo.name, values={"good": 50, "qc_packing": "Ugy"})
+		self.assertEqual(result["good"], 50)
+		wo.reload()
+		self.assertEqual(wo.custom_qc_packing, "Ugy")
 		# FU11: sisa is a manual payload key now — only NEGATIVE values are rejected
 		with self.assertRaises(frappe.ValidationError):
 			confirm_postpacking(wo.name, values={"good": 50, "sisa": -1})
 		wo.reload()
-		self.assertEqual(flt(wo.custom_good_qty_postpacking), 0)
-		self.assertFalse(wo.custom_postpacking_confirmed)
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 50)
+		self.assertTrue(wo.custom_postpacking_confirmed)
 
 	def test_fu11_manual_sisa_jam_defaults_and_prep_suggestions(self):
 		"""FU11: (1) sisa postpacking manual; (2) jam adonan/pembekuan/packing
@@ -1279,6 +1285,31 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		item.uoms = [row for row in item.uoms if row.uom != alternate]
 		item.save()
 		self.assertIsNone(wo_detail(wo.name)["display_conversion_factor"])
+
+	def test_fu13_suggestions_follow_same_product_and_user_toggle(self):
+		from production_app.api.work_order import prepare, suggestion_preferences_save, wo_detail
+
+		wo_src = self._make_wo(100, submit=False)
+		prepare(wo_src.name, values={
+			"penimbang": "Ugy", "leader": "Rina", "jumlah_kru": 7,
+			"jam_adonan": "08:00:00",
+		}, submit=1)
+		wo_src.db_set("custom_qc_produksi", "Dewi")
+		wo = self._make_wo(100, submit=True)
+		try:
+			frappe.set_user("Administrator")
+			suggestion_preferences_save(1)
+			detail = wo_detail(wo.name)
+			self.assertEqual(detail["suggested_penimbang"], "Ugy")
+			self.assertEqual(detail["suggested_leader"], "Rina")
+			self.assertEqual(detail["suggested_jumlah_kru"], 7)
+			self.assertEqual(detail["suggested_qc_produksi"], "Dewi")
+			self.assertTrue(detail["suggestions_enabled"])
+			suggestion_preferences_save(0)
+			self.assertFalse(wo_detail(wo.name)["suggestions_enabled"])
+			self.assertIsNone(wo_detail(wo.name)["suggested_penimbang"])
+		finally:
+			suggestion_preferences_save(1)
 
 	def test_t05_box_identifier_and_leader_name_persist_after_submit(self):
 		self._receipt(self.rm1, 1000)

@@ -1,0 +1,27 @@
+{
+  "captured_at": "2026-09-14 20:58:21.754664",
+  "custom_fields": [
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_qc_packing",
+      "fieldtype": "Link",
+      "label": "QC Packing",
+      "name": "Work Order-custom_qc_packing",
+      "options": "User"
+    }
+  ],
+  "stored_values": [
+    {
+      "custom_qc_packing": "erprotiropi@gmail.com",
+      "name": "MFG-WO-2026-03113"
+    },
+    {
+      "custom_qc_packing": "abicidfg@gmail.com",
+      "name": "MFG-WO-2026-03114"
+    },
+    {
+      "custom_qc_packing": "abicidfg@gmail.com",
+      "name": "MFG-WO-2026-03115"
+    }
+  ]
+}

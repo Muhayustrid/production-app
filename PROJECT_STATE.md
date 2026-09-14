@@ -4,7 +4,7 @@
 
 - Project status: Work Order scope COMPLETE (T01–T20) + Scope Serah Terima COMPLETE (T21–T26). **Scope F: Post-Packing sebagai tahap Work Order — COMPLETE 14 Sep (sesi SDD subagent-driven, T27–T30 + fix wave + browser smoke)** per `POSTPACKING_PLAN.md`.
 - Last updated: 2026-09-14 (section F COMPLETE)
-- Active task: none — **FU11+FU12 SELESAI** (FU11 revisi default form, FU12 re-edit Pre/Post-Packing pra-finish, lihat Work log 14 Sep). Catatan: operator perlu hard-refresh sekali (bundle `022b488b…`).
+- Active task: none — **FU17 SELESAI** — Stock Entry footer hanya dropdown jumlah tampil; Work Order Kanban memiliki dropdown jumlah tampil tanpa navigasi; mode Tabel tetap memakai pagination penuh.
 - Section F (pra-FU11): Tahap Post-Packing live di workspace (persiapan→material→operasi?→pre→**post**→finish→selesai); FG Manufacture = good postpacking (cap ≤ good pre, sisa server); satu-satunya writer postpacking WO = confirm_postpacking (mirror handover tinggal box); legacy in-flight jujur mendarat di post_packing (contoh nyata: MFG-WO-2026-03115 terlihat di lane Post-Packing). Bukti: 5 suite ×2 (45/10/5/9/12), HTTP loop T29+T30, browser smoke interaktif controller (panel→finish→Completed dgn SE FG 90/loss 10, kanban, mobile 390), residu 0. Bundle final `cf22df01…`.
 - Next task: STOP — pekerjaan lanjutan HANYA atas request baru. Kandidat bila diminta: redesign UI papan Serah Terima versi mockup 67fc9dd (dialog "Verifikasi Siap Kirim"); pesan Indonesia rapi utk jam invalid (observasi FU10). Catatan: operator perlu hard-refresh sekali (bundle `6b20fad7…`). Follow-up 9 DONE (chip Adonan ke kanban); Follow-up 10 DONE (Penimbang & QC Produksi jadi teks nama).
 - Process note (sesi F): SDD subagent-driven dengan reviewer independen per task; brief/report/review di `.superpowers/sdd/POSTPACKING_PLAN/`; TANPA git commit (aturan ZCODE_PROMPT.md) — diff per-task dilacak via snapshot tree di ledger; browser interaktif hanya oleh controller.
@@ -120,6 +120,45 @@ Server API (one module `production_app/api/work_order.py`, whitelist only, sessi
 - T05 field needs: add `custom_box_1/2` (Float kg, allow_on_submit), `custom_prepacking_confirmed` (Check, allow_on_submit); enable allow_on_submit for `custom_nama_penimbang`, `custom_jumlah_kru`, `custom_leader_produksi`, `custom_qc_produksi`; migrate `custom_leader_produksi` Int→Data preserving values as text.
 
 ## Work log
+
+### 2026-09-14 — FU16 — DONE
+
+- Scope: mengganti teks ringkasan pagination menjadi dropdown jumlah tampil pada footer Work Order dan Stock Entry.
+- Changes: `workspace_frontend/src/store.js` menambah opsi terpusat `[20, 100, 500, 1000, 2500]` dan normalisasi ukuran; `WorkOrderList.vue` memakai ukuran reaktif, menyimpan `workOrder.pageSize`, dan footer hanya berisi dropdown + navigasi; `HandoverBoard.vue` melakukan hal sama untuk `handover.pageSize`; `styles.css` menambah gaya kontrol; `production_app/api/work_order.py` menerima page length sampai 2500 dan stage scan sampai 2500. Asset dibuild/deploy ke backend dan frontend container.
+- Verification: Vite build **1740 modules transformed**; `git diff --check` pass; API `wo_list(meta=1,page_len=2500)` mengembalikan `rows=2500`, `total=3016`, `page_len=2500`; browser Stock Entry memuat dropdown dengan opsi **20/100/500/1000/2500**, pilihan 100 berhasil; browser Work Order memuat data dan dropdown opsi yang sama setelah perbaikan reactive `computed` `.value`; bundle served mengandung `page-size-control` dan `Tampilkan`; backend direstart.
+- Evidence: browser tab `http://localhost:8081/production_workspace#/handover` menunjukkan footer `Tampilkan` + combobox `Jumlah lot Cold Storage per halaman`; Work Order menunjukkan combobox `Jumlah Work Order per halaman` dan data 3016.
+- Remaining issue: none known. Operator mungkin perlu hard-refresh sekali jika browser menyimpan bundle lama.
+- Next action: STOP — pekerjaan lanjutan hanya atas request baru.
+- Rollback notes: revert `production_app/api/work_order.py`, `workspace_frontend/src/store.js`, `WorkOrderList.vue`, `HandoverBoard.vue`, `styles.css`, generated assets, dan state log; tidak ada migrasi metadata atau perubahan transaksi.
+
+### 2026-09-14 — FU15 — DONE
+
+- Scope: Work Order + Stock Entry filters, persisted last settings, true reset, year in schedule, pagination, and page-size controls.
+- Changes: `production_app/api/work_order.py` adds status/date filters, metadata pagination response, and per-user list preferences; `workspace_frontend/src/store.js` maps list metadata/preferences; `WorkOrderList.vue` uses server-filtered pages, all-dates default, true reset, 20/50/100 page size, and full-year schedule labels; `HandoverBoard.vue` keeps active lanes visible, paginates Cold Storage lots, persists date/page-size preferences, and fixes reset to all dates; `WorkOrderKanban.vue` shows full-year schedule; `styles.css` improves filter width/actions and pagination layout. Generated assets rebuilt/deployed.
+- Verification: Work Order suite **47/47 OK**; handover native **10/10 OK**; handover setup **5/5 OK**; Python syntax + `git diff --check` pass; Vite build **1740 modules transformed**; served bundle MD5 `index.js 59aadf998b38427885b9f791ce2f5192`, `index.css b86d74ec5457c1a895807dfd0a4c2c2c` identical host/backend/frontend-container/served; served markers include `pagination-bar`, `list_preferences`, and `Hapus semua filter`.
+- Remaining issue: none known. Root cause of the missing Work Orders was a legacy saved product filter stored as the display name while the new server filter expected the item code; frontend now normalizes both forms before filtering. Operator should hard-refresh once after asset deployment.
+- Next action: STOP — further work only on a new request.
+- Rollback notes: revert `production_app/api/work_order.py`, affected Work Order/Handover frontend files, generated assets, and state log; no new transaction data or metadata migration was introduced.
+
+### 2026-09-14 — FU14 — DONE
+
+- Scope: native action errors, especially shortage errors during Material Transfer, are shown in a global modal instead of inline callouts that disturb the Work Order layout.
+- Changes: `workspace_frontend/src/store.js` now sanitizes ERPNext HTML error strings into structured safe text, recognizes stock-shortage messages, and assigns action-specific titles; `App.vue` owns an accessible error dialog with Escape/backdrop/Tutup behavior and focus; inline action-error renderers were removed from `Workspace.vue`, `WorkOrderKanban.vue`, `StageOperasi.vue`, and `StageFinish.vue`; `styles.css` adds the modal treatment. No backend/API/business validation changed.
+- Verification: `git diff --check`; frontend Vite build in backend container = **1740 modules transformed**; deployed bundle MD5 `index.js e985d91ce9ea6900c842c65b59997c7f`, `index.css 0e56ca3d57d7678dce62fbc3fb88933b` identical host/backend/frontend-container/served; served bundle contains `Transfer Material Gagal`, `Stok tidak cukup`, and `error-dialog` markers. Python syntax check passed; backend/runtime data untouched.
+- Evidence: source error path is `StageMaterial → transferAll → perform → call`; native ERPNext shortage text is converted to Material, Gudang, and Kebutuhan detail without `v-html`.
+- Remaining issue: none. Operator should hard-refresh once after asset deployment.
+- Next action: STOP — further work only on a new request.
+- Rollback notes: revert `store.js`, `App.vue`, `Workspace.vue`, `WorkOrderKanban.vue`, `StageOperasi.vue`, `StageFinish.vue`, `styles.css`, and generated assets; no metadata/data rollback required.
+
+### 2026-09-14 — FU13 — DONE
+
+- Scope: migrate Work Order QC Packing from Link User to Data text; suggest Penimbang, Leader Produksi, Jumlah Kru, QC Produksi, and QC Packing from previous Work Orders with the same production item; add per-user toggle using native Frappe User Defaults.
+- Changes: `production_app/upgrade.py` adds snapshot-first/idempotent Work Order QC Packing Link→Data migration (legacy values preserved); `production_app/api/work_order.py` adds per-user preference endpoints and same-product per-field suggestions, while free-text QC Packing validation replaces active-User validation; `workspace_frontend/src/store.js`, `App.vue`, `WarehouseSettings.vue`, `StagePersiapan.vue`, `StagePacking.vue`, `StagePostPacking.vue`, and `styles.css` load/save the preference and show editable suggestions/source hints; generated `production_app/public/workspace/assets/index.{js,css}` rebuilt. Material Request QC Packing remains Link User for the handover contract.
+- Verification: `bench --site frontend execute production_app.upgrade.apply` ran with `qc_packing_text: migrated Link -> Data (column varchar(140))`, second convergence `unchanged`; metadata readback = Work Order `Data`/empty options/allow_on_submit=1, Material Request `Link`/`User`/allow_on_submit=1. `bench --site frontend run-tests --module production_app.tests.test_wo_transaction_proof` = **47/47 OK**; `test_handover_native_proof` = **10/10 OK**; `test_handover_setup` = **5/5 OK**. Frontend Vite build = 1740 modules transformed; bundle MD5 `index.js 39a1f74fbeb70668aa4a504aa9837154`, `index.css 03a1848fb60975f7182662624b31f19d` identical host/backend/frontend-container/served; served markers include `suggestion_preferences`, `Saran isian berulang`, and `Saran:`. Backend restarted and health check passed.
+- Evidence: migration snapshot `snapshots/qc-packing-text-pre.json`; test fixture changes rolled back by framework; no operational Work Order/Material Request data changed by tests.
+- Remaining issue: none. Operator should hard-refresh once after asset deployment.
+- Next action: STOP — further work only on a new request.
+- Rollback notes: restore Work Order Custom Field metadata/column from `snapshots/qc-packing-text-pre.json` only with a deliberate migration; revert server/frontend/test/build changes and restart backend. Material Request field is unchanged.
 
 ### 2026-09-14 — Follow-up request user 12: Pre/Post-Packing tetap bisa diedit sampai "Selesaikan Produksi" — DONE
 

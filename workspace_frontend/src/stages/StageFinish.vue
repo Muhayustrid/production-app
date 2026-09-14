@@ -155,7 +155,6 @@ async function confirmComplete() {
         <strong>{{ wo.warehouse }}</strong> melalui Manufacture Stock Entry di ERPNext, lalu
         menunggu permintaan serah terima dari gudang.
       </p>
-      <p v-if="state.actionError" class="err" role="alert">{{ state.actionError }}</p>
       <div class="dlg-actions">
         <button class="btn" @click="closeDlg">Batal</button>
         <button class="btn btn-primary" :disabled="!!state.pending" @click="confirmComplete">Ya, Selesaikan</button>

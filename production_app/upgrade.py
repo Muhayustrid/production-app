@@ -428,6 +428,7 @@ POSTPACKING_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "postpacking-pre.json")
 # they were Link User. Existing values (User ids) are preserved as text —
 # nothing is rewritten and no names are invented.
 NAME_TEXT_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "penimbang-qc-text-pre.json")
+QC_PACKING_TEXT_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "qc-packing-text-pre.json")
 NAME_TEXT_FIELDNAMES = ("custom_nama_penimbang", "custom_qc_produksi")
 
 
@@ -617,6 +618,46 @@ def snapshot_fu10():
 	return NAME_TEXT_SNAPSHOT
 
 
+def snapshot_qc_packing_text():
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"custom_fields": frappe.get_all(
+			"Custom Field",
+			filters={"dt": DOCTYPE, "fieldname": "custom_qc_packing"},
+			fields=["name", "fieldname", "label", "fieldtype", "options", "allow_on_submit"],
+		),
+		"stored_values": frappe.get_all(
+			DOCTYPE,
+			filters={"custom_qc_packing": ("is", "set")},
+			fields=["name", "custom_qc_packing"],
+		),
+	}
+	with open(QC_PACKING_TEXT_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return QC_PACKING_TEXT_SNAPSHOT
+
+
+def ensure_qc_packing_text_field():
+	cf = frappe.db.get_value(
+		"Custom Field", {"dt": DOCTYPE, "fieldname": "custom_qc_packing"},
+		["name", "fieldtype", "options"], as_dict=True,
+	)
+	if not cf:
+		return "missing (site-managed field expected to exist)"
+	if cf.fieldtype == "Data" and not (cf.options or "").strip():
+		return "unchanged"
+	frappe.db.set_value("Custom Field", cf.name, {"fieldtype": "Data", "options": ""})
+	col = frappe.db.sql(
+		"select column_type from information_schema.columns where table_name = %s and column_name = %s",
+		(f"tab{DOCTYPE}", "custom_qc_packing"),
+	)
+	col_type = col[0][0] if col else None
+	if col_type and "varchar" not in col_type:
+		frappe.db.change_column_type(DOCTYPE, "custom_qc_packing", "varchar(140)", nullable=True)
+	return f"migrated {cf.fieldtype} -> Data (column {col_type or 'n/a'})"
+
+
 def ensure_name_text_fields():
 	"""FU10: Nama Penimbang & QC Produksi Link User -> Data (a person's name
 	as free text, same semantics as Leader Produksi). Link and Data share the
@@ -664,10 +705,13 @@ def apply():
 		snapshot_t27()  # never change postpacking metadata without a pre-state
 	if not os.path.exists(NAME_TEXT_SNAPSHOT):
 		snapshot_fu10()  # never change penimbang/qc metadata without a pre-state
+	if not os.path.exists(QC_PACKING_TEXT_SNAPSHOT):
+		snapshot_qc_packing_text()
 	result = {"fields": [], "leader": "unchanged"}
 
 	result["box_fields"] = ensure_box_identifier_fields()
 	result["name_text_fields"] = ensure_name_text_fields()
+	result["qc_packing_text"] = ensure_qc_packing_text_field()
 	for spec in WORKSPACE_FIELDS:
 		action, name = _upsert_field(DOCTYPE, spec)
 		result["fields"].append(f"{spec['fieldname']}: {action}")
