@@ -12,8 +12,17 @@ const props = defineProps({
 
 const qip = props.wo
 const pre = props.wo.prepacking
-// Barang Jadi = Good Qty Pre-Packing (Post-Packing hanya di alur Serah Terima)
-const fg = computed(() => props.wo.stage === 'completed' ? props.wo.producedStockQty : producedQty(props.wo))
+const post = props.wo.postpacking
+// Barang Jadi = Good Qty Post-Packing; fallback Pre-Packing hanya WO completed legacy
+const fg = computed(() => producedQty(props.wo))
+
+const blockTotal = (b) => {
+  const v = [b.goodQty, b.rejectQty, b.trialQty, b.sisaQty]
+  return v.some((x) => x == null) ? null : v.reduce((a, c) => a + c, 0)
+}
+const preTotal = computed(() => blockTotal(pre))
+const postTotal = computed(() => blockTotal(post))
+const qtyText = (v) => (v != null ? qtyMain(v, qip) : '-')
 
 const diff = computed(() => fg.value - props.wo.plannedStockQty)
 const diffText = computed(() => {
@@ -53,7 +62,7 @@ async function confirmComplete() {
           <span class="v">{{ qtyMain(wo.plannedStockQty, qip) }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Hasil Aktual</span>
+          <span class="k">Hasil Aktual (Masuk Cold Storage)</span>
           <span class="v">{{ qtyMain(fg, qip) }}</span>
         </div>
         <div class="sum-row">
@@ -63,17 +72,26 @@ async function confirmComplete() {
       </div>
 
       <div class="sum-sec">
+        <div class="sect">Pre-Packing</div>
+        <div class="sum-row">
+          <span class="k">Good</span>
+          <span class="v">{{ qtyText(pre.goodQty) }}</span>
+        </div>
         <div class="sum-row">
           <span class="k">Reject</span>
-          <span class="v">{{ pre.rejectQty != null ? qtyMain(pre.rejectQty, qip) : '-' }}</span>
+          <span class="v">{{ qtyText(pre.rejectQty) }}</span>
         </div>
         <div class="sum-row">
           <span class="k">Trial</span>
-          <span class="v">{{ pre.trialQty != null ? qtyMain(pre.trialQty, qip) : '-' }}</span>
+          <span class="v">{{ qtyText(pre.trialQty) }}</span>
         </div>
         <div class="sum-row">
           <span class="k">Sisa</span>
-          <span class="v">{{ pre.sisaQty != null ? qtyMain(pre.sisaQty, qip) : '-' }}</span>
+          <span class="v">{{ qtyText(pre.sisaQty) }}</span>
+        </div>
+        <div class="sum-row">
+          <span class="k">Total hasil</span>
+          <span class="v">{{ preTotal != null ? qtyMain(preTotal, qip) : '-' }}</span>
         </div>
         <div class="sum-row">
           <span class="k">Jam Pembekuan · QC Produksi</span>
@@ -82,8 +100,32 @@ async function confirmComplete() {
       </div>
 
       <div class="sum-sec">
+        <div class="sect">Post-Packing</div>
+        <div class="sum-row">
+          <span class="k">Good</span>
+          <span class="v">{{ qtyText(post.goodQty) }}</span>
+        </div>
+        <div class="sum-row">
+          <span class="k">Reject</span>
+          <span class="v">{{ qtyText(post.rejectQty) }}</span>
+        </div>
+        <div class="sum-row">
+          <span class="k">Trial</span>
+          <span class="v">{{ qtyText(post.trialQty) }}</span>
+        </div>
+        <div class="sum-row">
+          <span class="k">Sisa</span>
+          <span class="v">{{ qtyText(post.sisaQty) }}</span>
+        </div>
+        <div class="sum-row">
+          <span class="k">Total hasil</span>
+          <span class="v">{{ postTotal != null ? qtyMain(postTotal, qip) : '-' }}</span>
+        </div>
+      </div>
+
+      <div class="sum-sec">
         <div class="fgbox">
-          <span>Barang Jadi (Good Qty Pre-Packing)</span>
+          <span>Barang Jadi (Good Qty {{ post.goodQty == null ? 'Post-Packing, fallback Pre-Packing' : 'Post-Packing' }})</span>
           <span>{{ qtyMain(fg, qip) }}</span>
         </div>
         <div class="sum-row" style="margin-top: 8px">
@@ -94,7 +136,7 @@ async function confirmComplete() {
 
       <p class="note">
         Saat diselesaikan, Manufacture Stock Entry dibuat di ERPNext: bahan baku dihitung dari
-        BOM dan planned qty, jumlah Barang Jadi memakai Good Qty Pre-Packing
+        BOM dan planned qty, jumlah Barang Jadi memakai Good Qty Post-Packing
         ({{ fmtInt(fg) }} {{ wo.stockUom }}). Barang jadi masuk Cold Storage dan menunggu serah terima ke
         Gudang Barang Jadi melalui alur Serah Terima Barang Jadi.
       </p>

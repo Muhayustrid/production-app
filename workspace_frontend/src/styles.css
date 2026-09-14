@@ -1117,6 +1117,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 /* struktur kartu: nama → referensi → kuantitas → catatan → footer */
 .kb-top { display: flex; align-items: flex-start; gap: 8px; }
 .kb-name { flex: 1; min-width: 0; font-weight: 650; font-size: 13.5px; line-height: 1.35; letter-spacing: -0.01em; }
+.kb-adonan { flex: none; padding: 2px 8px; font-size: 10.5px; white-space: nowrap; margin-top: 1px; }
 .kb-grip { flex: none; margin-top: 2px; color: var(--line2); }
 .kb-card.live .kb-grip { color: var(--brand-light); }
 .kb-id { display: block; font-size: 11.5px; color: var(--faint); margin-top: 1px; }

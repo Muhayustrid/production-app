@@ -42,6 +42,7 @@ function toggle() { fieldUnits[props.unitKey] = unit.value === 'pack' ? 'pcs' : 
       <span v-if="approx" class="approx">≈</span>
       <input :id="uid" :value="text" @input="input" class="qtyinput" inputmode="decimal"
         :disabled="disabled" :aria-invalid="!!parsed.error" />
+      <slot name="suffix"></slot>
       <button type="button" class="unitbtn" :disabled="disabled || !hasAlternate(units)" @click="toggle"
         title="Ganti satuan input">{{ unit === 'pack' ? units.displayUom : units.stockUom }}</button>
     </div>

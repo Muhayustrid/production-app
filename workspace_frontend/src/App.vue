@@ -1,10 +1,11 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import WorkOrderList from './WorkOrderList.vue'
 import Workspace from './Workspace.vue'
 import WarehouseSettings from './WarehouseSettings.vue'
-import { workOrders, loadList, state } from './store.js'
-import { ClipboardCheck, Settings, HelpCircle, Factory } from 'lucide-vue-next'
+import HandoverBoard from './HandoverBoard.vue'
+import { workOrders, loadList, state, handoverBoard, handoverRequests, handoverState, loadBoard } from './store.js'
+import { ClipboardCheck, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
 
 // router hash minimal: '#/' + '#/wo/<id>' (work order), '#/handover' (stock entry)
 const hash = ref(window.location.hash)
@@ -24,14 +25,38 @@ onUnmounted(() => window.removeEventListener('hashchange', onHash))
 const woId = computed(() =>
   hash.value.startsWith('#/wo/') ? decodeURIComponent(hash.value.slice(5)) : null
 )
-const section = computed(() => (hash.value.startsWith('#/settings') ? 'settings' : 'workorder'))
+const section = computed(() =>
+  hash.value.startsWith('#/settings') ? 'settings'
+    : hash.value.startsWith('#/handover') ? 'handover'
+      : 'workorder'
+)
+
+// peran dari papan server (bukan simulasi) — hanya untuk LANDING + Pengaturan.
+// Item menu Work Orders & Stock Entry SELALU tampil (permintaan user 2026-09-14):
+// visibilitas menu tidak boleh bergantung pada flag asinkron (dulu menyebabkan
+// menu "kedip/hilang" sebelum/saat gagal load board); isi halaman tetap
+// difilter izin di server.
+const isGudangOnly = computed(() =>
+  !!handoverBoard.roles.is_gudang && !handoverBoard.roles.is_produksi
+)
+const canSettings = computed(() => !isGudangOnly.value)
+// Gudang murni otomatis mendarat di Stock Entry
+watch(() => handoverState.loaded, (loaded) => {
+  const h = window.location.hash
+  if (loaded && isGudangOnly.value && (!h || h === '#' || h === '#/')) {
+    window.location.hash = '#/handover'
+  }
+})
 
 // drawer ala YouTube: tutup default, burger di top bar membuka/menutup
 const navOpen = ref(false)
 const currentUser = window.workspace_user || 'Pengguna ERPNext'
 const initials = currentUser.split(' ').slice(0, 2).map(s => s[0]).join('')
 const activeCount = computed(() => workOrders.filter((w) => w.stage !== 'completed').length)
-onMounted(() => { loadList() })
+const handoverCount = computed(() =>
+  handoverRequests.filter((r) => r.lane === 'request' || r.lane === 'siap_kirim').length
+)
+onMounted(() => { loadList(); loadBoard() })
 
 function onNavClick() {
   navOpen.value = false
@@ -89,8 +114,20 @@ function onNavClick() {
           <span class="nlabel">Work Orders</span>
           <span class="navbadge">{{ activeCount }}</span>
         </a>
+        <a
+          href="#/handover"
+          class="navitem"
+          :class="{ on: section === 'handover' }"
+          :aria-current="section === 'handover' ? 'page' : undefined"
+          @click="onNavClick"
+        >
+          <Package :size="18" :stroke-width="1.9" class="nicon" />
+          <span class="nlabel">Stock Entry</span>
+          <span v-if="handoverCount" class="navbadge">{{ handoverCount }}</span>
+        </a>
         <div class="navsection">Sistem</div>
         <a
+          v-if="canSettings"
           href="#/settings"
           class="navitem"
           :class="{ on: section === 'settings' }"
@@ -100,7 +137,7 @@ function onNavClick() {
           <Settings :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Pengaturan</span>
         </a>
-        <span class="navitem disabled" title="Belum tersedia di mockup">
+        <span class="navitem disabled" title="Belum tersedia">
           <HelpCircle :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Bantuan</span>
         </span>
@@ -121,12 +158,26 @@ function onNavClick() {
         </span>
         <span class="bnav-label">Work Order</span>
       </a>
+      <a
+        href="#/handover"
+        class="bnav-item"
+        :class="{ on: section === 'handover' }"
+        :aria-current="section === 'handover' ? 'page' : undefined"
+        @click="onNavClick"
+      >
+        <span class="bnav-ic">
+          <Package :size="20" :stroke-width="1.9" />
+          <span v-if="handoverCount" class="bnav-badge">{{ handoverCount }}</span>
+        </span>
+        <span class="bnav-label">Stock Entry</span>
+      </a>
     </nav>
 
     <div class="maincol">
       <div class="content">
         <div v-if="state.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ state.error }} — <a href="#" @click.prevent="loadList()">coba lagi</a></div>
         <WarehouseSettings v-else-if="section === 'settings'" />
+        <HandoverBoard v-else-if="section === 'handover'" />
         <Workspace v-else-if="woId" :key="woId" :id="woId" />
         <WorkOrderList v-else />
         <footer class="appfoot">

@@ -3,7 +3,6 @@ import { computed, reactive } from 'vue'
 import { PackageCheck } from 'lucide-vue-next'
 import { savePrePacking } from '../store.js'
 import { qtyMain } from '../format.js'
-import LinkInput from '../LinkInput.vue'
 import QtyInput from '../QtyInput.vue'
 
 const props = defineProps({
@@ -62,14 +61,14 @@ function save() {
     <div class="panel-head">
       <span class="p-ico"><PackageCheck :size="15" :stroke-width="1.9" /></span>
       <h2>Pre-Packing</h2>
-      <span class="lead">Klik label satuan untuk mengganti satuan input.</span>
+      <span class="lead">Hasil produksi sebelum Post-Packing. Klik label satuan untuk mengganti satuan input.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
     </div>
 
     <div class="panel-body">
       <div class="callout ok" style="margin-bottom: 14px">
-        Good Qty adalah hasil produksi aktual sebelum masuk Cold Storage dan menjadi jumlah
-        Barang Jadi saat produksi diselesaikan. Hasil tidak harus sama dengan rencana.
+        Good Qty adalah hasil awal packing; hasil akhir Work Order dicatat di tahap Post-Packing
+        dan menjadi jumlah Barang Jadi saat produksi diselesaikan. Hasil tidak harus sama dengan rencana.
       </div>
 
       <!-- kuantitas 1 baris di desktop, bertumpuk di mobile -->
@@ -101,8 +100,7 @@ function save() {
 
         <div class="field">
           <label :for="`f-qc-${stageKey}`">QC Produksi <span class="req">*</span></label>
-          <LinkInput :id="`f-qc-${stageKey}`" v-model="form.qc"
-            :display-label="form.qc === src.qc ? src.qcLabel : undefined" :disabled="review" />
+          <input :id="`f-qc-${stageKey}`" v-model="form.qc" class="input" type="text" :disabled="review" />
         </div>
       </div>
 
@@ -125,7 +123,7 @@ function save() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" :disabled="!canSave" @click="save">Simpan &amp; Lanjut ke Finish</button>
+      <button class="btn btn-primary" :disabled="!canSave" @click="save">Simpan &amp; Lanjut ke Post-Packing</button>
       <span v-if="!canSave" class="why">Lengkapi semua kolom untuk melanjutkan.</span>
     </div>
   </section>

@@ -1,6 +1,8 @@
 # Work Order implementation tasks
 
 Business contract: `IMPLEMENTATION_PLAN.md`. Progress and evidence: `PROJECT_STATE.md`.
+
+Handover scope: section E (T21–T26) is governed by `HANDOVER_PLAN.md`; the rules there apply to those tasks.
 All tasks below are initially TODO. This file describes work; only the state file owns status.
 
 ## Execution rules
@@ -169,3 +171,91 @@ Depends on: T17.
 Scope: run the plan's acceptance matrix and a desktop/mobile smoke check using the real backend. Check reload, touch/keyboard controls, Pack/PCS, kg, actual documents, and native cancellation. Inspect app and core diffs; summarize exact local migration/build/rollback steps.
 
 Acceptance: every required case has executable or observed evidence; limitations and untested configurations are explicit. No unexplained core edits, operational-data changes, unrelated dependencies, or cloud deployment claim. Update PROJECT_STATE.md to COMPLETE only when all required checks pass. Stop; do not start Stock Entry/handover.
+
+## E. Serah Terima / Stock Entry handover (cold storage → barang jadi)
+
+Business contract: `HANDOVER_PLAN.md`. Same execution rules as above (dependency order, one active task, state-file protocol).
+
+### T21 — Prove the native MR → SE handover path
+
+Depends on: none.
+
+Scope: on isolated test records (test item/batch/warehouses or dedicated test warehouses), execute the full native path: MR (type Material Transfer, set_from_warehouse = Cold Storage lot warehouse, set_warehouse = target, item row with from_warehouse/warehouse), `make_stock_entry` from it, batch set on the SE row (old batch fields vs bundle — whichever the installed v16 actually uses), submit, and verify batch-wise stock movement into the target warehouse plus MR `ordered_qty`/status updates. Exercise MR stop and MR cancel. Verify the bakery bundle override does not interfere with outward transfer rows. Resolve and record the qtyInPack source per item (same one the WO workspace uses) and the Manufacture-SE → batch resolution query for a WO.
+
+Acceptance: executed proof with stock/status evidence and the permission matrix (Stock User vs a bare user); MR fields used by the design confirmed native (`Material Request Item.from_warehouse`); no operational documents touched.
+
+### T22 — Fields, role, permissions, and warehouse-default setting
+
+Depends on: T21.
+
+Scope: extend `upgrade.py` idempotently (snapshot first): Role "Gudang Barang Jadi"; custom DocPerms (MR + MR Item for the new role and Manufacturing User read/write; Work Order/Batch/Stock Entry read for the new role); MR custom fields (`custom_work_order` on item; header boxes + post-packing block + confirmed Check, allow_on_submit); `custom_default_handover_warehouse` on Manufacturing Settings exposed via the existing Pengaturan save/read API.
+
+Acceptance: apply() twice is safe; permission checks behave per matrix (gudang can create/cancel MR, cannot send; Manufacturing User can read/write MR, cannot create/cancel); setting persists and is filtered by write permission; rollback documented.
+
+### T23 — Board read API and derivation
+
+Depends on: T22.
+
+Scope: `production_app/api/handover.py` `handover_board`: lots (batches with stock in Cold Storage warehouses, FIFO by Manufacture SE posting datetime, item/adonan/WO/qtyInPack enrichment, physical/reserved/available math), request lanes derived from MR/SE state, role flags for the session user, target warehouse from the setting.
+
+Acceptance: board matches documents after each mutation performed directly in tests; permission-filtered for each role; legacy/multi-batch WO handled with explicit unsupported flags, not errors or silent omission.
+
+### T24 — Actions: create, cancel, post-packing, send
+
+Depends on: T23.
+
+Scope: `create_request` (validate under WO row lock: available, whole-PCS, boxes text; insert+submit MR), `cancel_request` (only pre-verification; native cancel), `save_post_packing` (caps, sisa auto, QC User valid, write MR custom block + mirror to WO post-packing fields), `send_handover` (lock, re-verify, resolve batch, SE from native builder with qty = good, atomic submit, stop MR when good < requested; return SE refs + refreshed board). Integration tests for the acceptance matrix including racing requests, duplicate send, insufficient stock rollback, and permission denials.
+
+Acceptance: Gate E2 — server correctness independent of the browser; all matrix rows in `HANDOVER_PLAN.md` section 6 covered with executed evidence.
+
+### T25 — Frontend Stock Entry page
+
+Depends on: T24.
+
+Scope: mount the mockup `HandoverBoard.vue` into the existing SPA (route `#/handover`, menu "Stock Entry", mobile bottom nav), strip the role-simulation/fail controls and bind real roles from the server, wire the four dialogs to T24 actions with loading/error/pending states and input retention, role-based navigation (Gudang Barang Jadi: only Stock Entry and lands there; Manufacturing User: Work Orders + Stock Entry). Build and sync assets per the established container procedure.
+
+Acceptance: both test roles complete the loop interactively (request → post-packing → send; cancel path); reload/switch views show server truth; no mock data or simulation controls remain.
+
+### T26 — Acceptance run and final state
+
+Depends on: T25.
+
+Scope: execute the full acceptance matrix and a desk/mobile smoke with a gudang test user and a produksi test user; verify native desk cancel of an SE recomputes the board and the stopped-MR limitation is visible/documented; inspect diffs; record migration/rollback and remaining limitations; clean up all test users/documents/warehouses.
+
+Acceptance: every matrix row has executed or observed evidence; PROJECT_STATE.md updated; stop — further work only on a new request.
+
+## F. Post-Packing sebagai tahap Work Order (FG Manufacture = good postpacking)
+
+Business contract: `POSTPACKING_PLAN.md` (mengubah poin tertentu di IMPLEMENTATION_PLAN.md — lihat §5 di sana). Eksekusi SDD subagent-driven, sesi 2026-09-14. Aturan eksekusi sama (urutan dependensi, satu task aktif, protokol state file).
+
+### T27 — Server: tahap post_packing + confirm_postpacking + finish dari postpacking
+
+Depends on: none (section F).
+
+Scope: `upgrade.py` (marker `custom_postpacking_confirmed` Check allow_on_submit + aktifkan allow_on_submit `custom_jam_packing`/`custom_qc_packing`; snapshot; idempoten). `api/work_order.py`: `STAGE_POST_PACKING`, `derive_stage`, `LIST_FIELDS`+`_stage_filters`, `POSTPACKING_FIELD_MAP`+validasi+aksi `confirm_postpacking` (pola confirm_prepacking + cap good/total ≤ good_pre + sisa server), guard `confirm_prepacking` → `(pre_packing, post_packing)`, `finish()` good = postpacking + marker. Tests: perbarui suite wo_transaction ke kontrak baru + test baru (validasi, cap, stage, finish qty/loss/batch, legacy in-flight, re-edit).
+
+Acceptance: semua test hijau ×2; finish terbukti memakai good postpacking (baris FG SE, process loss, batch); pelanggaran validasi = 0 tulis; apply() 2× idempoten.
+
+### T28 — Handover: hapus mirror qty postpacking WO (competing writer)
+
+Depends on: T27.
+
+Scope: `api/handover.py` — `WO_MIRROR_FIELDS` tinggal box 1/2; docstring diperbarui; blok MR + cap + send + board tidak berubah. Perbarui `test_handover_actions.py` (mirror qty/jam/qc TIDAK terjadi; box tetap mirror). Board tests tetap hijau.
+
+Acceptance: suite handover + regresi hijau ×2; tidak ada lagi writer kedua ke field postpacking WO.
+
+### T29 — Frontend SPA: tahap Post-Packing
+
+Depends on: T27 (kontrak API), T28.
+
+Scope: `Workspace.vue` (urutan + komponen), `stages/StagePostPacking.vue` baru (adaptasi mockup 67fc9dd; QC Packing LinkInput User), `stages/StagePacking.vue` (lanjut ke Post-Packing), `stages/StageFinish.vue` (ringkasan ganda pre+post), `store.js` (stage map, `confirmPostPacking`, producedQty fallback display), `WorkOrderKanban.vue` (lane + dialog), `WorkOrderList.vue` (filter). Build + deploy container + verify md5 bundle.
+
+Acceptance: alur penuh pre→post→finish via HTTP-level loop (pola T25); stage hanya dari server; error menahan input; reload = server truth.
+
+### T30 — Acceptance run + final state section F
+
+Depends on: T29.
+
+Scope: 5 suite fresh ×2; HTTP loop end-to-end (termasuk legacy in-flight → post_packing); browser smoke interaktif oleh controller; update IMPLEMENTATION_PLAN.md (addendum supersede), PROJECT_STATE.md; catat migrasi/rollback; bersihkan fixture test.
+
+Acceptance: setiap baris §8 POSTPACKING_PLAN.md punya bukti eksekusi/observasi; dokumen proyek konsisten; berhenti — pekerjaan lanjutan hanya atas request baru.

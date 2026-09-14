@@ -7,6 +7,7 @@ import StagePersiapan from './stages/StagePersiapan.vue'
 import StageMaterial from './stages/StageMaterial.vue'
 import StageOperasi from './stages/StageOperasi.vue'
 import StagePacking from './stages/StagePacking.vue'
+import StagePostPacking from './stages/StagePostPacking.vue'
 import StageFinish from './stages/StageFinish.vue'
 const props = defineProps({ list: { type: Array, required: true } })
 
@@ -14,7 +15,8 @@ const lanes = [
   { key: 'persiapan', title: 'Persiapan', sub: 'Draft · belum mulai', icon: ClipboardList, tone: '' },
   { key: 'material', title: 'Material', sub: 'Transfer bahan baku', icon: Boxes, tone: '' },
   { key: 'operasi', title: 'Operasi', sub: 'Job Card per operasi', icon: Cog, tone: '' },
-  { key: 'prepacking', title: 'Pre-Packing', sub: 'Catat hasil packing', icon: PackageCheck, tone: '' },
+  { key: 'prepacking', title: 'Pre-Packing', sub: 'Catat hasil awal packing', icon: PackageCheck, tone: '' },
+  { key: 'postpacking', title: 'Post-Packing', sub: 'Catat hasil akhir packing', icon: PackageCheck, tone: '' },
   { key: 'finish', title: 'Finish', sub: 'Siap diselesaikan', icon: Flag, tone: '' },
   { key: 'completed', title: 'Selesai', sub: 'Barang jadi di Cold Storage', icon: CheckCircle2, tone: 'ok' }
 ]
@@ -26,14 +28,15 @@ function nextStage(w) {
     case 'persiapan': return 'material'
     case 'material': return w.hasOperations ? 'operasi' : 'prepacking'
     case 'operasi': return 'prepacking'
-    case 'prepacking': return 'finish'
+    case 'prepacking': return 'postpacking'
+    case 'postpacking': return 'finish'
     case 'finish': return 'completed'
     default: return null
   }
 }
 
 const byLane = computed(() => {
-  const g = { persiapan: [], material: [], operasi: [], prepacking: [], finish: [], completed: [] }
+  const g = { persiapan: [], material: [], operasi: [], prepacking: [], postpacking: [], finish: [], completed: [] }
   for (const w of props.list) g[w.stage]?.push(w)
   return g
 })
@@ -79,7 +82,7 @@ const selectedId = ref(null)
 const selected = computed(() => getWo(selectedId.value))
 const opening = ref(false)
 const openedStage = ref('')
-const panels = { persiapan: StagePersiapan, material: StageMaterial, operasi: StageOperasi, prepacking: StagePacking, finish: StageFinish }
+const panels = { persiapan: StagePersiapan, material: StageMaterial, operasi: StageOperasi, prepacking: StagePacking, postpacking: StagePostPacking, finish: StageFinish }
 async function openAction(w) {
   if (opening.value || state.pending) return
   opening.value = true
@@ -137,6 +140,7 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
         >
           <div class="kb-top">
             <span class="kb-name">{{ w.product }}</span>
+            <span v-if="w.persiapan.adonanKe != null" class="chip chip-off kb-adonan">Adonan ke {{ w.persiapan.adonanKe }}</span>
             <GripVertical v-if="nextStage(w)" class="kb-grip" :size="15" :stroke-width="2" aria-hidden="true" />
           </div>
           <span class="kb-id"><a :href="'#/wo/' + w.id" draggable="false" @click.stop>{{ w.id }}</a></span>

@@ -1,12 +1,13 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { getWo, workOrders, STAGE_LABELS, openWo, state } from './store.js'
+import { getWo, workOrders, STAGE_LABELS, openWo, state, producedQty } from './store.js'
 import { fmtDate, qtyMain, qtyStack } from './format.js'
 import { ChevronLeft, Check, CheckCircle2 } from 'lucide-vue-next'
 import StagePersiapan from './stages/StagePersiapan.vue'
 import StageMaterial from './stages/StageMaterial.vue'
 import StageOperasi from './stages/StageOperasi.vue'
 import StagePacking from './stages/StagePacking.vue'
+import StagePostPacking from './stages/StagePostPacking.vue'
 import StageFinish from './stages/StageFinish.vue'
 
 const props = defineProps({ id: { type: String, required: true } })
@@ -30,6 +31,7 @@ const order = computed(() => [
   'material',
   ...(wo.value.hasOperations ? ['operasi'] : []),
   'prepacking',
+  'postpacking',
   'finish'
 ])
 
@@ -59,6 +61,7 @@ const comps = {
   material: StageMaterial,
   operasi: StageOperasi,
   prepacking: StagePacking,
+  postpacking: StagePostPacking,
   finish: StageFinish
 }
 const stageComp = computed(() => comps[displayed.value])
@@ -67,8 +70,9 @@ const statusClass = computed(() =>
   wo.value.status === 'Draft' ? 'b-draft' : wo.value.status === 'Completed' ? 'b-done' : 'b-run'
 )
 
-// Barang Jadi manufaktur = Good Qty Pre-Packing (masuk Cold Storage)
-const fgQty = computed(() => wo.value.producedStockQty)
+// Barang Jadi manufaktur = Good Qty Post-Packing (masuk Cold Storage);
+// fallback Pre-Packing hanya untuk WO completed legacy
+const fgQty = computed(() => producedQty(wo.value))
 const plan = computed(() => qtyStack(wo.value.plannedStockQty, wo.value))
 
 // chip WO aktif langsung tercenter di strip switcher saat halaman dibuka

@@ -34,6 +34,7 @@ LIST_FIELDS = [
 	"custom_conversion_factor",
 	"custom_qty_in_uom",
 	"custom_prepacking_confirmed",
+	"custom_postpacking_confirmed",
 	"custom_adonan_ke",
 	"skip_transfer",
 ]
@@ -42,6 +43,7 @@ STAGE_PERSIAPAN = "persiapan"
 STAGE_MATERIAL = "material"
 STAGE_OPERASI = "operasi"
 STAGE_PREPACKING = "pre_packing"
+STAGE_POST_PACKING = "post_packing"
 STAGE_FINISH = "finish"
 STAGE_SELESAI = "selesai"
 STAGE_CANCELLED = "cancelled"
@@ -102,6 +104,8 @@ def derive_stage(wo, operations=None):
 
 	if not wo.get("custom_prepacking_confirmed"):
 		return STAGE_PREPACKING
+	if not wo.get("custom_postpacking_confirmed"):
+		return STAGE_POST_PACKING
 	return STAGE_FINISH
 
 
@@ -127,13 +131,17 @@ def _stage_filters(stage):
 	elif stage == STAGE_MATERIAL:
 		filters.append([DOCTYPE, "docstatus", "=", 1])
 		filters.append([DOCTYPE, "status", "not in", ["Completed", "Stopped", "Closed"]])
-	elif stage in (STAGE_OPERASI, STAGE_PREPACKING, STAGE_FINISH):
+	elif stage in (STAGE_OPERASI, STAGE_PREPACKING, STAGE_POST_PACKING, STAGE_FINISH):
 		filters.append([DOCTYPE, "docstatus", "=", 1])
 		filters.append([DOCTYPE, "status", "not in", ["Completed", "Stopped", "Closed"]])
 		if stage == STAGE_FINISH:
 			filters.append([DOCTYPE, "custom_prepacking_confirmed", "=", 1])
+			filters.append([DOCTYPE, "custom_postpacking_confirmed", "=", 1])
 		elif stage == STAGE_PREPACKING:
 			filters.append([DOCTYPE, "custom_prepacking_confirmed", "=", 0])
+		elif stage == STAGE_POST_PACKING:
+			filters.append([DOCTYPE, "custom_prepacking_confirmed", "=", 1])
+			filters.append([DOCTYPE, "custom_postpacking_confirmed", "=", 0])
 	elif stage == STAGE_SELESAI:
 		filters.append([DOCTYPE, "docstatus", "=", 1])
 		filters.append([DOCTYPE, "status", "=", "Completed"])
@@ -304,7 +312,9 @@ def wo_detail(name):
 		order_by="idx",
 	)
 
-	# display names for people fields (Link User stores the id)
+	# display names for people fields — FU10 made penimbang/qc_produksi free
+	# text, so this only decorates LEGACY rows whose stored value is a User id;
+	# free-text names fall through to the raw value
 	users = [d for d in (data.get("custom_nama_penimbang"), data.get("custom_qc_produksi"), data.get("custom_qc_packing")) if d]
 	full = frappe._dict(
 		[(u.name, u.full_name) for u in frappe.get_all(
@@ -339,7 +349,7 @@ PREP_FIELD_MAP = {
 	"adonan": "custom_adonan",  # Int
 	"jam_adonan": "custom_jam_adonan",  # Time
 	"suhu_adonan": "custom_suhu_adonan",  # Float
-	"penimbang": "custom_nama_penimbang",  # Link User
+	"penimbang": "custom_nama_penimbang",  # Data (person's name, FU10 — was Link User)
 	"jumlah_kru": "custom_jumlah_kru",  # Int
 	"leader": "custom_leader_produksi",  # Data (person's NAME, not a User/Int)
 }
@@ -354,13 +364,7 @@ def _validate_prep_values(values):
 		if value in (None, ""):
 			continue
 		fieldname = PREP_FIELD_MAP[key]
-		if key == "penimbang":
-			if not frappe.db.exists("User", value) or frappe.db.get_value(
-				"User", value, "enabled"
-			) in (0, None):
-				frappe.throw(_("Penimbang harus User aktif: {0}").format(value))
-			cleaned[fieldname] = value
-		elif key == "leader":
+		if key in ("penimbang", "leader"):
 			name = str(value).strip()
 			if not name:
 				continue
@@ -389,23 +393,32 @@ WAREHOUSE_DEFAULT_FIELDS = {
 	"scrap_warehouse": "custom_default_scrap_warehouse",
 }
 
+# T22: 5th default — MR Material Transfer serah terima target. Settings-only
+# (prepare() never fills it on the Work Order), so it lives outside
+# WAREHOUSE_DEFAULT_FIELDS which doubles as Work Order fieldnames.
+HANDOVER_WAREHOUSE_FIELD = "custom_default_handover_warehouse"
+
+SETTING_WAREHOUSE_FIELDS = {**WAREHOUSE_DEFAULT_FIELDS, "handover_warehouse": HANDOVER_WAREHOUSE_FIELD}
+
 
 def _warehouse_defaults():
 	return {
 		key: (frappe.db.get_single_value("Manufacturing Settings", fieldname) or None)
-		for key, fieldname in WAREHOUSE_DEFAULT_FIELDS.items()
+		for key, fieldname in SETTING_WAREHOUSE_FIELDS.items()
 	}
 
 
 @frappe.whitelist()
 def warehouse_defaults():
-	"""Read the Production App warehouse defaults."""
+	"""Read the Production App warehouse defaults (incl. handover). Open to any
+	logged-in workspace user; writing is the permission gate."""
 	return _warehouse_defaults()
 
 
 @frappe.whitelist()
 def warehouse_defaults_save(
-	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None
+	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None,
+	handover_warehouse=None,
 ):
 	"""Save the Production App warehouse defaults (empty string clears)."""
 	frappe.has_permission("Manufacturing Settings", "write", throw=True)
@@ -414,6 +427,7 @@ def warehouse_defaults_save(
 		"wip_warehouse": wip_warehouse,
 		"fg_warehouse": fg_warehouse,
 		"scrap_warehouse": scrap_warehouse,
+		"handover_warehouse": handover_warehouse,
 	}
 	for key, value in payload.items():
 		if value in (None, ""):
@@ -422,7 +436,7 @@ def warehouse_defaults_save(
 			frappe.throw(_("Gudang tidak ditemukan: {0}").format(value))
 	settings = frappe.get_doc("Manufacturing Settings")
 	for key, value in payload.items():
-		settings.set(WAREHOUSE_DEFAULT_FIELDS[key], value)
+		settings.set(SETTING_WAREHOUSE_FIELDS[key], value)
 	settings.save()
 	return _warehouse_defaults()
 
@@ -639,7 +653,7 @@ PREPACKING_FIELD_MAP = {
 	"trial": "custom_trial_qty_prepacking",
 	"sisa": "custom_sisa_qty_prepacking",
 	"jam_pembekuan": "custom_jam_pembekuan",  # Time
-	"qc_produksi": "custom_qc_produksi",  # Link User
+	"qc_produksi": "custom_qc_produksi",  # Data (person's name, FU10 — was Link User)
 }
 
 
@@ -662,13 +676,15 @@ def _validate_prepacking(values):
 			if amount != amount or amount in (float("inf"), float("-inf")) or amount < 0:
 				frappe.throw(_("{0} harus angka desimal >= 0").format(key))
 			cleaned[fieldname] = amount
-		elif key == "qc_produksi":
-			if not frappe.db.exists("User", value) or not frappe.db.get_value("User", value, "enabled"):
-				frappe.throw(_("QC Produksi harus User aktif: {0}").format(value))
-			cleaned[fieldname] = value
-		elif key == "jam_pembekuan":
-			frappe.utils.get_time(value)  # raises on garbage
-			cleaned[fieldname] = value
+		elif key in ("qc_produksi", "jam_pembekuan"):
+			if key == "qc_produksi":
+				name = str(value).strip()
+				if not name:
+					continue
+				cleaned[fieldname] = name  # person's name as text (FU10)
+			else:
+				frappe.utils.get_time(value)  # raises on garbage
+				cleaned[fieldname] = value
 	return cleaned
 
 
@@ -684,7 +700,11 @@ def confirm_prepacking(name, values):
 		frappe.throw(_("Pre-packing tidak tersedia untuk Work Order {0}").format(name))
 
 	stage = derive_stage(wo)
-	if stage not in (STAGE_PREPACKING, STAGE_FINISH):
+	if stage not in (STAGE_PREPACKING, STAGE_POST_PACKING):
+		if stage == STAGE_FINISH:
+			frappe.throw(
+				_("Pre-packing tidak bisa diubah lagi: Post-Packing sudah dikonfirmasi, perbaikan dilakukan lewat Post-Packing")
+			)
 		frappe.throw(
 			_("Pre-packing belum tersedia: tahap sekarang {0} (selesaikan material/operasi dulu)").format(stage)
 		)
@@ -705,18 +725,110 @@ def confirm_prepacking(name, values):
 	}
 
 
+# ------------------------------------------- T27 postpacking confirmation
+
+POSTPACKING_FIELD_MAP = {
+	"good": "custom_good_qty_postpacking",
+	"reject": "custom_reject_qty_postpacking",
+	"trial": "custom_trial_qty_postpacking",
+	"jam_packing": "custom_jam_packing",  # Time
+	"qc_packing": "custom_qc_packing",  # Link User
+}
+# "sisa" is never in the map — it is always computed server-side.
+
+
+def _validate_postpacking(values, pre_good):
+	"""Validate the ENTIRE payload before any mutation. Returns cleaned dict
+	including the server-computed sisa. `pre_good` is the confirmed prepacking
+	good quantity, read from the WO row the caller locked for update."""
+	if pre_good <= 0:
+		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
+	cleaned = {}
+	for key, value in values.items():
+		if key not in POSTPACKING_FIELD_MAP:
+			frappe.throw(_("Field post-packing tidak dikenal: {0}").format(key))
+		if value in (None, ""):
+			continue
+		fieldname = POSTPACKING_FIELD_MAP[key]
+		if key == "good":
+			good = float(value)
+			if good != good or good in (float("inf"), float("-inf")) or good <= 0:
+				frappe.throw(_("Good Qty post-packing harus angka lebih besar dari 0"))
+			if good > pre_good:
+				frappe.throw(_("Good Qty post-packing melebihi Good Qty pre-packing"))
+			cleaned[fieldname] = good
+		elif key in ("reject", "trial"):
+			amount = float(value)
+			if amount != amount or amount in (float("inf"), float("-inf")) or amount < 0:
+				frappe.throw(_("{0} harus angka desimal >= 0").format(key))
+			cleaned[fieldname] = amount
+		elif key == "qc_packing":
+			if not frappe.db.exists("User", value) or not frappe.db.get_value("User", value, "enabled"):
+				frappe.throw(_("QC Packing harus User aktif: {0}").format(value))
+			cleaned[fieldname] = value
+		elif key == "jam_packing":
+			frappe.utils.get_time(value)  # raises on garbage
+			cleaned[fieldname] = value
+
+	if POSTPACKING_FIELD_MAP["good"] not in cleaned:
+		frappe.throw(_("Good Qty post-packing wajib diisi (> 0)"))
+	good = cleaned[POSTPACKING_FIELD_MAP["good"]]
+	reject = flt(cleaned.get("custom_reject_qty_postpacking"))
+	trial = flt(cleaned.get("custom_trial_qty_postpacking"))
+	if good + reject + trial > pre_good:
+		frappe.throw(_("Total Good + Reject + Trial melebihi Good Qty pre-packing"))
+	cleaned["custom_sisa_qty_postpacking"] = pre_good - good - reject - trial
+	return cleaned
+
+
+@frappe.whitelist()
+def confirm_postpacking(name, values):
+	"""Save/confirm the postpacking block. good must be finite, > 0 and
+	<= confirmed prepacking good — the validation completes BEFORE anything is
+	written. Sisa is computed server-side (pre_good - good - reject - trial).
+	Re-edit at the finish stage is allowed; prepacking fields are never
+	touched here."""
+	frappe.has_permission(DOCTYPE, "write", doc=name, throw=True)
+	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
+	wo = frappe.get_doc(DOCTYPE, name)
+	if wo.docstatus != 1 or wo.status in ("Stopped", "Closed"):
+		frappe.throw(_("Post-Packing tidak tersedia untuk Work Order {0}").format(name))
+
+	stage = derive_stage(wo)
+	if stage not in (STAGE_POST_PACKING, STAGE_FINISH):
+		frappe.throw(
+			_("Post-Packing belum tersedia: tahap sekarang {0}").format(stage)
+		)
+	if not wo.custom_prepacking_confirmed:
+		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
+
+	cleaned = _validate_postpacking(frappe.parse_json(values) or {}, flt(wo.custom_good_qty_prepacking))
+
+	for fieldname, value in cleaned.items():
+		wo.set(fieldname, value)
+	wo.set("custom_postpacking_confirmed", 1)
+	wo.save()  # update-after-submit: native allow_on_submit enforcement
+
+	return {
+		"name": wo.name,
+		"stage": derive_stage(wo),
+		"good": flt(wo.custom_good_qty_postpacking),
+		"sisa": flt(wo.custom_sisa_qty_postpacking),
+	}
+
+
 # ------------------------------------------------------- T11 finish action
 
 @frappe.whitelist()
 def finish(name):
-	"""Submit the Manufacture for the confirmed prepacking quantity.
+	"""Submit the Manufacture for the confirmed postpacking quantity.
 
 	Re-validates every prerequisite server-side, locks the WO row, reuses the
 	proven T03/T04 transaction shape: native entry builder with qty = confirmed
-	good, raw-material rows restored to the transferred (planned) quantities,
-	finished-goods rows only on the real FG item, batch handling left to the
-	native flow + bakery_manufacturing override. Atomic: insert+submit in one
-	request, so any failure rolls back everything."""
+	postpacking good, raw-material rows restored to the transferred (planned)
+	quantities, finished-goods rows only on the real FG item, batch handling
+	left to the native flow + bakery_manufacturing override. Atomic:
+	insert+submit in one request, so any failure rolls back everything."""
 	from erpnext.manufacturing.doctype.work_order.work_order import (
 		make_stock_entry as make_wo_stock_entry,
 	)
@@ -726,9 +838,9 @@ def finish(name):
 	if wo.docstatus != 1 or wo.status in ("Stopped", "Closed"):
 		frappe.throw(_("Finish tidak tersedia untuk Work Order {0}").format(name))
 
-	good = flt(wo.custom_good_qty_prepacking)
-	if not wo.custom_prepacking_confirmed or good <= 0:
-		frappe.throw(_("Pre-packing harus dikonfirmasi dengan Good Qty > 0 sebelum finish"))
+	good = flt(wo.custom_good_qty_postpacking)
+	if not wo.custom_postpacking_confirmed or good <= 0:
+		frappe.throw(_("Post-Packing harus dikonfirmasi dengan Good Qty > 0 sebelum finish"))
 
 	# native guards re-checked here for clear errors before building the entry
 	allowance = flt(

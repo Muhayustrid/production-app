@@ -9,8 +9,13 @@ const q = ref('')
 const fProduct = ref('all')
 const fStatus = ref('all')
 const fStage = ref('all')
-const fFrom = ref('')
-const fTo = ref('')
+// tanggal lokal browser (bukan UTC) — default daftar = WO hari ini
+const todayISO = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const fFrom = ref(todayISO())
+const fTo = ref(todayISO())
 const filterOpen = ref(false)
 
 const products = computed(() => [...new Set(workOrders.map((w) => w.product))])
@@ -30,6 +35,11 @@ function clearFilters() {
   fProduct.value = 'all'
   fStatus.value = 'all'
   fStage.value = 'all'
+  // kembali ke default: jadwal hari ini
+  fFrom.value = todayISO()
+  fTo.value = todayISO()
+}
+function allDates() {
   fFrom.value = ''
   fTo.value = ''
 }
@@ -121,6 +131,7 @@ function stageLabel(w) {
               <option value="material">Material</option>
               <option value="operasi">Operasi</option>
               <option value="prepacking">Pre-Packing</option>
+              <option value="postpacking">Post-Packing</option>
               <option value="finish">Finish</option>
               <option value="done">Selesai</option>
             </select>
@@ -134,6 +145,10 @@ function stageLabel(w) {
             <label>Jadwal s.d.</label>
             <input v-model="fTo" class="input" type="date" />
           </div>
+        </div>
+        <div class="frow2">
+          <button class="linkbtn" @click="fFrom = todayISO(); fTo = todayISO()">Hari ini</button>
+          <button class="linkbtn" @click="allDates">Semua tanggal</button>
         </div>
         <button class="linkbtn" @click="clearFilters">Hapus semua filter</button>
         </div>
@@ -201,7 +216,7 @@ function stageLabel(w) {
     <div v-if="!filtered.length" class="empty-inset">
       <span class="eico"><SearchX :size="19" :stroke-width="1.8" /></span>
       <p class="etitle">Tidak ada perintah kerja</p>
-      <p class="ehint">Coba ubah kata kunci pencarian atau hapus filter aktif.</p>
+      <p class="ehint">Default menampilkan jadwal hari ini — ubah filter Jadwal, pilih Semua tanggal, atau hapus filter aktif.</p>
     </div>
   </div>
 </template>

@@ -8,14 +8,16 @@ const fields = [
   { key: 'source_warehouse', label: 'Source Warehouse', desc: 'Lokasi bahan baku tersedia.' },
   { key: 'wip_warehouse', label: 'Work-in-Progress Warehouse', desc: 'Lokasi operasi produksi dijalankan.' },
   { key: 'fg_warehouse', label: 'Target Warehouse', desc: 'Lokasi barang jadi disimpan.' },
-  { key: 'scrap_warehouse', label: 'Scrap Warehouse', desc: 'Lokasi material scrap disimpan.' }
+  { key: 'scrap_warehouse', label: 'Scrap Warehouse', desc: 'Lokasi material scrap disimpan.' },
+  { key: 'handover_warehouse', label: 'Gudang serah terima / barang jadi', desc: 'Tujuan pengiriman serah terima (halaman Stock Entry).' }
 ]
 
 const form = reactive({
   source_warehouse: '',
   wip_warehouse: '',
   fg_warehouse: '',
-  scrap_warehouse: ''
+  scrap_warehouse: '',
+  handover_warehouse: ''
 })
 const loading = ref(true)
 const saving = ref(false)

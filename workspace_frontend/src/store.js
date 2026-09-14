@@ -5,7 +5,8 @@ import { reactive } from 'vue'
 // Semua data & stage datang dari server: /api/method/production_app.api...
 // Frontend TIDAK PERNAH menurunkan stage sendiri; setelah tiap aksi, state
 // lokal di-update dari respons server (server = sumber kebenaran).
-// Serah terima (handover) sengaja TIDAK diikutkan di rilis ini.
+// Serah terima (handover) T25: papan selalu diganti dari payload `board`
+// server (HANDOVER_PLAN §4.1) — UI tidak pernah menulis state lane sendiri.
 // ============================================================================
 
 export const STAGE_LABELS = {
@@ -13,6 +14,7 @@ export const STAGE_LABELS = {
   material: 'Material',
   operasi: 'Operasi',
   pre_packing: 'Pre-Packing',
+  post_packing: 'Post-Packing',
   finish: 'Finish',
   selesai: 'Selesai',
   cancelled: 'Dibatalkan',
@@ -20,12 +22,14 @@ export const STAGE_LABELS = {
 }
 // kompatibilitas panggilan lama yang memakai kunci mock
 STAGE_LABELS.prepacking = 'Pre-Packing'
+STAGE_LABELS.postpacking = 'Post-Packing'
 STAGE_LABELS.completed = 'Selesai'
 
 // stage server -> kunci internal mockup (komponen tak perlu tahu bedanya)
 const STAGE_UI = {
   persiapan: 'persiapan', material: 'material', operasi: 'operasi',
-  pre_packing: 'prepacking', finish: 'finish', selesai: 'completed',
+  pre_packing: 'prepacking', post_packing: 'postpacking',
+  finish: 'finish', selesai: 'completed',
   cancelled: 'cancelled', review: 'review'
 }
 
@@ -116,7 +120,9 @@ export function mapDetail(d) {
       trialQty: d.custom_trial_qty_postpacking ?? null,
       sisaQty: d.custom_sisa_qty_postpacking ?? null,
       jam: hhmm(d.custom_jam_packing),
-      qc: d.custom_qc_packing_full || d.custom_qc_packing || ''
+      qc: d.custom_qc_packing || '',
+      qcLabel: d.custom_qc_packing_full || d.custom_qc_packing || '',
+      confirmed: !!d.custom_postpacking_confirmed
     },
     finishedAt: d.actual_end_date ? String(d.actual_end_date).slice(0, 10) : ''
   }
@@ -189,8 +195,10 @@ export function materialComplete(w) {
 export function opsAllDone(w) {
   return !!w.operations && w.operations.every((o) => o.status === 'done')
 }
+// Barang Jadi manufaktur = Good Qty Post-Packing; fallback Pre-Packing hanya
+// DISPLAY untuk WO completed legacy (tanpa backfill) — POSTPACKING_PLAN §7.
 export function producedQty(w) {
-  return w.prepacking?.goodQty ?? 0
+  return w.postpacking?.goodQty ?? w.prepacking?.goodQty ?? 0
 }
 
 // Shared by workspace panels and kanban dialogs. Errors remain visible in the form.
@@ -235,4 +243,115 @@ export function savePrePacking(w, data) {
     jam_pembekuan: data.jam, qc_produksi: data.qc
   } })
 }
+// sisa tidak dikirim — dihitung server (pre_good - good - reject - trial)
+export function confirmPostPacking(w, data) {
+  return perform(w, 'confirm_postpacking', { values: {
+    good: data.goodQty, reject: data.rejectQty, trial: data.trialQty,
+    jam_packing: data.jam, qc_packing: data.qc
+  } })
+}
 export function completeProduction(w) { return perform(w, 'finish') }
+
+// ============================================================================
+// SERAH TERIMA / STOCK ENTRY (T25) — papan 4 lane dari server (T23/T24).
+// Kontrak payload: .superpowers/sdd/HANDOVER_PLAN/task-23-report.md.
+// ============================================================================
+
+export const handoverState = reactive({ loading: false, error: null, loaded: false, pending: null })
+export const handoverBoard = reactive({ targetWarehouse: null, roles: { is_gudang: false, is_produksi: false } })
+export const handoverLots = reactive([])
+export const handoverRequests = reactive([])
+
+// lot/request yang sudah dipetakan dobel sebagai objek satuan QtyInput
+// (qtyInPack/displayUom/stockUom/wholeNumber) — pola sama dengan :units="wo".
+function mapLot(l) {
+  return {
+    workOrder: l.work_order, batch: l.batch, batchless: !!l.batchless, item: l.item_name, itemCode: l.item_code,
+    stockQty: l.qty, adonanKe: l.adonan_ke, stockUom: l.stock_uom,
+    displayUom: l.display_uom, qtyInPack: l.display_conversion_factor,
+    wholeNumber: !!l.stock_uom_whole_number, uomWarning: l.uom_warning,
+    physicalQty: l.physical_qty, reservedQty: l.reserved_qty, availableQty: l.available_qty,
+    warehouse: l.warehouse, enteredAt: l.entered_at,
+    hasOlderLotSameItem: !!l.has_older_lot_same_item,
+    unsupported: !!l.unsupported, unsupportedReason: l.unsupported_reason
+  }
+}
+
+function mapRequest(r) {
+  return {
+    id: r.mr, materialRequest: r.mr, workOrder: r.work_order,
+    item: r.item_name, itemCode: r.item_code,
+    requestedQtyPcs: r.qty, stockUom: r.stock_uom, qtyInPack: r.qty_in_pack,
+    adonanKe: r.adonan_ke, batch: r.batch,
+    box1: r.box_1, box2: r.box_2, boxes: r.boxes || [],
+    lane: r.lane, flag: r.flag,
+    fromWarehouse: r.from_warehouse, toWarehouse: r.to_warehouse,
+    postPacking: r.postpacking ? {
+      goodQty: r.postpacking.good, rejectQty: r.postpacking.reject,
+      trialQty: r.postpacking.trial, sisaQty: r.postpacking.sisa,
+      jam: hhmm(r.postpacking.jam_packing), qc: r.postpacking.qc_packing,
+      qcLabel: r.postpacking.qc_packing_name, confirmed: !!r.postpacking.confirmed
+    } : null,
+    stockEntry: r.stock_entry, sentAt: r.sent_at, ownerName: r.owner_name
+  }
+}
+
+function applyBoard(board) {
+  handoverBoard.targetWarehouse = board.target_warehouse || null
+  handoverBoard.roles = board.roles || { is_gudang: false, is_produksi: false }
+  handoverLots.splice(0, handoverLots.length, ...board.lots.map(mapLot))
+  handoverRequests.splice(0, handoverRequests.length, ...board.requests.map(mapRequest))
+}
+
+export async function loadBoard() {
+  handoverState.loading = true
+  handoverState.error = null
+  try {
+    applyBoard(await call('production_app.api.handover.handover_board'))
+    handoverState.loaded = true
+  } catch (e) {
+    handoverState.error = e.message
+  } finally {
+    handoverState.loading = false
+  }
+}
+
+async function handoverAction(method, args) {
+  if (handoverState.pending) return null
+  handoverState.pending = method
+  try {
+    const res = await call(`production_app.api.handover.${method}`, args)
+    applyBoard(res.board) // server truth menggantikan seluruh papan
+    return res
+  } finally {
+    handoverState.pending = null
+  }
+}
+
+export function createRequest(workOrder, qty) {
+  return handoverAction('create_request', { work_order: workOrder, qty })
+}
+export function cancelRequest(materialRequest) {
+  return handoverAction('cancel_request', { material_request: materialRequest })
+}
+// kwargs wajib: signature aktual (good_qty, jam_packing, qc_packing, reject_qty=0,
+// trial_qty=0, box_1=None, box_2=None) — box diisi produksi di sini, bukan di request
+export function savePostPacking(materialRequest, v) {
+  return handoverAction('save_post_packing', {
+    material_request: materialRequest, good_qty: v.goodQty, jam_packing: v.jam,
+    qc_packing: v.qc, reject_qty: v.rejectQty, trial_qty: v.trialQty,
+    box_1: String(v.box1 || '').trim() || null,
+    box_2: String(v.box2 || '').trim() || null
+  })
+}
+export function sendHandover(materialRequest) {
+  return handoverAction('send_handover', { material_request: materialRequest })
+}
+
+export function lotForWo(woId) {
+  return handoverLots.find((l) => l.workOrder === woId) || null
+}
+// fisik = saldo ledger live (server); reservasi/tersedia juga dari server (§4.1)
+export const lotRemainingPcs = (lot) => lot?.physicalQty
+export const lotReservedPcs = (lot) => lot?.reservedQty ?? 0
+export const lotAvailablePcs = (lot) => lot?.availableQty

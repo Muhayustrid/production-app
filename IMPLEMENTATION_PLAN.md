@@ -15,6 +15,7 @@ Execution documents: `TASKS.md` defines the ordered work packages; `PROJECT_STAT
   - **Operations may complete below plan**: the shortfall is recorded as susut (`process_loss_qty`) when closing the Job Card; qty + susut must cover the remaining card quantity. Stage Operasi passes on the native `operation.status == "Completed"`.
   - **Legacy Work Orders are shown honestly**: empty step fields are displayed as not recorded ("Kolom kosong berarti belum tercatat"); no backfilling.
 - ADDENDUM 2026-09-13 (warehouse defaults, user-requested feature): the workspace "Pengaturan" menu holds four warehouse defaults (Source / WIP / Target / Scrap), stored as Custom Fields on Manufacturing Settings and editable only by users with write permission there. `prepare()` applies them to Work Orders whose corresponding warehouse fields are still empty (settings first, then the Item defaults), never overriding existing values.
+- **ADDENDUM 2026-09-14 (Post-Packing stage, explicit user request; full contract `POSTPACKING_PLAN.md`)**: Work Order flow becomes Persiapan → Material → Operasi? → **Pre-Packing → Post-Packing** → Finish → Selesai. **Finished-goods quantity of the Manufacture Stock Entry is now `custom_good_qty_postpacking`** (confirmed via workspace action `confirm_postpacking`, capped by confirmed good pre-packing), superseding the two prepacking-sourcing bullets below and the §6 row "Postpacking differs". Post-packing confirmation is now a prerequisite for finishing; good post-packing must be > 0 (no zero-yield manufacture). The handover `save_post_packing` no longer mirrors qty/jam/qc postpacking to the Work Order (single-writer rule; Box 1/2 mirror retained). Legacy in-flight WOs land on the Post-Packing stage honestly (no backfill); legacy completed WOs display the pre-packing fallback.
 
 ## 1. Approved outcome and scope
 
@@ -85,11 +86,11 @@ Keep this override in `bakery_manufacturing`. Do not duplicate it, register a co
 |---|---|
 | Adonan ke | Reuse `custom_adonan_ke`; do not repurpose `custom_adonan` |
 | Jam/suhu adonan | Reuse `custom_jam_adonan`, `custom_suhu_adonan` |
-| Penimbang | Reuse `custom_nama_penimbang`, Link User; show user names but save valid User IDs |
+| Penimbang | Reuse `custom_nama_penimbang`; FU10 2026-09-14: Data teks nama orang (seperti Leader), sebelumnya Link User; nilai lama dipertahankan |
 | Jumlah kru | Reuse `custom_jumlah_kru` |
 | Leader produksi | Reuse `custom_leader_produksi`, migrate Int to Data for a person's name; preserve old values as text, do not invent names for old numbers |
 | Prepacking | Reuse all four `custom_*_qty_prepacking` fields |
-| Pembekuan / QC | Reuse `custom_jam_pembekuan` and `custom_qc_produksi` |
+| Pembekuan / QC | Reuse `custom_jam_pembekuan` and `custom_qc_produksi`; FU10 2026-09-14: QC Produksi jadi Data teks nama orang (seperti Leader), sebelumnya Link User |
 | Box 1 / Box 2 | `custom_box_1`, `custom_box_2`, Float weights in kg; labels Box 1 (kg), Box 2 (kg) |
 
 Implementation default for unspecified Box UI details: optional inputs in Pre-Packing, saved with that form. Accept finite non-negative decimal kg. No pack/PCS conversion for these fields, no conversion between weight and finished-goods quantity, no required equality to any total, and no stock movement. Do not invent gross/tare/net calculations. The kg meaning is confirmed; optional placement is an implementation default, not a claimed user instruction.

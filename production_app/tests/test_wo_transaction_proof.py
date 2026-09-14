@@ -442,13 +442,24 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 
 		wo.db_set("custom_prepacking_confirmed", 1)
 		wo.reload()
+		self.assertEqual(derive_stage(wo), "post_packing")
+
+		wo.db_set("custom_postpacking_confirmed", 1)
+		wo.reload()
 		self.assertEqual(derive_stage(wo), "finish")
 
 		detail = wo_detail(wo.name)
 		self.assertEqual(detail["stage"], "finish")
 		self.assertEqual(flt(detail["remaining_transfer"]), 0)
 		self.assertEqual(flt(detail["remaining_produce"]), 100)
-		self.assertEqual(flt(detail["max_allowed_qty"]), 125)
+		# allowance comes from the LIVE Manufacturing Settings (the operator may
+		# change it — observed 25% at T03, 50% on 2026-09-14); never hardcode
+		allowance = flt(
+			frappe.db.get_single_value(
+				"Manufacturing Settings", "overproduction_percentage_for_work_order"
+			)
+		)
+		self.assertEqual(flt(detail["max_allowed_qty"]), 100 * (1 + allowance / 100))
 
 	def test_t06_list_filter_and_operational_wo_mapping(self):
 		from production_app.api.work_order import wo_detail, wo_list
@@ -493,7 +504,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 				"adonan": 3,
 				"jam_adonan": "04:30:00",
 				"suhu_adonan": 28.5,
-				"penimbang": "Administrator",
+				"penimbang": "Rina Wijaya",
 				"jumlah_kru": 4,
 				"leader": "Budi Santoso",
 			},
@@ -505,7 +516,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self.assertEqual(wo.custom_adonan_ke, "3")
 		self.assertEqual(str(wo.custom_jam_adonan), "4:30:00")  # TIME -> timedelta
 		self.assertEqual(flt(wo.custom_suhu_adonan), 28.5)
-		self.assertEqual(wo.custom_nama_penimbang, "Administrator")
+		self.assertEqual(wo.custom_nama_penimbang, "Rina Wijaya")  # FU10: free-text name
 		self.assertEqual(wo.custom_jumlah_kru, 4)
 		self.assertEqual(wo.custom_leader_produksi, "Budi Santoso")
 		self.assertEqual(result["job_cards"], [])
@@ -518,18 +529,22 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self.assertEqual(flt(wo.custom_suhu_adonan), 29.0)
 		self.assertEqual(len(result2["job_cards"]), 0)
 
-	def test_t07_prepare_invalid_penimbang_rolls_back(self):
+	def test_t07_prepare_invalid_input_rolls_back(self):
+		"""FU10: penimbang is free text now, so the rollback proof uses a
+		still-validated field (garbage time) — validation fires BEFORE any
+		write and nothing from the payload persists."""
 		from production_app.api.work_order import prepare
 
 		wo = self._make_wo(100, submit=False)
-		with self.assertRaises(frappe.ValidationError):
+		with self.assertRaises(ValueError):  # get_time raises the parser error as-is (T27 contract)
 			prepare(
 				wo.name,
-				values={"penimbang": "bukan-user@example.com", "leader": "Budi"},
+				values={"penimbang": "Rina Wijaya", "leader": "Budi", "jam_adonan": "bukan-jam"},
 			)
 		wo.reload()
 		# nothing persisted from the failed payload
 		self.assertIsNone(wo.get("custom_leader_produksi"))
+		self.assertIsNone(wo.get("custom_nama_penimbang"))
 		self.assertEqual(wo.docstatus, 0)
 
 	def test_t08_transfer_once_and_repeat_safe(self):
@@ -689,14 +704,16 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 				"trial": 0,
 				"sisa": 0,
 				"jam_pembekuan": "09:15:00",
-				"qc_produksi": "Administrator",
+				"qc_produksi": "Joko Prasetyo",
 			},
 		)
-		self.assertEqual(result["stage"], "finish")
+		# T27 contract: prepacking confirmed -> post_packing (not finish)
+		self.assertEqual(result["stage"], "post_packing")
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_prepacking), 100)
 		self.assertEqual(wo.custom_reject_qty_prepacking, 0)
 		self.assertEqual(wo.custom_prepacking_confirmed, 1)
+		self.assertEqual(wo.custom_qc_produksi, "Joko Prasetyo")  # FU10: free-text name
 		self.assertEqual(str(wo.custom_jam_pembekuan), "9:15:00")
 
 		# zero good must be rejected with NOTHING changed
@@ -713,7 +730,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		))
 
 		detail = wo_detail(wo.name)
-		self.assertEqual(detail["stage"], "finish")
+		self.assertEqual(detail["stage"], "post_packing")
 
 	def test_t10_negative_and_stage_guards(self):
 		from production_app.api.work_order import confirm_prepacking
@@ -729,8 +746,204 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self.assertEqual(flt(wo.get("custom_good_qty_prepacking")), 0)  # unchanged default
 		self.assertFalse(wo.custom_prepacking_confirmed)
 
+	# ------------------------------------------------- T27 postpacking stage
+
+	def _postpacking_ready_wo(self, planned_qty=100):
+		"""WO at the post_packing stage: transferred + prepacking confirmed."""
+		from production_app.api.work_order import confirm_prepacking, transfer_materials
+
+		self._receipt(self.rm1, 1000)
+		self._receipt(self.rm2, 1000)
+		wo = self._make_wo(planned_qty)
+		transfer_materials(wo.name)
+		confirm_prepacking(wo.name, values={"good": planned_qty, "reject": 0, "trial": 0})
+		wo.reload()
+		return wo
+
+	def test_t27_confirm_postpacking_valid_persists_everything(self):
+		from production_app.api.work_order import confirm_postpacking, wo_detail
+
+		wo = self._postpacking_ready_wo(100)  # pre good 100
+
+		result = confirm_postpacking(
+			wo.name,
+			values={
+				"good": 90,
+				"reject": 5,
+				"trial": 2,
+				"jam_packing": "14:30:00",
+				"qc_packing": "Administrator",
+			},
+		)
+		self.assertEqual(result["stage"], "finish")
+		self.assertEqual(result["good"], 90)
+		self.assertEqual(result["sisa"], 3)  # 100 - 90 - 5 - 2
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 90)
+		self.assertEqual(flt(wo.custom_reject_qty_postpacking), 5)
+		self.assertEqual(flt(wo.custom_trial_qty_postpacking), 2)
+		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 3)
+		self.assertEqual(str(wo.custom_jam_packing), "14:30:00")
+		self.assertEqual(wo.custom_qc_packing, "Administrator")
+		self.assertEqual(wo.custom_postpacking_confirmed, 1)
+		# prepacking block is never touched here
+		self.assertEqual(flt(wo.custom_good_qty_prepacking), 100)
+		self.assertEqual(wo.custom_prepacking_confirmed, 1)
+		self.assertEqual(wo_detail(wo.name)["stage"], "finish")
+
+	def test_t27_zero_good_rejected_writes_nothing(self):
+		from production_app.api.work_order import confirm_postpacking
+
+		wo = self._postpacking_ready_wo(100)
+		confirm_postpacking(wo.name, values={"good": 80})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 80)
+
+		# zero good and missing good: rejected BEFORE any write
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"good": 0})
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"reject": 1})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 80)
+		self.assertEqual(wo.custom_postpacking_confirmed, 1)
+		self.assertFalse(frappe.get_all(
+			"Stock Entry", filters={"work_order": wo.name, "purpose": "Manufacture"}
+		))
+
+	def test_t27_quantity_limits_rejected_then_valid(self):
+		from production_app.api.work_order import confirm_postpacking
+
+		wo = self._postpacking_ready_wo(100)
+
+		# good above pre_good
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"good": 101})
+		# good + reject + trial above pre_good
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"good": 90, "reject": 8, "trial": 3})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 0)
+		self.assertFalse(wo.custom_postpacking_confirmed)
+
+		# the boundary good + reject + trial == pre_good is valid (sisa 0)
+		confirm_postpacking(wo.name, values={"good": 90, "reject": 5, "trial": 5})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 90)
+		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 0)
+
+	def test_t27_zero_reject_trial_valid(self):
+		from production_app.api.work_order import confirm_postpacking
+
+		wo = self._postpacking_ready_wo(100)
+		result = confirm_postpacking(wo.name, values={"good": 100, "reject": 0, "trial": 0})
+		self.assertEqual(result["sisa"], 0)
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 100)
+		self.assertEqual(flt(wo.custom_reject_qty_postpacking), 0)
+		self.assertEqual(flt(wo.custom_trial_qty_postpacking), 0)
+
+	def test_t27_qc_time_and_unknown_field_validation(self):
+		from production_app.api.work_order import confirm_postpacking
+
+		wo = self._postpacking_ready_wo(100)
+
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"good": 50, "qc_packing": "bukan-user@example.com"})
+		with self.assertRaises(ValueError):  # get_time raises the parser error as-is
+			confirm_postpacking(wo.name, values={"good": 50, "jam_packing": "bukan-jam"})
+		# "sisa" is server-computed — never an accepted payload key
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"good": 50, "sisa": 5})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 0)
+		self.assertFalse(wo.custom_postpacking_confirmed)
+
+	def test_t27_stage_guards_and_reedit_at_finish(self):
+		from production_app.api.work_order import (
+			confirm_postpacking,
+			confirm_prepacking,
+			transfer_materials,
+		)
+
+		self._receipt(self.rm1, 1000)
+		self._receipt(self.rm2, 1000)
+		wo = self._make_wo(100)
+		transfer_materials(wo.name)  # stage pre_packing
+
+		# confirm_postpacking while still pre_packing -> rejected
+		with self.assertRaises(frappe.ValidationError):
+			confirm_postpacking(wo.name, values={"good": 50})
+		wo.reload()
+		self.assertFalse(wo.custom_postpacking_confirmed)
+
+		confirm_prepacking(wo.name, values={"good": 100})
+		confirm_postpacking(wo.name, values={"good": 80})  # stage now finish
+
+		# confirm_prepacking AFTER postpacking confirmed -> rejected, nothing changed
+		with self.assertRaises(frappe.ValidationError):
+			confirm_prepacking(wo.name, values={"good": 60})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_prepacking), 100)
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 80)
+
+		# re-edit postpacking at the finish stage is allowed
+		confirm_postpacking(wo.name, values={"good": 70, "reject": 5})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 70)
+		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 25)
+
+	def test_t27_finish_uses_postpacking_good(self):
+		from production_app.api.work_order import confirm_postpacking, finish
+
+		wo = self._postpacking_ready_wo(100)  # pre good 100
+		confirm_postpacking(wo.name, values={"good": 80, "reject": 0, "trial": 0})
+
+		result = finish(wo.name)
+		wo.reload()
+		self.assertEqual(flt(wo.produced_qty), 80)
+		self.assertEqual(flt(wo.process_loss_qty), 20)  # remaining target - post good
+		self.assertEqual(wo.status, "Completed")
+		self.assertEqual(result["stage"], "selesai")
+		self.assertIsNotNone(result["batch"])
+
+		se = frappe.get_doc("Stock Entry", result["stock_entry"])
+		fg_rows = self._fg_rows(se)
+		self.assertEqual(len(fg_rows), 1)
+		self.assertEqual(flt(fg_rows[0].qty), 80)
+		entries = self._fg_bundle_entries(se)
+		self.assertEqual(len(entries), 1)
+		self.assertEqual(flt(entries[0].qty), 80)
+		self.assertEqual(entries[0].batch_no, result["batch"])
+		# raw materials stay at the planned (transferred) quantity
+		self.assertEqual(self._rm_rows(se), [(self.rm1, 200.0), (self.rm2, 100.0)])
+
+	def test_t27_legacy_in_flight_wo_lands_on_post_packing(self):
+		from production_app.api.work_order import derive_stage, finish, transfer_materials, wo_list
+
+		self._receipt(self.rm1, 1000)
+		self._receipt(self.rm2, 1000)
+		wo = self._make_wo(100)
+		transfer_materials(wo.name)
+		wo.db_set("custom_prepacking_confirmed", 1)  # confirmed before this release
+		wo.reload()
+		self.assertEqual(derive_stage(wo), "post_packing")
+
+		with self.assertRaises(frappe.ValidationError):
+			finish(wo.name)
+		self.assertFalse(frappe.get_all(
+			"Stock Entry", filters={"work_order": wo.name, "purpose": "Manufacture"}
+		))
+
+		# the list serves this WO under post_packing, not finish
+		rows = wo_list(search=wo.name, stage="post_packing")
+		self.assertTrue(any(r.name == wo.name for r in rows))
+		rows = wo_list(search=wo.name, stage="finish")
+		self.assertFalse(any(r.name == wo.name for r in rows))
+
 	def test_t11_finish_and_over_limit_no_partial(self):
 		from production_app.api.work_order import (
+			confirm_postpacking,
 			confirm_prepacking,
 			finish,
 			transfer_materials,
@@ -741,6 +954,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		wo = self._make_wo(100)
 		transfer_materials(wo.name)
 		confirm_prepacking(wo.name, values={"good": 100, "reject": 0, "trial": 0, "sisa": 0})
+		confirm_postpacking(wo.name, values={"good": 100, "reject": 0, "trial": 0})
 
 		result = finish(wo.name)
 		wo.reload()
@@ -782,6 +996,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 
 	def test_t11_finish_below_plan_uses_confirmed_good(self):
 		from production_app.api.work_order import (
+			confirm_postpacking,
 			confirm_prepacking,
 			finish,
 			transfer_materials,
@@ -792,6 +1007,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		wo = self._make_wo(100)
 		transfer_materials(wo.name)
 		confirm_prepacking(wo.name, values={"good": 80, "reject": 5, "trial": 0, "sisa": 15})
+		confirm_postpacking(wo.name, values={"good": 80, "reject": 0, "trial": 0})
 
 		result = finish(wo.name)
 		wo.reload()
@@ -807,6 +1023,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 
 	def test_t11_finish_closes_legacy_partially_produced_wo(self):
 		from production_app.api.work_order import (
+			confirm_postpacking,
 			confirm_prepacking,
 			finish,
 			transfer_materials,
@@ -827,6 +1044,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 
 		# one-shot finish closes the remainder: good produced, shortfall = loss
 		confirm_prepacking(wo.name, values={"good": 30})
+		confirm_postpacking(wo.name, values={"good": 30, "reject": 0, "trial": 0})
 		result = finish(wo.name)
 		wo.reload()
 		self.assertEqual(flt(wo.produced_qty), 80)
@@ -897,6 +1115,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 
 	def test_t12_permission_denied_on_actions(self):
 		from production_app.api.work_order import (
+			confirm_postpacking,
 			confirm_prepacking,
 			finish,
 			transfer_materials,
@@ -916,6 +1135,8 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 			with self.assertRaises(frappe.PermissionError):
 				confirm_prepacking(wo.name, values={"good": 10})
 			with self.assertRaises(frappe.PermissionError):
+				confirm_postpacking(wo.name, values={"good": 10})
+			with self.assertRaises(frappe.PermissionError):
 				finish(wo.name)
 		finally:
 			frappe.set_user("Administrator")
@@ -928,6 +1149,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 
 	def test_t12_cancel_manufacture_recomputes_and_retry_is_safe(self):
 		from production_app.api.work_order import (
+			confirm_postpacking,
 			confirm_prepacking,
 			finish,
 			transfer_materials,
@@ -938,6 +1160,7 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		wo = self._make_wo(100)
 		transfer_materials(wo.name)
 		confirm_prepacking(wo.name, values={"good": 100, "reject": 0, "trial": 0, "sisa": 0})
+		confirm_postpacking(wo.name, values={"good": 100, "reject": 0, "trial": 0})
 		result = finish(wo.name)
 		se_name = result["stock_entry"]
 
@@ -1001,21 +1224,22 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		item.save()
 		self.assertIsNone(wo_detail(wo.name)["display_conversion_factor"])
 
-
-	def test_t05_box_kg_and_leader_name_persist_after_submit(self):
+	def test_t05_box_identifier_and_leader_name_persist_after_submit(self):
 		self._receipt(self.rm1, 1000)
 		self._receipt(self.rm2, 1000)
 		wo = self._make_wo(100)
 
 		# submitted WO: workspace fields must be editable via update-after-submit
-		wo.db_set("custom_box_1", 1.25)
-		wo.db_set("custom_box_2", 2.5)
+		# (Box 1/2 became TEXT identifiers written by the Serah Terima Post-Packing
+		# step — user decision 2026-09-14; upgrade.py migrated Float kg -> Data)
+		wo.db_set("custom_box_1", "BX-2026-01")
+		wo.db_set("custom_box_2", "BX-2026-02")
 		wo.db_set("custom_prepacking_confirmed", 1)
 		wo.db_set("custom_leader_produksi", "Budi Santoso")
 		wo.reload()
 
-		self.assertEqual(flt(wo.custom_box_1), 1.25)
-		self.assertEqual(flt(wo.custom_box_2), 2.5)
+		self.assertEqual(wo.custom_box_1, "BX-2026-01")
+		self.assertEqual(wo.custom_box_2, "BX-2026-02")
 		self.assertEqual(wo.custom_prepacking_confirmed, 1)
 		self.assertEqual(wo.custom_leader_produksi, "Budi Santoso")
 
@@ -1023,6 +1247,9 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		wo.db_set("custom_leader_produksi", "12")
 		wo.reload()
 		self.assertEqual(wo.custom_leader_produksi, "12")
+		wo.db_set("custom_box_1", "0123")
+		wo.reload()
+		self.assertEqual(wo.custom_box_1, "0123")
 
 
 class TestWorkOrderOperationsProof(IntegrationTestCase):
@@ -1320,6 +1547,7 @@ class TestWorkOrderOperationsProof(IntegrationTestCase):
 
 	def test_t09_complete_below_plan_with_loss_then_one_shot_finish(self):
 		from production_app.api.work_order import (
+			confirm_postpacking,
 			confirm_prepacking,
 			finish,
 			jobcard_complete,
@@ -1350,6 +1578,7 @@ class TestWorkOrderOperationsProof(IntegrationTestCase):
 		self.assertEqual(done["work_order_stage"], "pre_packing")
 
 		confirm_prepacking(wo.name, values={"good": 55, "reject": 5})
+		confirm_postpacking(wo.name, values={"good": 55, "reject": 0, "trial": 0})
 		result = finish(wo.name)
 		wo.reload()
 		self.assertEqual(flt(wo.produced_qty), 55)
