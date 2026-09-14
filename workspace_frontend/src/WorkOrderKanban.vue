@@ -97,7 +97,14 @@ async function openAction(w) {
   } catch (e) { state.actionError = e.message }
   finally { opening.value = false }
 }
-function close() { dialog.value.close(); selectedId.value = null }
+function close() {
+  if (dialog.value?.open) dialog.value.close()
+  selectedId.value = null
+}
+function cancelDialog(event) {
+  event.preventDefault()
+  close()
+}
 watch(() => selected.value?.stage, stage => {
   if (stage && openedStage.value && stage !== openedStage.value) close()
 })
@@ -165,15 +172,29 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
   </div>
 
 
-  <dialog ref="dialog" class="dialog" style="width:min(1000px, 95vw); max-height:90vh; overflow:auto" @cancel="selectedId = null">
+  <dialog
+    ref="dialog"
+    class="dialog kanban-dialog"
+    :aria-labelledby="selected ? 'kanban-dialog-title' : undefined"
+    @cancel="cancelDialog"
+  >
     <template v-if="selected">
-      <div class="dlg-actions"><strong>{{ selected.id }}</strong><button class="btn" :disabled="!!state.pending" @click="close">Tutup</button></div>
+      <header class="kanban-dialog-head">
+        <div class="kanban-dialog-heading">
+          <span class="kanban-dialog-eyebrow">Work Order</span>
+          <h2 id="kanban-dialog-title" class="mono">{{ selected.id }}</h2>
+          <p>{{ selected.product }}</p>
+        </div>
+        <button class="btn kanban-dialog-close" :disabled="!!state.pending" @click="close">Tutup</button>
+      </header>
       <p v-if="selected.uomWarning" class="callout">{{ selected.uomWarning }}</p>
       <p v-if="state.actionError" class="err" role="alert">{{ state.actionError }}</p>
-      <fieldset class="stage-form" :disabled="!!state.pending">
-        <component :is="panels[openedStage]" :key="selected.id + openedStage" :wo="selected" :stage-key="openedStage" />
-      </fieldset>
-      <p v-if="state.pending" role="status">Menyimpan ke ERPNext…</p>
+      <div class="kanban-dialog-content">
+        <fieldset class="stage-form" :disabled="!!state.pending">
+          <component :is="panels[openedStage]" :key="selected.id + openedStage" :wo="selected" :stage-key="openedStage" />
+        </fieldset>
+      </div>
+      <p v-if="state.pending" class="kanban-dialog-pending" role="status">Menyimpan ke ERPNext…</p>
     </template>
   </dialog>
 </template>

@@ -20,41 +20,47 @@ function itemStatus(i) {
 </script>
 
 <template>
-  <section class="panel">
+  <section class="panel material-panel" aria-labelledby="material-panel-title">
     <div class="panel-head">
-      <span class="p-ico"><Boxes :size="15" :stroke-width="1.9" /></span>
-      <h2>Material</h2>
-      <span class="lead">Material Transfer for Manufacture di ERPNext.</span>
-      <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
+      <span class="p-ico" aria-hidden="true"><Boxes :size="15" :stroke-width="1.9" /></span>
+      <div class="material-heading">
+        <h2 id="material-panel-title">Material</h2>
+        <span class="lead">Material Transfer for Manufacture di ERPNext.</span>
+      </div>
+      <span v-if="review" class="chip chip-info material-review">Tinjauan</span>
     </div>
 
     <div class="panel-body">
-      <div v-if="shortages.length" class="callout">
-        Kekurangan material pada {{ shortages.length }} bahan:
-        {{ shortages.map((i) => i.name).join(', ') }}.
+      <div v-if="shortages.length" class="callout material-status material-status-warn" role="status">
+        <strong>Kekurangan {{ shortages.length }} bahan</strong>
+        <span>{{ shortages.map((i) => i.name).join(', ') }}.</span>
       </div>
-      <div v-else class="callout ok">Semua material telah ditransfer.</div>
-
-      <div class="mat-thead" style="margin-top: 14px">
-        <span>Material</span>
-        <span style="text-align: right">Kebutuhan</span>
-        <span style="text-align: right">Ditransfer</span>
-        <span style="text-align: right">Kekurangan</span>
-        <span style="text-align: right">Status</span>
+      <div v-else class="callout ok material-status" role="status">
+        <strong>Material lengkap</strong>
+        <span>Semua material telah ditransfer.</span>
       </div>
 
-      <div v-for="i in wo.material.items" :key="i.code" class="mat-row">
-        <div class="mname">
-          {{ i.name }}
-          <small class="mono">{{ i.code }}</small>
+      <div class="mat-list" role="table" aria-label="Rincian material Work Order">
+        <div class="mat-thead" role="row">
+          <span role="columnheader">Material</span>
+          <span role="columnheader">Kebutuhan</span>
+          <span role="columnheader">Ditransfer</span>
+          <span role="columnheader">Kekurangan</span>
+          <span role="columnheader">Status</span>
         </div>
-        <div class="mnum m-req"><span class="mlabel">Kebutuhan</span>{{ fmtNum(i.required) }} {{ i.uom }}</div>
-        <div class="mnum m-trf"><span class="mlabel">Ditransfer</span>{{ fmtNum(i.transferred) }} {{ i.uom }}</div>
-        <div class="mnum m-short" :class="{ neg: i.required - i.transferred > 0 }">
-          <span class="mlabel">Kekurangan</span>{{ fmtNum(i.required - i.transferred) }} {{ i.uom }}
-        </div>
-        <div class="m-status" style="text-align: right">
-          <span class="chip" :class="itemStatus(i).cls">{{ itemStatus(i).label }}</span>
+        <div v-for="i in wo.material.items" :key="i.code" class="mat-row" role="row">
+          <div class="mname" role="cell">
+            {{ i.name }}
+            <small class="mono">{{ i.code }}</small>
+          </div>
+          <div class="mnum m-req" role="cell"><span class="mlabel">Kebutuhan</span>{{ fmtNum(i.required) }} {{ i.uom }}</div>
+          <div class="mnum m-trf" role="cell"><span class="mlabel">Ditransfer</span>{{ fmtNum(i.transferred) }} {{ i.uom }}</div>
+          <div class="mnum m-short" role="cell" :class="{ neg: i.required - i.transferred > 0 }">
+            <span class="mlabel">Kekurangan</span>{{ fmtNum(i.required - i.transferred) }} {{ i.uom }}
+          </div>
+          <div class="m-status" role="cell">
+            <span class="chip" :class="itemStatus(i).cls">{{ itemStatus(i).label }}</span>
+          </div>
         </div>
       </div>
     </div>

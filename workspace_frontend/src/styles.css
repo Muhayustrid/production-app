@@ -852,20 +852,42 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 
 /* ---- tabel material ---- */
+.material-heading { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.material-review { margin-left: auto; }
+.material-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0;
+}
+.material-status strong { color: inherit; font-weight: 700; }
+.material-status span { overflow-wrap: anywhere; }
 .mat-thead, .mat-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 118px 118px 118px 104px;
+  grid-template-columns: minmax(170px, 1fr) repeat(3, minmax(94px, 112px)) minmax(76px, 90px);
   gap: 12px;
   align-items: center;
-  padding: 9px 18px;
+  padding: 10px 18px;
 }
-.mat-thead { font-size: 11.5px; font-weight: 600; color: var(--faint); }
+.mat-thead {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--faint);
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+.mat-thead span:first-child { text-align: left; }
 .mat-row { border-top: 1px solid var(--line); }
-.mat-row .mname { min-width: 0; }
-.mat-row .mname small { display: block; color: var(--faint); }
-.mat-row .mnum { text-align: right; font-size: 13px; }
+.mat-row .mname { min-width: 0; overflow-wrap: anywhere; }
+.mat-row .mname small { display: block; color: var(--faint); overflow-wrap: anywhere; }
+.mat-row .mnum { min-width: 0; text-align: right; font-size: 13px; white-space: nowrap; }
 .mat-row .mnum.neg { color: var(--bad-ink); font-weight: 650; }
-.mat-row .mact { text-align: right; }
+.mat-row .m-status { min-width: 0; text-align: right; }
+.mat-row .m-status .chip { max-width: 100%; }
+.mat-list { min-width: 0; }
+.mat-list[role="table"] { overflow: hidden; }
+.mat-row[role="row"] { min-width: 0; }
 
 /* ---- baris operasi ---- */
 .op-thead, .op-row {
@@ -929,6 +951,72 @@ textarea.input { height: auto; padding: 8px 10px; }
   max-height: calc(100dvh - 40px);
   overflow-y: auto;
 }
+.kanban-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(780px, calc(100% - 32px));
+  max-width: 780px;
+  padding: 0;
+  overflow: hidden;
+}
+.kanban-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.kanban-dialog-heading { min-width: 0; flex: 1; }
+.kanban-dialog-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.kanban-dialog-heading h2 {
+  overflow-wrap: anywhere;
+  font-size: 19px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.kanban-dialog-heading p {
+  margin-top: 4px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.kanban-dialog-close { flex: none; }
+.kanban-dialog > .callout,
+.kanban-dialog > .err {
+  margin: 14px 24px 0;
+}
+.kanban-dialog-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.kanban-dialog-content > .stage-form { min-width: 0; }
+.kanban-dialog .material-panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.kanban-dialog .material-panel .panel-head { padding: 18px 24px 14px; }
+.kanban-dialog .material-panel .panel-body { padding: 14px 24px 20px; }
+.kanban-dialog .material-panel .panel-foot { padding: 14px 24px 20px; }
+.kanban-dialog-pending {
+  margin: 0;
+  padding: 0 24px 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .dialog::backdrop {
   background: rgba(38, 38, 31, 0.35);
   -webkit-backdrop-filter: blur(2px);
@@ -1348,22 +1436,37 @@ textarea.input { height: auto; padding: 8px 10px; }
 
   .mat-thead { display: none; }
   .mat-row {
-    grid-template-columns: 1fr 1fr 1fr auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
     grid-template-areas:
       "name name name name"
       "req trf short stat";
-    row-gap: 8px;
+    gap: 8px;
+    padding: 12px 0;
   }
   .mat-row .mname { grid-area: name; }
   .mat-row .m-req { grid-area: req; }
   .mat-row .m-trf { grid-area: trf; }
   .mat-row .m-short { grid-area: short; }
-  .mat-row .m-status { grid-area: stat; text-align: right; }
-  .mat-row .mlabel { display: block; font-size: 10.5px; color: var(--faint); margin-bottom: 1px; text-align: right; }
+  .mat-row .m-status { grid-area: stat; text-align: right; align-self: end; }
+  .mat-row .mnum { white-space: normal; font-size: 12.5px; }
+  .mat-row .mlabel {
+    display: block;
+    margin-bottom: 1px;
+    color: var(--faint);
+    font-size: 10px;
+    line-height: 1.2;
+    text-align: left;
+  }
+  .mat-row .m-req, .mat-row .m-trf, .mat-row .m-short { text-align: left; }
+  .material-status { align-items: flex-start; flex-direction: column; gap: 1px; }
+  .material-review { margin-left: auto; }
 
   .form-grid { grid-template-columns: 1fr; }
   .panel-body { padding: 14px; }
-  .mat-thead + *, .panel-foot { padding-left: 14px; padding-right: 14px; }
+  .kanban-dialog .material-panel .panel-head { padding: 16px; }
+  .kanban-dialog .material-panel .panel-body { padding: 12px 16px 16px; }
+  .kanban-dialog .material-panel .panel-foot { padding: 12px 16px 16px; }
+  .panel-foot { padding-left: 14px; padding-right: 14px; }
 }
 
 .mlabel { display: none; }
@@ -1473,6 +1576,31 @@ textarea.input { height: auto; padding: 8px 10px; }
     max-height: calc(100dvh - 40px);
     overflow-y: auto;
   }
+  .kanban-dialog {
+    position: fixed;
+    inset: auto 0 0;
+    align-self: end;
+    width: 100%;
+    max-width: none;
+    max-height: min(90dvh, 760px);
+    margin: 0;
+    padding: 0;
+    border-radius: 16px 16px 0 0;
+  }
+  .kanban-dialog-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.92);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    backdrop-filter: blur(18px) saturate(160%);
+  }
+  .kanban-dialog > .callout,
+  .kanban-dialog > .err { margin-left: 16px; margin-right: 16px; }
+  .kanban-dialog .material-panel .panel-head { gap: 8px; }
+  .kanban-dialog .material-panel .panel-head .lead { flex-basis: 100%; padding-left: 36px; }
+  .kanban-dialog-pending { padding-left: 16px; padding-right: 16px; }
 }
 
 /* kaca: fallback tanpa backdrop-filter & transparensi dikurangi */
