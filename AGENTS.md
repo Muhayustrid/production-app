@@ -1,90 +1,13 @@
-# AGENTS.md — production_app
+# Production App agent boundaries
 
-Ground rules for coding agents working in this repository.
-
-## Hard boundaries
-
-- Never edit `frappe`/`erpnext` core, other apps under `apps/` (e.g.
-  `pos_next`, `bakery_manufacturing`), or `sites/common_site_config.json`.
-- `posnext.localhost` is PRODUCTION. Never install/migrate/test on it. The
-  development and test target is `proof.localhost`.
-- Local git commits are allowed. NEVER `git push` without explicit approval.
-  Same for deployment or any change to production sites: approval gate first.
-- Never rely on a core method's behavior from memory — read the source of the
-  installed version first and, for binding claims, prove them on the test site
-  (Phase 1 proof methodology).
-
-## Commands
-
-```bash
-bench --site proof.localhost run-tests --app production_app   # must stay green
-bench --site proof.localhost migrate                          # after doctype/fixture changes
-bench --site proof.localhost export-fixtures --app production_app
-bench build --app production_app                              # only when assets change
-```
-
-## App-specific contracts (binding: design spec Revisi 5.1)
-
-- Backend API (Tahap 3) is COMPLETE — the 9 whitelisted endpoints in
-  `api.py` (spec §7) are the SPA's only backend surface. Do not add
-  endpoints, parameters, or fields outside spec §7/§8; keep error messages
-  Indonesian (operator dictionary §3.1) with the machine codes
-  `STATE_CHANGED` / `NEEDS_ALLOWANCE`.
-- SPA (`vue/`, Tahap 4): build output goes to
-  `production_app/public/production/` (committed, sourcemaps OFF) and
-  `production_app/www/production-app.html`. `yarn test` (node --test) covers
-  the idempotency-key retry semantics; operator-facing labels use the §3.1
-  vocabulary only — technical core terms (fg_completed_qty, process loss,
-  backflush, WIP) must never reach the UI.
-- Stock Entry custom fields `custom_p_*` are app-owned (fixtures). Work Order
-  summary fields are the SITE's Customize-Form fields (spec 8.1) — never
-  export them from this app: `custom_good_qty_postpacking`,
-  `custom_reject_qty_postpacking`, `custom_trial_qty_postpacking`,
-  `custom_sisa_qty_postpacking`, `custom_good_qty_prepacking`,
-  `custom_reject_qty_prepacking`, `custom_trial_qty_prepacking`,
-  `custom_sisa_qty_prepacking`, `custom_qc_packing`, `custom_jam_packing`.
-  On a site without these WO fields, recompute skips them with one WO comment.
-- Idempotency ledger: `Production Request Log.idempotency_key` is unique at
-  the DB level; duplicate raw inserts raise `MySQLdb.IntegrityError`
-  (mysqlclient driver — NOT pymysql). ORM-level duplicates surface as
-  `frappe.exceptions.DuplicateEntryError` / `UniqueValidationError`.
-- Permission matrix (spec 11.3): Operator/Supervisor = read-only on Work
-  Order and Stock Entry; Job Card read/create/write/submit for both;
-  Job Card cancel = Supervisor ONLY. Prove changes via
-  `tests/test_fixtures_roles.py`.
-
-## Vocabulary (operator terms -> technical)
-
-- HASIL BAIK (good) = packed-OK output -> FG stock (FG row / `custom_p_good_qty`).
-- REJECT / TRIAL / SISA = output categories, recorded only, no separate stock.
-- BAHAN DIPAKAI = actual material consumption per row (never auto-changed).
-- SISA BAHAN DI WIP = WIP remaining net = transferred - consumed.
-- LOSS EKSPLISIT = operator-entered process loss (`fg_completed_qty = good + loss`).
-- SESI PACKING = one packing transaction = one Manufacture Stock Entry (Jalur A).
-- BELUM DIPRODUKSI = `wo.qty - produced_qty - process_loss_qty`.
-
-## Conventions
-
-- English for code, comments, tests, and docs.
-- Repository Markdown/code comments/test names in English.
-- Tests: `frappe.tests.IntegrationTestCase` in `production_app/tests/`;
-  factories in `tests/factories.py` (PDTC-prefixed data, idempotent).
-  `setUpClass` data is committed by the framework and persists on the test
-  site by design; per-test documents are rolled back at class end.
-
-## CodeGraph (mandatory navigation tool)
-
-This repository is indexed with CodeGraph (`.codegraph/`, git-ignored). Use it as the
-PRIMARY tool for understanding, locating, and impact-checking code in this repo —
-BEFORE falling back to grep/Read:
-
-- MCP (preferred in agent sessions): call `codegraph_explore` with
-  `projectPath=/Users/rotiropi/ERPNext-Project/development/frappe-bench/apps/production_app`
-  and a query of symbol names, file names, or a natural-language question. It returns
-  verbatim on-disk source grouped by file plus a blast radius (callers + covering
-  tests) — treat returned source as already-Read; do not re-open those files.
-- CLI (host): `codegraph sync` (after commits), `codegraph status`, `codegraph index`
-  (full rebuild) — run from the repo root.
-- Workflow rule: for any task that touches existing code, start with one
-  `codegraph_explore` covering the symbols you will change; use grep/Read only for
-  what the graph cannot answer (raw strings, templates, non-indexed files).
+- Read `IMPLEMENTATION_PLAN.md`, `TASKS.md`, and `PROJECT_STATE.md` before working on the Work Order workspace. They distinguish requirements, ordered tasks, and actual evidence.
+- The current request is planning only. Do not create fields, remove scripts, or implement the plan until the user requests implementation. Later explicit user instructions take precedence.
+- Scope is Work Order through Manufacture using good prepacking with planned raw materials. The custom Stock Entry/handover workflow is a separate task.
+- Reuse the supplied mockup and native ERPNext documents/methods. Verify installed source before relying on behavior. Do not edit ERPNext/Frappe core or duplicate the `bakery_manufacturing` batch override.
+- Box 1 and Box 2 are Float weights in kg. Leader Produksi is a person's name (Data). Use current native overproduction settings. Do not save prepacking or finish when good prepacking is zero; zero reject/trial/sisa remain valid.
+- Preserve existing data and unrelated scripts. Retire an identified script only after its replacement is proven and its original definition is backed up.
+- Follow the phase gates and acceptance criteria in the plan. Do not add speculative architecture or expand into excluded features.
+- Where a `.codegraph/` index exists, use CodeGraph before text searches to locate or understand code. Do not create an index without a request.
+- During implementation, select the next dependency-ready task from `TASKS.md`. Mark it in progress in `PROJECT_STATE.md` before edits and record evidence at completion, blockage, or handoff. Never mark work done from code inspection alone when its acceptance criterion requires execution.
+- Keep one active task at a time. Do not start a dependent task before its gate passes. Continue ready work without repeated approval; pause dependent work only for a concrete blocker or a decision outside the approved scope.
+- Do not depend on Codex-only tools. In Zcode, use available terminal/browser tools and installed project tooling. If a required capability is unavailable, record the precise limitation and do not claim verification.

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Production Workspace</title>
+  <link rel="stylesheet" href="/assets/production_app/workspace/assets/index.css">
+</head>
+<body>
+  <div id="app"></div>
+  <script>window.csrf_token = {{ csrf_token | tojson }}; window.workspace_user = {{ workspace_user | tojson }};</script>
+  <script type="module" src="/assets/production_app/workspace/assets/index.js"></script>
+</body>
+</html>

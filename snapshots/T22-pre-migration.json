@@ -1,0 +1,253 @@
+{
+  "captured_at": "2026-09-14 00:22:01.519368",
+  "custom_docperm": {
+    "Material Request": [
+      {
+        "amend": 0,
+        "cancel": 0,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Manufacturing User",
+        "submit": 1,
+        "write": 1
+      },
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Purchase Manager",
+        "submit": 1,
+        "write": 1
+      },
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Purchase User",
+        "submit": 1,
+        "write": 1
+      },
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Stock Manager",
+        "submit": 1,
+        "write": 1
+      },
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Stock User",
+        "submit": 1,
+        "write": 1
+      }
+    ],
+    "Material Request Item": []
+  },
+  "custom_fields": [
+    {
+      "allow_on_submit": 0,
+      "dt": "Manufacturing Settings",
+      "fieldname": "custom_default_source_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "make_serial_no_batch_from_work_order",
+      "label": "Default Source Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Manufacturing Settings",
+      "fieldname": "custom_default_wip_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_source_warehouse",
+      "label": "Default WIP Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Manufacturing Settings",
+      "fieldname": "custom_default_fg_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_wip_warehouse",
+      "label": "Default Target Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Manufacturing Settings",
+      "fieldname": "custom_default_scrap_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_fg_warehouse",
+      "label": "Default Scrap Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Material Request",
+      "fieldname": "custom_section_break_te1sc",
+      "fieldtype": "Section Break",
+      "insert_after": "items",
+      "label": "",
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Material Request",
+      "fieldname": "custom_note",
+      "fieldtype": "Small Text",
+      "insert_after": "custom_section_break_te1sc",
+      "label": "Note",
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Material Request",
+      "fieldname": "custom_box_1",
+      "fieldtype": "Data",
+      "insert_after": "custom_note",
+      "label": "Box 1",
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Material Request",
+      "fieldname": "custom_box_2",
+      "fieldtype": "Data",
+      "insert_after": "custom_box_1",
+      "label": "Box 2",
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "dt": "Material Request",
+      "fieldname": "custom_good_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_box_2",
+      "label": "Good Qty Post-Packing",
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "dt": "Material Request",
+      "fieldname": "custom_reject_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_good_qty_postpacking",
+      "label": "Reject Qty Post-Packing",
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "dt": "Material Request",
+      "fieldname": "custom_trial_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_reject_qty_postpacking",
+      "label": "Trial Qty Post-Packing",
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "dt": "Material Request",
+      "fieldname": "custom_sisa_qty_postpacking",
+      "fieldtype": "Float",
+      "insert_after": "custom_trial_qty_postpacking",
+      "label": "Sisa Qty Post-Packing",
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "dt": "Material Request",
+      "fieldname": "custom_jam_packing",
+      "fieldtype": "Time",
+      "insert_after": "custom_sisa_qty_postpacking",
+      "label": "Jam Packing",
+      "options": null
+    },
+    {
+      "allow_on_submit": 1,
+      "dt": "Material Request",
+      "fieldname": "custom_qc_packing",
+      "fieldtype": "Link",
+      "insert_after": "custom_jam_packing",
+      "label": "QC Packing",
+      "options": "User"
+    },
+    {
+      "allow_on_submit": 1,
+      "dt": "Material Request",
+      "fieldname": "custom_postpacking_confirmed",
+      "fieldtype": "Check",
+      "insert_after": "custom_qc_packing",
+      "label": "Post-Packing Confirmed",
+      "options": null
+    },
+    {
+      "allow_on_submit": 0,
+      "dt": "Material Request Item",
+      "fieldname": "custom_work_order",
+      "fieldtype": "Link",
+      "insert_after": "from_warehouse",
+      "label": "Work Order",
+      "options": "Work Order"
+    }
+  ],
+  "docperm": {
+    "Material Request": [
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Purchase Manager",
+        "submit": 1,
+        "write": 1
+      },
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Purchase User",
+        "submit": 1,
+        "write": 1
+      },
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Stock Manager",
+        "submit": 1,
+        "write": 1
+      },
+      {
+        "amend": 1,
+        "cancel": 1,
+        "create": 1,
+        "permlevel": 0,
+        "read": 1,
+        "role": "Stock User",
+        "submit": 1,
+        "write": 1
+      }
+    ],
+    "Material Request Item": []
+  },
+  "roles": {
+    "Gudang Barang Jadi": false,
+    "Manufacturing User": true
+  }
+}

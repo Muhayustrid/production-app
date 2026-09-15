@@ -1,9 +1,0 @@
-{
-	"name": "production_app",
-	"private": true,
-	"scripts": {
-		"postinstall": "cd vue && yarn install",
-		"dev": "cd vue && yarn dev",
-		"build": "cd vue && yarn build"
-	}
-}

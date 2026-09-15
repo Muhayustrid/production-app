@@ -3,7 +3,7 @@ name = "production_app"
 authors = [
     { name = "Rotiri Project", email = "rotiropi@users.noreply.github.com"}
 ]
-description = "ERPNext manufacturing proxy app: one-page production terminal for Work Orders (packing sessions, material actuals, idempotent mutations)."
+description = "Membantu proses produksi ERPNext agar input lebih mudah dan minim kesalahan."
 requires-python = ">=3.14"
 readme = "README.md"
 dynamic = ["version"]
@@ -18,6 +18,9 @@ build-backend = "flit_core.buildapi"
 # These dependencies are only installed when developer mode is enabled
 [tool.bench.dev-dependencies]
 # package_name = "~=1.1.0"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=16.21.0,<17.0.0"
 
 # These apt dependencies will be installed from Ubuntu repositories when you host your app on Frappe Cloud
 [deploy.dependencies.apt]

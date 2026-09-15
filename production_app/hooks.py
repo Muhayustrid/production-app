@@ -1,65 +1,30 @@
 app_name = "production_app"
 app_title = "Production App"
 app_publisher = "Rotiri Project"
-app_description = "ERPNext manufacturing proxy app: one-page production terminal for Work Orders (packing sessions, material actuals, idempotent mutations)."
+app_description = "Membantu proses produksi ERPNext agar input lebih mudah dan minim kesalahan."
 app_email = "rotiropi@users.noreply.github.com"
 app_license = "mit"
 
 # Apps
 # ------------------
 
-required_apps = ["erpnext"]
+# required_apps = []
 
-# Fixtures
-# --------
-# Custom fields on Stock Entry are app-owned (spec section 8); the Work Order
-# summary fields are site-owned and deliberately NOT exported (spec 8.3).
+# Idempotent Work Order custom-field upgrade (T05); safe on every migrate.
+after_migrate = ["production_app.upgrade.apply"]
 
-CUSTOM_P_FIELDS = [
-	"custom_p_good_qty",
-	"custom_p_reject_qty",
-	"custom_p_trial_qty",
-	"custom_p_sisa_qty",
-	"custom_p_good_qty_pre",
-	"custom_p_reject_qty_pre",
-	"custom_p_trial_qty_pre",
-	"custom_p_sisa_qty_pre",
-	"custom_p_petugas_packing",
-	"custom_p_packing_note",
-]
-
-PRODUCTION_ROLES = ["Production Operator", "Production Supervisor"]
-
-fixtures = [
+# Ikon app di app switcher desk (/apps): klik langsung masuk Production Workspace.
+add_to_apps_screen = [
 	{
-		"dt": "Custom Field",
-		"filters": [["dt", "=", "Stock Entry"], ["fieldname", "in", CUSTOM_P_FIELDS]],
-	},
-	{"dt": "Role", "filters": [["role_name", "in", PRODUCTION_ROLES]]},
-	{"dt": "Custom DocPerm", "filters": [["role", "in", PRODUCTION_ROLES]]},
-]
-
-# Website
-# ------------------
-# Serve the SPA (vue/ build, www/production-app.html) at deep links like
-# /production-app/work-orders/NAME — same mechanism as pos_next's /pos rule.
-
-website_route_rules = [
-	{"from_route": "/production-app/<path:app_path>", "to_route": "production-app"},
-]
-
-# DocEvents
-# ---------
-# Keep the Work Order packing summary in sync on every submit/cancel of a
-# manufacturing stock entry - including entries made from Desk without the
-# custom_p_* fields (spec 8.1).
-
-doc_events = {
-	"Stock Entry": {
-		"on_submit": "production_app.wo_summary.on_submit",
-		"on_cancel": "production_app.wo_summary.on_cancel",
+		"name": "production_app",
+		"logo": "/assets/production_app/images/logo.svg",
+		"title": "Production App",
+		"route": "/production_workspace",
 	}
-}
+]
+
+# Route app ini di desk (dipakai boot app_data untuk tile app switcher).
+app_home = "/production_workspace"
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -177,7 +142,7 @@ doc_events = {
 # -----------
 # Extra search results: list of dicts with label, description, route, index.
 # route: ["List", "ToDo"], "/desk/docs/some/page", or "https://example.com"
-# awesomebar_search = ["production_app.search.awesomebar_results"]
+awesomebar_search = ["production_app.search.awesomebar_results"]
 
 # Permissions
 # -----------
@@ -195,13 +160,19 @@ doc_events = {
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+# FU23: penanda Status Serah Terima di Work Order — cermin derivasi dokumen
+# (api/handover._handover_lanes), disinkronkan tiap MR/SE serah terima berubah.
+doc_events = {
+	"Material Request": {
+		"on_submit": "production_app.api.handover.sync_from_material_request",
+		"on_cancel": "production_app.api.handover.sync_from_material_request",
+		"on_update": "production_app.api.handover.sync_from_material_request",
+	},
+	"Stock Entry": {
+		"on_submit": "production_app.api.handover.sync_from_stock_entry",
+		"on_cancel": "production_app.api.handover.sync_from_stock_entry",
+	},
+}
 
 # Scheduled Tasks
 # ---------------
@@ -312,3 +283,4 @@ doc_events = {
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
+

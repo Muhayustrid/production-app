@@ -1,0 +1,38 @@
+{
+ "app": "production_app",
+ "charts": [],
+ "content": "[\n {\n  \"data\": {\n   \"col\": 12,\n   \"text\": \"<span class=\\\"h4\\\"><b>Production App</b></span>\"\n  },\n  \"id\": \"pa-header\",\n  \"type\": \"header\"\n },\n {\n  \"data\": {\n   \"col\": 12,\n   \"text\": \"<p>Work Order workspace: persiapan \\u2192 material \\u2192 operasi \\u2192 pre-packing \\u2192 finish. Semua stage dihitung server dari dokumen ERPNext.</p><p><a class=\\\"btn btn-primary\\\" href=\\\"/production_workspace\\\">Buka Production Workspace</a></p>\"\n  },\n  \"id\": \"pa-p\",\n  \"type\": \"paragraph\"\n }\n]",
+ "creation": "2026-09-13 17:58:36.814409",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "hide_custom": 0,
+ "idx": 0,
+ "indicator_color": "green",
+ "is_hidden": 0,
+ "label": "Production App",
+ "link_type": "DocType",
+ "links": [],
+ "modified": "2026-09-13 17:59:29.742303",
+ "modified_by": "Administrator",
+ "module": "Manufacturing",
+ "name": "Production App",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "roles": [],
+ "sequence_id": 0.0,
+ "shortcuts": [
+  {
+   "color": "Blue",
+   "doc_view": "",
+   "label": "Work Orders",
+   "link_to": "Work Order",
+   "type": "DocType"
+  }
+ ],
+ "title": "Production App",
+ "type": "Workspace"
+}

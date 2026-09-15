@@ -53,5 +53,9 @@ jspm_packages/
 
 # Aider AI Chat
 .aider*
-node_modules
+
+# CodeGraph local index (tooling artifact)
 .codegraph/
+
+# ZCode local agent state
+.zcode/
