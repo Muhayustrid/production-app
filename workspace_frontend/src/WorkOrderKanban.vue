@@ -20,6 +20,9 @@ const lanes = [
   { key: 'finish', title: 'Finish', sub: '', icon: Flag, tone: '' },
   { key: 'completed', title: 'Selesai', sub: 'Belum dikirim ke gudang', icon: CheckCircle2, tone: 'ok' }
 ]
+const visibleLanes = computed(() =>
+  props.list.some(w => w.hasOperations) ? lanes : lanes.filter(l => l.key !== 'operasi')
+)
 
 // lane berikutnya untuk satu WO — urutan sama dengan Workspace; Operasi hanya
 // untuk WO dengan operations. null = sudah Selesai (tidak bisa maju).
@@ -129,7 +132,7 @@ function cardInfo(w) {
   <p v-if="opening" role="status">Memuat detail Work Order…</p>
   <div class="kb" :class="{ dragging: !!drag }">
     <section
-      v-for="l in lanes"
+      v-for="l in visibleLanes"
       :key="l.key"
       class="kb-lane"
       :class="{ over: overLane === l.key, droppable: laneDroppable(l.key) }"

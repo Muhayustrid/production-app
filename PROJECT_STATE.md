@@ -3,8 +3,8 @@
 ## Current handoff
 
 - Project status: Work Order scope COMPLETE (T01–T20) + Scope Serah Terima COMPLETE (T21–T26). **Scope F: Post-Packing sebagai tahap Work Order — COMPLETE 14 Sep (sesi SDD subagent-driven, T27–T30 + fix wave + browser smoke)** per `POSTPACKING_PLAN.md`.
-- Last updated: 2026-09-15 (FU34 optimasi performa Stock Entry Kanban)
-- Active task: none — **FU34 DONE**. Papan Stock Entry kini bulk-load saldo batch dan aksi memvalidasi lot/request secara scoped; warm `_build_board()` turun dari 3,782–3,900 dtk/9.581 query menjadi 0,141 dtk/28 query pada 2.952 WO, dengan hasil tetap 4 lot/5 request.
+- Last updated: 2026-09-16 (FU35 sembunyikan lane Operasi kosong)
+- Active task: none — **FU35 DONE**. Lane Operasi pada Kanban Work Order disembunyikan saat daftar tidak memuat WO yang memakai operasi; bila WO operasi muncul, lane otomatis tampil kembali. Backend dan detail Work Order tidak berubah.
 - Section F (pra-FU11): Tahap Post-Packing live di workspace (persiapan→material→operasi?→pre→**post**→finish→selesai); FG Manufacture = good postpacking (cap ≤ good pre, sisa server); satu-satunya writer postpacking WO = confirm_postpacking (mirror handover tinggal box); legacy in-flight jujur mendarat di post_packing (contoh nyata: MFG-WO-2026-03115 terlihat di lane Post-Packing). Bukti: 5 suite ×2 (45/10/5/9/12), HTTP loop T29+T30, browser smoke interaktif controller (panel→finish→Completed dgn SE FG 90/loss 10, kanban, mobile 390), residu 0. Bundle final `cf22df01…`.
 - Next task: STOP — pekerjaan lanjutan HANYA atas request baru. Kandidat bila diminta: redesign UI papan Serah Terima versi mockup 67fc9dd (dialog "Verifikasi Siap Kirim"); pesan Indonesia rapi utk jam invalid (observasi FU10). Catatan: operator perlu hard-refresh sekali (bundle `6b20fad7…`). Follow-up 9 DONE (chip Adonan ke kanban); Follow-up 10 DONE (Penimbang & QC Produksi jadi teks nama).
 - Process note (sesi F): SDD subagent-driven dengan reviewer independen per task; brief/report/review di `.superpowers/sdd/POSTPACKING_PLAN/`; TANPA git commit (aturan ZCODE_PROMPT.md) — diff per-task dilacak via snapshot tree di ledger; browser interaktif hanya oleh controller.
@@ -123,6 +123,15 @@ Server API (one module `production_app/api/work_order.py`, whitelist only, sessi
 - T05 field needs: add `custom_box_1/2` (Float kg, allow_on_submit), `custom_prepacking_confirmed` (Check, allow_on_submit); enable allow_on_submit for `custom_nama_penimbang`, `custom_jumlah_kru`, `custom_leader_produksi`, `custom_qc_produksi`; migrate `custom_leader_produksi` Int→Data preserving values as text.
 
 ## Work log
+
+### 2026-09-16 — FU35: sembunyikan lane Operasi kosong — DONE
+
+- Scope: lane Operasi di Kanban Work Order disembunyikan selama halaman saat ini tidak memuat WO dengan `hasOperations`; dukungan operasi di backend, stage derivation, dialog aksi, dan detail Work Order tetap tersedia. Jika nanti WO operasi muncul, lane otomatis dirender kembali agar kartu tidak hilang.
+- Changes: `workspace_frontend/src/WorkOrderKanban.vue` menambah computed `visibleLanes` dan template merender daftar tersebut; bundle `production_app/public/workspace/assets/index.js` dibuild ulang. Tidak ada perubahan API, database, metadata, atau transaksi.
+- Verification: frontend unit test **7/7 pass**; Vite production build sukses (1.743 modul). Bundle hash identik host/backend/frontend/HTTP `2744c4b292687efe949375d802d22d0129aec9be4201b0e3fbd5ceaec6b2eafb`; `git diff --check` bersih. Browser smoke read-only dengan Manufacturing User sementara: Kanban menampilkan Persiapan, Material, Pre-Packing, Post-Packing, Finish, Selesai; teks/lane Operasi absen pada DOM dan visual. User uji dan DefaultValue dibersihkan (`user=None`, defaults=0).
+- Remaining issue: none. Operator mungkin perlu hard refresh sekali karena nama asset tetap `index.js`.
+- Next action: STOP — pekerjaan lanjutan hanya atas request baru.
+- Rollback notes: revert `WorkOrderKanban.vue` dan bundle public, lalu build/sync ulang; tidak ada data/metadata untuk rollback.
 
 ### 2026-09-15 — FU34: optimasi loading Stock Entry Kanban — DONE
 
