@@ -4,7 +4,7 @@
 
 - Project status: Work Order scope COMPLETE (T01–T20) + Scope Serah Terima COMPLETE (T21–T26). **Scope F: Post-Packing sebagai tahap Work Order — COMPLETE 14 Sep (sesi SDD subagent-driven, T27–T30 + fix wave + browser smoke)** per `POSTPACKING_PLAN.md`.
 - Last updated: 2026-09-15 (FU30 retire Gudang Confirmed + adonan kanban)
-- Active task: none — **FU30 DONE**. Checkbox "Gudang Confirmed" dihapus total (field + logika drop manual); lot kini turun murni lewat stok/Status Serah Terima. Kartu kanban WO selalu menampilkan Adonan (nilai atau `-`), dialog aksi kanban menambah baris "Adonan ke N".
+- Active task: none — **FU32 DONE**. Label dan copy UI redundan disederhanakan tanpa mengubah field, status, validasi, atau alur transaksi.
 - Section F (pra-FU11): Tahap Post-Packing live di workspace (persiapan→material→operasi?→pre→**post**→finish→selesai); FG Manufacture = good postpacking (cap ≤ good pre, sisa server); satu-satunya writer postpacking WO = confirm_postpacking (mirror handover tinggal box); legacy in-flight jujur mendarat di post_packing (contoh nyata: MFG-WO-2026-03115 terlihat di lane Post-Packing). Bukti: 5 suite ×2 (45/10/5/9/12), HTTP loop T29+T30, browser smoke interaktif controller (panel→finish→Completed dgn SE FG 90/loss 10, kanban, mobile 390), residu 0. Bundle final `cf22df01…`.
 - Next task: STOP — pekerjaan lanjutan HANYA atas request baru. Kandidat bila diminta: redesign UI papan Serah Terima versi mockup 67fc9dd (dialog "Verifikasi Siap Kirim"); pesan Indonesia rapi utk jam invalid (observasi FU10). Catatan: operator perlu hard-refresh sekali (bundle `6b20fad7…`). Follow-up 9 DONE (chip Adonan ke kanban); Follow-up 10 DONE (Penimbang & QC Produksi jadi teks nama).
 - Process note (sesi F): SDD subagent-driven dengan reviewer independen per task; brief/report/review di `.superpowers/sdd/POSTPACKING_PLAN/`; TANPA git commit (aturan ZCODE_PROMPT.md) — diff per-task dilacak via snapshot tree di ledger; browser interaktif hanya oleh controller.
@@ -123,6 +123,22 @@ Server API (one module `production_app/api/work_order.py`, whitelist only, sessi
 - T05 field needs: add `custom_box_1/2` (Float kg, allow_on_submit), `custom_prepacking_confirmed` (Check, allow_on_submit); enable allow_on_submit for `custom_nama_penimbang`, `custom_jumlah_kru`, `custom_leader_produksi`, `custom_qc_produksi`; migrate `custom_leader_produksi` Int→Data preserving values as text.
 
 ## Work log
+
+### 2026-09-15 — FU32: sederhanakan label dan copy UI — DONE
+
+- Scope: hapus copy teknis/redundan dari form tahap, detail Work Order, Kanban Work Order, dialog Stock Entry, dan Pengaturan; label field, status, warning, empty state, serta konfirmasi transaksi dipertahankan.
+- Changes: `StagePersiapan.vue`, `StageMaterial.vue`, `StageOperasi.vue`, `StagePacking.vue`, `StagePostPacking.vue`, `StageFinish.vue`, `Workspace.vue`, `WorkOrderKanban.vue`, `HandoverBoard.vue`, `WarehouseSettings.vue`. Dihapus/diringkas: subteks `di ERPNext`, instruksi kaki panel yang mengulang tombol, catatan source-of-truth teknis, sublabel lane Kanban, dan label ringkasan berulang (`Rencana Work Order` → `Rencana`, `Hasil Aktual (Masuk Cold Storage)` → `Hasil aktual`, `Barang Jadi (Good Qty)` → `Barang Jadi`).
+- Verification: Vite build sukses (1743 modul); frontend tests **7/7 pass**; bundle host dan HTTP hash `a4cba778cef368a5ccdd9cc67a429023299a48383c6d6a9e259c1905c826c280`; runtime markers: `Saran:` 0, `Menyimpan ke ERPNext` 0, source-note teknis 0, sublabel lane lama 0; label operasional utama tetap ada (6 marker); `git diff --check` bersih.
+- Remaining issue: browser mungkin perlu hard refresh sekali setelah deployment asset.
+- Next action: STOP — menunggu request UI berikutnya.
+
+### 2026-09-15 — FU31: hapus hint sumber saran dari form workspace — DONE
+
+- Diagnosis: source Vue sudah tidak merender hint `Saran: … dari MFG-WO-…`, tetapi bundle publik dan salinan asset di container masih versi lama; HTTP masih mengandung 5 string `Saran:`.
+- Changes: hapus lima node hint di `workspace_frontend/src/stages/StagePersiapan.vue`, `StagePacking.vue`, dan `StagePostPacking.vue`; nilai autofill dari `suggestionPreferences` tetap dipertahankan. Rebuild Vite menghasilkan `production_app/public/workspace/assets/index.js`, lalu sinkronkan langsung ke container backend dan frontend asset server.
+- Verification: `./node_modules/.bin/vite build` sukses (1743 modul); test frontend `node --test tests/*.test.mjs` = **7/7 pass**; `git diff --check` bersih; host/container/frontend/HTTP bundle hash `a82370349c14e1f007d4cbdbbc9b414f5c73f43a44139f183a468023b635a30b`; HTTP `Saran:` count = **0**; teks `MFG-WO-2026-03126` dan `ugiiu18@gmail.com` tidak ditemukan di source/bundle.
+- Remaining issue: operator mungkin perlu hard refresh sekali untuk membuang cache browser lama.
+- Next action: STOP — menunggu request UI berikutnya.
 
 ### 2026-09-15 — FU30: retire "Gudang Confirmed" + Adonan di kanban WO — DONE
 

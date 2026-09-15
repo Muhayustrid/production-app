@@ -165,7 +165,7 @@ onMounted(() => {
     </nav>
 
     <p v-if="wo.uomWarning" class="callout">{{ wo.uomWarning }}</p>
-    <p v-if="review" class="hint">Data tersimpan di ERPNext. Kolom kosong berarti belum tercatat.</p>
+    <p v-if="review" class="hint">Kolom kosong berarti belum tercatat.</p>
     <fieldset class="stage-form" :disabled="!!state.pending">
     <component
       :is="stageComp"
@@ -176,11 +176,7 @@ onMounted(() => {
     />
 
     </fieldset>
-    <p v-if="state.pending" role="status">Menyimpan ke ERPNext…</p>
-    <p class="srcnote">
-      Tahap aktif dikembalikan server berdasarkan dokumen ERPNext terkini (Work Order, Stock Entry,
-      Job Card). Tahap selesai dapat ditinjau dari bar tahap di atas.
-    </p>
+    <p v-if="state.pending" role="status">Menyimpan…</p>
   </div>
 
   <div v-else class="empty">

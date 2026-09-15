@@ -114,7 +114,7 @@ async function save() {
           <button class="btn btn-primary" :disabled="saving" @click="save">
             {{ saving ? 'Menyimpan…' : 'Simpan Pengaturan' }}
           </button>
-          <span v-if="savedAt" class="why">Tersimpan di ERPNext pada {{ savedAt }}.</span>
+          <span v-if="savedAt" class="why">Tersimpan pada {{ savedAt }}.</span>
         </div>
       </template>
     </div>

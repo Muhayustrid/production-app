@@ -12,12 +12,12 @@ import StageFinish from './stages/StageFinish.vue'
 const props = defineProps({ list: { type: Array, required: true } })
 
 const lanes = [
-  { key: 'persiapan', title: 'Persiapan', sub: 'Draft · belum mulai', icon: ClipboardList, tone: '' },
-  { key: 'material', title: 'Material', sub: 'Transfer bahan baku', icon: Boxes, tone: '' },
-  { key: 'operasi', title: 'Operasi', sub: 'Job Card per operasi', icon: Cog, tone: '' },
-  { key: 'prepacking', title: 'Pre-Packing', sub: 'Catat hasil awal packing', icon: PackageCheck, tone: '' },
-  { key: 'postpacking', title: 'Post-Packing', sub: 'Catat hasil akhir packing', icon: PackageCheck, tone: '' },
-  { key: 'finish', title: 'Finish', sub: 'Siap diselesaikan', icon: Flag, tone: '' },
+  { key: 'persiapan', title: 'Persiapan', sub: '', icon: ClipboardList, tone: '' },
+  { key: 'material', title: 'Material', sub: '', icon: Boxes, tone: '' },
+  { key: 'operasi', title: 'Operasi', sub: '', icon: Cog, tone: '' },
+  { key: 'prepacking', title: 'Pre-Packing', sub: '', icon: PackageCheck, tone: '' },
+  { key: 'postpacking', title: 'Post-Packing', sub: '', icon: PackageCheck, tone: '' },
+  { key: 'finish', title: 'Finish', sub: '', icon: Flag, tone: '' },
   { key: 'completed', title: 'Selesai', sub: 'Belum dikirim ke gudang', icon: CheckCircle2, tone: 'ok' }
 ]
 
@@ -144,7 +144,7 @@ function cardInfo(w) {
         </span>
         <div class="kb-hgroup">
           <span class="kb-title">{{ l.title }}</span>
-          <span class="kb-sub">{{ l.sub }}</span>
+          <span v-if="l.sub" class="kb-sub">{{ l.sub }}</span>
         </div>
         <span class="kb-count">{{ byLane[l.key].length }}</span>
       </header>
@@ -213,7 +213,7 @@ function cardInfo(w) {
           <component :is="panels[openedStage]" :key="selected.id + openedStage" :wo="selected" :stage-key="openedStage" />
         </fieldset>
       </div>
-      <p v-if="state.pending" class="kanban-dialog-pending" role="status">Menyimpan ke ERPNext…</p>
+      <p v-if="state.pending" class="kanban-dialog-pending" role="status">Menyimpan…</p>
     </template>
   </dialog>
 </template>

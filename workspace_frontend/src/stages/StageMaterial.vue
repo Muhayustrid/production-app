@@ -25,7 +25,6 @@ function itemStatus(i) {
       <span class="p-ico" aria-hidden="true"><Boxes :size="15" :stroke-width="1.9" /></span>
       <div class="material-heading">
         <h2 id="material-panel-title">Material</h2>
-        <span class="lead">Material Transfer for Manufacture di ERPNext.</span>
       </div>
       <span v-if="review" class="chip chip-info material-review">Tinjauan</span>
     </div>
@@ -80,9 +79,6 @@ function itemStatus(i) {
       >
         {{ wo.hasOperations ? 'Lanjut ke Operasi' : 'Lanjut ke Pre-Packing' }}
       </button>
-      <span v-if="!materialComplete(wo)" class="why">
-        Selesaikan transfer semua material terlebih dahulu.
-      </span>
     </div>
   </section>
 </template>

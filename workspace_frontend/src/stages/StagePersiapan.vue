@@ -51,7 +51,6 @@ function submit() {
     <div class="panel-head">
       <span class="p-ico"><ClipboardList :size="15" :stroke-width="1.9" /></span>
       <h2>Persiapan</h2>
-      <span class="lead">Data persiapan diisi selama Work Order masih Draft.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
     </div>
 
@@ -87,21 +86,18 @@ function submit() {
           <div class="field">
             <label for="f-penimbang">Nama Penimbang <span class="req">*</span></label>
             <input id="f-penimbang" v-model="form.namaPenimbang" class="input" type="text" :disabled="review" />
-            <div v-if="!review && suggestionPreferences.enabled && p.penimbangSuggested" class="hint">Saran: {{ p.penimbangSuggested }}{{ props.wo.suggestionSources.penimbang ? ` dari ${props.wo.suggestionSources.penimbang}` : '' }}</div>
             <div v-if="tried && errors.namaPenimbang" class="err">{{ errors.namaPenimbang }}</div>
           </div>
 
           <div class="field">
             <label for="f-kru">Jumlah Kru <span class="req">*</span></label>
             <input id="f-kru" v-model="form.jumlahKru" class="input" type="number" min="1" step="1" :disabled="review" />
-            <div v-if="!review && suggestionPreferences.enabled && p.jumlahKruSuggested != null" class="hint">Saran: {{ p.jumlahKruSuggested }} kru{{ props.wo.suggestionSources.jumlah_kru ? ` dari ${props.wo.suggestionSources.jumlah_kru}` : '' }}</div>
             <div v-if="tried && errors.jumlahKru" class="err">{{ errors.jumlahKru }}</div>
           </div>
 
           <div class="field">
             <label for="f-leader">Leader Produksi <span class="req">*</span></label>
             <input id="f-leader" v-model="form.leaderProduksi" class="input" type="text" :disabled="review" />
-            <div v-if="!review && suggestionPreferences.enabled && p.leaderSuggested" class="hint">Saran: {{ p.leaderSuggested }}{{ props.wo.suggestionSources.leader ? ` dari ${props.wo.suggestionSources.leader}` : '' }}</div>
             <div v-if="tried && errors.leaderProduksi" class="err">{{ errors.leaderProduksi }}</div>
           </div>
         </div>
@@ -110,7 +106,6 @@ function submit() {
 
     <div v-if="!review" class="panel-foot">
       <button class="btn btn-primary" @click="submit">Mulai Produksi</button>
-      <span class="why">Menyimpan persiapan dan membuka tahap berikutnya sesuai dokumen ERPNext.</span>
     </div>
   </section>
 </template>

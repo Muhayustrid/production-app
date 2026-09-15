@@ -291,7 +291,7 @@ function optimisticReqCard(woId) {
       timestampLabel: '',
       units: lot
     }),
-    note: 'Menyimpan ke ERPNext…'
+    note: 'Menyimpan…'
   }
 }
 
@@ -615,7 +615,7 @@ onMounted(() => {
       <p class="hint" style="margin-top: 8px">Box disimpan pada Work Order. Stock Entry baru dibuat saat request dipindahkan ke Terkirim.</p>
 
       <p v-if="verError" class="err" style="margin-top: 8px" role="alert">{{ verError }}</p>
-      <p v-if="handoverState.pending" role="status">Menyimpan ke ERPNext…</p>
+      <p v-if="handoverState.pending" role="status">Menyimpan…</p>
       <div class="dlg-actions">
         <button class="btn" :disabled="!!handoverState.pending" @click="closeVerify">Batal</button>
         <button class="btn btn-primary" :disabled="!verCanSave || !!handoverState.pending" @click="confirmVerify">Siapkan Kirim</button>
@@ -655,7 +655,7 @@ onMounted(() => {
           <span>{{ qtyMain(kirimGood, lotForWo(kirimReq.workOrder) || kirimReq) }}</span>
         </div>
         <p v-if="kirimError" class="err" style="margin-top: 10px" role="alert">{{ kirimError }}</p>
-        <p v-if="handoverState.pending" role="status">Menyimpan ke ERPNext…</p>
+        <p v-if="handoverState.pending" role="status">Menyimpan…</p>
         <div class="dlg-actions">
           <button class="btn" :disabled="!!handoverState.pending" @click="closeKirim">Batal</button>
           <button class="btn btn-primary" :disabled="!!handoverState.pending" @click="confirmKirim">Kirim Barang</button>
@@ -705,7 +705,7 @@ onMounted(() => {
         pada Cold Storage akan dilepas.
       </p>
       <p v-if="cancelError" class="err" role="alert">{{ cancelError }}</p>
-      <p v-if="handoverState.pending" role="status">Menyimpan ke ERPNext…</p>
+      <p v-if="handoverState.pending" role="status">Menyimpan…</p>
       <div class="dlg-actions">
         <button class="btn" :disabled="!!handoverState.pending" @click="closeCancel">Kembali</button>
         <button class="btn btn-primary" :disabled="!!handoverState.pending" @click="confirmCancel">Ya, Batalkan</button>

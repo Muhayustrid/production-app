@@ -70,7 +70,6 @@ async function confirmFinish() {
     <div class="panel-head">
       <span class="p-ico"><Cog :size="15" :stroke-width="1.9" /></span>
       <h2>Operasi</h2>
-      <span class="lead">Eksekusi operasi per Job Card di ERPNext.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
     </div>
 
@@ -125,7 +124,6 @@ async function confirmFinish() {
       <button class="btn btn-primary" :disabled="!opsAllDone(wo)" @click="confirmOperations(wo)">
         Lanjut ke Pre-Packing
       </button>
-      <span v-if="!opsAllDone(wo)" class="why">Selesaikan semua operasi terlebih dahulu.</span>
     </div>
 
     <dialog ref="dlg" class="dialog" @click.self="closeDlg">

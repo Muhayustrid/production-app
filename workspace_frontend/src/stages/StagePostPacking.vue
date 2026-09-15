@@ -71,7 +71,6 @@ function save() {
     <div class="panel-head">
       <span class="p-ico"><PackageCheck :size="15" :stroke-width="1.9" /></span>
       <h2>Post-Packing</h2>
-      <span class="lead">Hasil akhir Work Order setelah packing.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
       <span v-else-if="reedit" class="chip chip-info" style="margin-left: auto">Perbaikan</span>
     </div>
@@ -81,13 +80,6 @@ function save() {
         Work Order ini selesai sebelum tahap Post-Packing diperkenalkan — angka ditampilkan dari
         data Pre-Packing (data lama, tanpa backfill).
       </p>
-
-      <div class="sum-sec">
-        <div class="sum-row">
-          <span class="k">Batas Good Qty Pre-Packing</span>
-          <span class="v">{{ preAvailable ? qtyMain(preQty, qip) : 'Belum tersedia' }}</span>
-        </div>
-      </div>
 
       <!-- kuantitas 1 baris di desktop, bertumpuk di mobile; Sisa input manual -->
       <div class="form-grid cols4" style="margin-top: 14px">
@@ -144,22 +136,21 @@ function save() {
         <div class="field">
           <label :for="`f-post-qc-${stageKey}`">QC Packing <span class="req">*</span></label>
           <input :id="`f-post-qc-${stageKey}`" v-model="form.qc" class="input" type="text" :disabled="review" />
-          <div v-if="!review && suggestionPreferences.enabled && src.qcSuggested" class="hint">Saran: {{ src.qcSuggested }}{{ props.wo.suggestionSources.qc_packing ? ` dari ${props.wo.suggestionSources.qc_packing}` : '' }}</div>
         </div>
       </div>
 
       <div style="margin-top: 14px">
         <div class="sum-row">
-          <span class="k">Total hasil (Good + Reject + Trial)</span>
+          <span class="k">Total hasil</span>
           <span class="v" :class="{ neg: over }">{{ total != null ? qtyMain(total, qip) : '-' }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Batas Pre-Packing</span>
+          <span class="k">Batas</span>
           <span class="v">{{ preAvailable ? qtyMain(preQty, qip) : 'Belum tersedia' }}</span>
         </div>
 
         <div v-if="form.goodQty != null" class="fgbox">
-          <span>Barang Jadi (Good Qty)</span>
+          <span>Barang Jadi</span>
           <span>{{ qtyMain(form.goodQty, qip) }}</span>
         </div>
       </div>
@@ -167,7 +158,6 @@ function save() {
 
     <div v-if="!review" class="panel-foot">
       <button class="btn btn-primary" :disabled="!canSave" @click="save">{{ reedit ? 'Simpan Perbaikan' : 'Simpan &amp; Lanjut ke Finish' }}</button>
-      <span v-if="!canSave" class="why">Lengkapi kuantitas dan pencatatan untuk melanjutkan.</span>
     </div>
   </section>
 </template>
