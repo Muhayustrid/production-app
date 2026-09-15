@@ -1048,6 +1048,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   color: var(--muted);
   overflow-wrap: anywhere;
 }
+.kanban-dialog-adonan { margin-top: 2px; font-size: 12.5px; }
 .kanban-dialog-close { flex: none; }
 .kanban-dialog > .callout,
 .kanban-dialog > .err {
@@ -1307,6 +1308,107 @@ textarea.input { height: auto; padding: 8px 10px; }
 .kb-grip { flex: none; margin-top: 2px; color: var(--line2); }
 .kb-card.live .kb-grip { color: var(--brand-light); }
 .kb-id { display: block; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
+
+.wo-kb-card { padding: 11px 12px; }
+.wo-kb-card .kb-name {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.wo-kb-card .kb-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wo-card-rows {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 9px 0 0;
+  border-top: 1px solid var(--line);
+}
+.wo-card-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.wo-card-row dt { color: var(--faint); }
+.wo-card-row dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.wo-card-qty { align-items: start; }
+.wo-card-qty dd { display: grid; gap: 1px; }
+.wo-card-qty strong {
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.wo-card-qty span { color: var(--muted); white-space: nowrap; }
+
+.se-kb-card { padding: 11px 12px; }
+.se-kb-card .kb-name {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.se-card-docs {
+  display: grid;
+  gap: 1px;
+  margin-top: 2px;
+}
+.se-kb-card .kb-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.se-card-rows {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 9px 0 0;
+  border-top: 1px solid var(--line);
+}
+.se-card-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.se-card-row dt { color: var(--faint); }
+.se-card-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.se-card-batch dd { color: var(--ink); font-weight: 600; }
+.se-card-qty dd { color: var(--ink); font-size: 13px; font-weight: 650; }
+.se-kb-card .kb-note { margin-top: 8px; }
+.se-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
 
 /* FU20: penanda serah terima — WO sudah dikasih ke gudang (MR/SE) */
 .chip-gudang {

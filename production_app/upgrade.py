@@ -66,16 +66,11 @@ WORKSPACE_FIELDS = [
 		"in_standard_filter": 1,
 		"description": "Penanda serah terima barang jadi ke gudang — terisi OTOMATIS dari Material Request/Stock Entry (doc_events); kosong = belum diserahkan. Jangan ubah manual.",
 	},
-	{
-		"fieldname": "custom_gudang_confirmed",
-		"label": "Gudang Confirmed",
-		"fieldtype": "Check",
-		"insert_after": "custom_handover_status",
-		"allow_on_submit": 1,
-		"print_hide": 1,
-		"description": "Centang setelah barang jadi WO ini diterima/dikonfirmasi gudang — lotnya turun dari papan Stock Entry (Cold Storage).",
-	},
 ]
+
+# FU30: the manual "Gudang Confirmed" checkbox is retired — Status Serah Terima
+# plus the stock-based drop rule are the single source of truth. The field is
+# deleted from the site by apply() (0 rows ticked at retirement = lossless).
 
 # allow-on-submit enablement required by the workspace actions (submitted WOs)
 ALLOW_ON_SUBMIT_FIELDS = [
@@ -770,6 +765,28 @@ def ensure_name_text_fields():
 	return out
 
 
+GUDANG_CONFIRMED_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "FU30-gudang-confirmed-pre.json")
+
+
+def retire_gudang_confirmed_field():
+	"""FU30: delete the retired manual checkbox (idempotent). Snapshots the
+	field definition once before the first deletion for rollback."""
+	result = "absent"
+	name = frappe.db.get_value(
+		"Custom Field", {"dt": DOCTYPE, "fieldname": "custom_gudang_confirmed"}, "name"
+	)
+	if name:
+		if not os.path.exists(GUDANG_CONFIRMED_SNAPSHOT):
+			os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+			field = frappe.get_doc("Custom Field", name).as_dict()
+			with open(GUDANG_CONFIRMED_SNAPSHOT, "w") as f:
+				json.dump(field, f, indent=1, default=str)
+		frappe.delete_doc("Custom Field", name, force=1)
+		frappe.clear_cache(doctype=DOCTYPE)
+		result = "deleted"
+	return result
+
+
 def apply():
 	"""Create/upgrade the workspace fields; migrate leader to Data. Idempotent."""
 	if not os.path.exists(T22_SNAPSHOT):
@@ -785,6 +802,7 @@ def apply():
 	result["box_kg_fields"] = ensure_box_kg_fields()
 	result["name_text_fields"] = ensure_name_text_fields()
 	result["qc_packing_text"] = ensure_qc_packing_text_field()
+	result["gudang_confirmed"] = retire_gudang_confirmed_field()
 	for spec in WORKSPACE_FIELDS:
 		action, name = _upsert_field(DOCTYPE, spec)
 		result["fields"].append(f"{spec['fieldname']}: {action}")

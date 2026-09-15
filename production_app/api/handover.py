@@ -122,7 +122,7 @@ def _wo_lot_rows():
 			filters={"docstatus": 1},
 			fields=[
 				"name", "production_item", "qty", "produced_qty", "custom_adonan_ke",
-				"fg_warehouse", "creation", "custom_gudang_confirmed",
+				"fg_warehouse", "creation",
 			],
 			order_by="creation desc",
 			limit_page_length=0,
@@ -227,7 +227,6 @@ def _wo_lot_rows():
 				"warehouse": cur["warehouse"] or w.fg_warehouse,
 				"entered_at": str(cur["entered_at"]),
 				"completed_at": cur["completed_at"],
-				"gudang_confirmed": bool(w.custom_gudang_confirmed),
 				"physical_qty": None,
 				"reserved_qty": None,
 				"available_qty": None,
@@ -389,13 +388,33 @@ def _requests(wo_rows):
 					"qc_packing_name": users.get(m.custom_qc_packing),
 					"confirmed": bool(m.custom_postpacking_confirmed),
 				},
-				"stock_entry": se.name if se else None,
-				"sent_at": f"{se.posting_date} {_time_str(se.posting_time)}" if se else None,
-				"owner": m.owner,
-				"owner_name": users.get(m.owner),
-				"creation": str(m.creation),
-			}
-		)
+			"stock_entry": se.name if se else None,
+			"sent_at": f"{se.posting_date} {_time_str(se.posting_time)}" if se else None,
+			"owner": m.owner,
+			"owner_name": users.get(m.owner),
+			"creation": str(m.creation),
+		}
+	)
+
+	# FU29: live stock at the ROUTE origin (MR from_warehouse) so request/siap
+	# cards can warn BEFORE a send is attempted; cached per (kind, key) — the
+	# same quantities send_handover re-checks under the lock.
+	route_cache = {}
+	for r in rows:
+		if r["lane"] not in (LANE_REQUEST, LANE_SIAP) or not r["from_warehouse"]:
+			continue
+		lot = wo_by_name.get(r["work_order"])
+		if not lot or lot.unsupported or (not lot.batchless and not r["batch"]):
+			continue
+		if lot.batchless:
+			key = ("i", r["item_code"], r["from_warehouse"])
+			if key not in route_cache:
+				route_cache[key] = _item_stock(r["item_code"], r["from_warehouse"])
+		else:
+			key = ("b", r["batch"], r["from_warehouse"])
+			if key not in route_cache:
+				route_cache[key] = flt(get_batch_qty(r["batch"], r["from_warehouse"]) or 0)
+		r["route_available"] = route_cache[key]
 	return rows
 
 
@@ -613,10 +632,10 @@ def _lots(wo_rows, requests):
 		else:
 			row.reserved_qty = reserved.get(row.work_order, 0.0)
 		row.available_qty = row.physical_qty - row.reserved_qty
-		# FU25: lot yang WO-nya sudah dicentang "Gudang Confirmed" turun dari
-		# papan Cold Storage (kecuali masih diikat permintaan aktif — dialognya
-		# butuh data lot).
-		if (row.physical_qty <= 0 or row.gudang_confirmed) and row.work_order not in bound:
+		# FU30: penanda manual "Gudang Confirmed" dipensiunkan — lot turun murni
+		# dari stok (physical 0) / Status Serah Terima; kecuali masih diikat
+		# permintaan aktif (dialognya butuh data lot).
+		if row.physical_qty <= 0 and row.work_order not in bound:
 			continue  # empty lot nobody references — drops off the lane
 		lots.append(row)
 
@@ -923,9 +942,9 @@ def send_handover(material_request):
     MR's requested qty (= the WO's produced_qty at request time, R6) from the
     source warehouse to the handover target. ONE transaction: any failure rolls
     back with zero partial documents. Batch-tracked rows keep batch_no (the
-    batch seam); batchless rows pre-check the item pool. Shortage that slips
-    past the pre-check dies at submit with BatchNegativeStockError (a
-    frappe.ValidationError, T21) inside the same transaction."""
+    batch seam); the shortage pre-check reads the ROUTE from-warehouse (FU29),
+    so a lot whose stock lives elsewhere is refused here with a clear message —
+    native submit validation stays as the backstop in the same transaction."""
     _require_role(
         ROLE_PRODUKSI, _("Hanya Manufacturing User yang dapat mengirim serah terima.")
     )
@@ -953,15 +972,23 @@ def send_handover(material_request):
                 get_link_to_form("Stock Entry", sent[material_request].name), material_request
             )
         )
+    # FU29: pre-check against the ROUTE origin (the same warehouse
+    # make_mr_stock_entry will use for s_warehouse) — NOT the lot's SE-derived
+    # warehouse. A legacy lot whose stock sits elsewhere is refused HERE with a
+    # clear Indonesian message instead of dying at native submit.
+    route_wh = mr.items[0].from_warehouse or mr.set_from_warehouse or lot.warehouse
     physical = (
-        _item_stock(lot.item_code, _pool_warehouse(lot))
+        _item_stock(lot.item_code, route_wh)
         if lot.batchless
-        else flt(get_batch_qty(batch, lot.warehouse) or 0)
+        else flt(get_batch_qty(batch, route_wh) or 0)
     )
     if physical < qty:  # fail atomically here; NegativeStockError is the backstop
         frappe.throw(
-            _("Stok {0} di gudang asal hanya {1}; tidak bisa mengirim {2}.").format(
-                lot.item_code if lot.batchless else f"batch {batch}", physical, qty
+            _("Stok {0} di gudang asal {1} hanya {2}; tidak bisa mengirim {3}.").format(
+                lot.item_code if lot.batchless else f"batch {batch}",
+                route_wh,
+                physical,
+                qty,
             )
         )
 

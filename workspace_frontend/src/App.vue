@@ -64,7 +64,8 @@ const busyLoading = computed(() =>
 )
 onMounted(async () => {
   await loadListPreferences()
-  loadList(); loadBoard(); loadSuggestionPreferences()
+  if (section.value !== 'workorder' || woId.value) loadList()
+  loadBoard(); loadSuggestionPreferences()
 })
 watch(() => state.actionError, error => {
   if (!error) return

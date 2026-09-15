@@ -7,7 +7,8 @@ import {
   cancelRequest, createRequest, handoverBoard, handoverLots, handoverRequests, handoverState,
   listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, savePostPacking, sendHandover, setActionError
 } from './store.js'
-import { fmtInt, fmtStampShort, packParts, qtyMain } from './format.js'
+import { fmtInt, qtyMain } from './format.js'
+import { handoverCard } from './handover-card.js'
 import {
   CheckCircle2, ClipboardList, Filter, GripVertical, Inbox,
   PackageCheck, Snowflake, Truck, Undo2
@@ -27,54 +28,59 @@ const lanes = [
   { key: 'kirim', title: 'Terkirim', sub: 'Diterima gudang', icon: CheckCircle2, tone: 'ok', empty: 'Belum ada terkirim' }
 ]
 
-function qtyPair(pcs, units) {
-  if (!Number.isFinite(pcs)) return { qv: '—', qu: '—' }
-  const { str, approx } = packParts(pcs, units)
-  return {
-    qv: hasAlternate(units) ? `${approx ? '≈ ' : ''}${str} ${units.displayUom}` : '—',
-    qu: `${fmtInt(pcs)} ${units.stockUom || 'PCS'}`
-  }
-}
-function hasAlternate(units) {
-  return !!units?.displayUom && units.displayUom !== units.stockUom &&
-    Number.isFinite(units.qtyInPack) && units.qtyInPack > 0
-}
-
 // T32 (R4): box = berat kg pada MR (float) — teks "Box a / b kg" bila ada isian
 const boxText = (r) => (r.box1 != null || r.box2 != null)
-  ? `Box ${r.box1 ?? '-'} / ${r.box2 ?? '-'} kg`
+  ? `${r.box1 ?? '-'} / ${r.box2 ?? '-'} kg`
+  : ''
+
+// FU29: peringatan dini — stok batch/pool di GUDANG ASAL RUTE kurang dari qty
+const routeWarn = (r) => (r.routeAvailable != null && r.requestedQtyPcs > r.routeAvailable)
+  ? `Stok di ${r.fromWarehouse || 'gudang asal'} tinggal ${fmtInt(r.routeAvailable)} ${r.stockUom || 'Pcs'}`
   : ''
 
 // ---- kartu: sumber tampilan (selalu turunan payload board) ----
 function lotCard(lot) {
+  const base = {
+    kind: 'lot', ref: lot.workOrder, key: lot.workOrder,
+    live: isGudang.value, draggable: isGudang.value,
+    name: lot.item
+  }
   if (lot.unsupported) {
-    // §4.9: kartu eksplisit + alasan, sebelum mutasi apa pun (angka numerik null)
     return {
-      kind: 'lot', ref: lot.workOrder, key: lot.workOrder, live: false, draggable: false,
-      name: lot.item, id: lot.workOrder,
-      ql: 'Tidak didukung', qv: '—', qu: '—',
-      note: lot.unsupportedReason, meta: '', pill: ''
+      ...base,
+      live: false,
+      draggable: false,
+      workOrder: lot.workOrder,
+      document: '',
+      batch: '',
+      adonan: '',
+      quantityLabel: 'Tidak didukung',
+      quantity: '—',
+      timestampLabel: '',
+      timestamp: '',
+      box: '',
+      note: lot.unsupportedReason
     }
   }
   const reserved = lotReservedPcs(lot)
   return {
-    kind: 'lot', ref: lot.workOrder, key: lot.workOrder,
-    live: isGudang.value, draggable: isGudang.value,
-    name: lot.item,
-    // batch = identitas lot (identifikasi Work Order, keputusan user 2026-09-14)
-    id: lot.batch ? `${lot.workOrder} · ${lot.batch}` : lot.workOrder,
-    ql: 'Hasil WO',
-    ...qtyPair(lot.producedQty, lot),
-    // batchless: stok tidak bisa diatribusikan per WO — seluruh saldo item di
-    // gudang ini satu pool (angka sama di semua kartu WO item ini)
+    ...base,
+    ...handoverCard({
+      workOrder: lot.workOrder,
+      batch: lot.batch,
+      adonan: lot.adonanKe,
+      quantity: lot.producedQty,
+      quantityLabel: 'Hasil WO',
+      timestampLabel: 'Selesai',
+      timestamp: lot.completedAt || lot.enteredAt,
+      units: lot,
+      box: null
+    }),
     note: lot.batchless
-      ? `Stok item digabung (tanpa batch)${reserved > 0 ? ` · Tertahan ${fmtInt(reserved)} PCS` : ''}`
+      ? `Stok item digabung${reserved > 0 ? ` · tertahan ${fmtInt(reserved)} PCS` : ''}`
       : reserved > 0
-        ? `Fisik ${fmtInt(lotRemainingPcs(lot))} PCS · Tertahan ${fmtInt(reserved)} PCS`
-        : '',
-    // T32 (R7): cap selesai = posting Manufacture TERAKHIR; Masuk tetap FIFO saja
-    meta: `Selesai ${fmtStampShort(lot.completedAt || lot.enteredAt)}`,
-    pill: `Adonan ${lot.adonanKe ?? '-'}${lot.batchless ? ' · tanpa batch' : ''}`
+        ? `Fisik ${fmtInt(lotRemainingPcs(lot))} PCS · tertahan ${fmtInt(reserved)} PCS`
+        : ''
   }
 }
 
@@ -83,33 +89,45 @@ function reqCard(r) {
   const stopped = r.flag === 'stopped'
   return {
     kind: 'request', ref: r.id, key: r.id,
-    // Gudang: klik/drag balik = batalkan; Produksi: maju ke Siap Kirim
     live: !stopped, draggable: !stopped,
-    name: r.item, id: `${r.workOrder} · ${r.materialRequest}`,
-    ql: 'Diminta', ...qtyPair(r.requestedQtyPcs, lot0 || r),
-    note: stopped ? 'Dihentikan di Desk — perlu unstop manual sebelum bisa dilanjutkan.' : '',
-    meta: [r.batch ? `Batch ${r.batch}` : null, `Adonan ke ${r.adonanKe ?? lot0?.adonanKe ?? '-'}`,
-      `Diminta ${fmtStampShort(r.createdAt)}`]
-      .filter(Boolean).join(' · '),
-    pill: boxText(r) || 'Box belum diisi'
+    name: r.item,
+    ...handoverCard({
+      workOrder: r.workOrder,
+      document: r.materialRequest,
+      batch: r.batch,
+      adonan: r.adonanKe ?? lot0?.adonanKe,
+      quantity: r.requestedQtyPcs,
+      quantityLabel: 'Diminta',
+      timestampLabel: 'Waktu',
+      timestamp: r.createdAt,
+      units: lot0 || r,
+      box: boxText(r) || undefined
+    }),
+    note: [stopped ? 'Dihentikan di Desk. Aktifkan kembali sebelum dilanjutkan.' : '', routeWarn(r)]
+      .filter(Boolean).join(' · ')
   }
 }
 
 function siapCard(r) {
   const lot0 = lotForWo(r.workOrder)
   const p = r.postPacking
-  const recorded = (p?.rejectQty ?? 0) + (p?.trialQty ?? 0) + (p?.sisaQty ?? 0)
   return {
     kind: 'siap', ref: r.id, key: r.id,
     live: isProduksi.value, draggable: isProduksi.value,
-    name: r.item, id: `${r.workOrder} · ${r.materialRequest}`,
-    ql: 'Qty Transfer', ...qtyPair(r.requestedQtyPcs, lot0 || r),
-    note: recorded > 0
-      ? `Reject ${fmtInt(p.rejectQty ?? 0)} · Trial ${fmtInt(p.trialQty ?? 0)} · Sisa ${fmtInt(p.sisaQty ?? 0)} PCS`
-      : '',
-    meta: [r.batch ? `Batch ${r.batch}` : null, p?.qc ? `QC ${p.qcLabel || p.qc} · ${p.jam}` : null]
-      .filter(Boolean).join(' · '),
-    pill: boxText(r) || 'Box belum diisi'
+    name: r.item,
+    ...handoverCard({
+      workOrder: r.workOrder,
+      document: r.materialRequest,
+      batch: r.batch,
+      adonan: r.adonanKe ?? lot0?.adonanKe,
+      quantity: r.requestedQtyPcs,
+      quantityLabel: 'Qty kirim',
+      timestampLabel: p?.jam ? 'Jam packing' : '',
+      timestamp: p?.jam,
+      units: lot0 || r,
+      box: boxText(r) || undefined
+    }),
+    note: [p?.qc ? `QC ${p.qcLabel || p.qc}` : '', routeWarn(r)].filter(Boolean).join(' · ')
   }
 }
 
@@ -118,11 +136,20 @@ function doneCard(r) {
   return {
     kind: 'done', ref: r.id, key: r.id,
     live: false, draggable: false,
-    name: r.item, id: `${r.workOrder} · ${r.stockEntry}`,
-    ql: 'Ditransfer', ...qtyPair(r.requestedQtyPcs, lot0 || r),
-    note: '',
-    meta: [r.batch ? `Batch ${r.batch}` : null, fmtStampShort(r.sentAt)].filter(Boolean).join(' · '),
-    pill: boxText(r) || 'Box belum diisi'
+    name: r.item,
+    ...handoverCard({
+      workOrder: r.workOrder,
+      document: r.stockEntry,
+      batch: r.batch,
+      adonan: r.adonanKe ?? lot0?.adonanKe,
+      quantity: r.requestedQtyPcs,
+      quantityLabel: 'Ditransfer',
+      timestampLabel: 'Dikirim',
+      timestamp: r.sentAt,
+      units: lot0 || r,
+      box: boxText(r) || undefined
+    }),
+    note: ''
   }
 }
 
@@ -254,12 +281,17 @@ function optimisticReqCard(woId) {
   return {
     kind: 'request', ref: `pending:${woId}`, key: `pending:${woId}`,
     live: false, draggable: false, pending: true,
-    name: lot.item, id: lot.workOrder,
-    ql: 'Diminta', ...qtyPair(lot.producedQty, lot),
-    note: 'Menyimpan ke ERPNext…',
-    meta: [lot.batch ? `Batch ${lot.batch}` : null, `Adonan ke ${lot.adonanKe ?? '-'}`]
-      .filter(Boolean).join(' · '),
-    pill: 'Box belum diisi'
+    name: lot.item,
+    ...handoverCard({
+      workOrder: lot.workOrder,
+      batch: lot.batch,
+      adonan: lot.adonanKe,
+      quantity: lot.producedQty,
+      quantityLabel: 'Diminta',
+      timestampLabel: '',
+      units: lot
+    }),
+    note: 'Menyimpan ke ERPNext…'
   }
 }
 
@@ -489,7 +521,7 @@ onMounted(() => {
         <div
           v-for="c in byLane[l.key]"
           :key="c.key"
-          class="kb-card"
+          class="kb-card se-kb-card"
           :class="{ live: c.live, pending: c.pending, dragging: drag && drag.kind === c.kind && drag.ref === c.ref }"
           :draggable="c.draggable"
           @dragstart="onDragStart($event, c)"
@@ -500,16 +532,31 @@ onMounted(() => {
             <span class="kb-name">{{ c.name }}</span>
             <GripVertical v-if="c.draggable" class="kb-grip" :size="15" :stroke-width="2" aria-hidden="true" />
           </div>
-          <span class="kb-id">{{ c.id }}</span>
-          <div class="kb-qty">
-            <span class="ql">{{ c.ql }}</span>
-            <span class="qv">{{ c.qv }}</span>
-            <span class="qu">{{ c.qu }}</span>
+          <div class="se-card-docs">
+            <span class="kb-id">{{ c.workOrder }}</span>
+            <span v-if="c.document" class="kb-id">{{ c.document }}</span>
           </div>
+          <dl class="se-card-rows">
+            <div v-if="c.batch" class="se-card-row se-card-batch">
+              <dt>Batch</dt>
+              <dd>{{ c.batch }}</dd>
+            </div>
+            <div v-if="c.adonan" class="se-card-row">
+              <dt>Adonan</dt>
+              <dd>{{ c.adonan }}</dd>
+            </div>
+            <div class="se-card-row se-card-qty">
+              <dt>{{ c.quantityLabel }}</dt>
+              <dd>{{ c.quantity }}</dd>
+            </div>
+            <div v-if="c.timestampLabel && c.timestamp" class="se-card-row">
+              <dt>{{ c.timestampLabel }}</dt>
+              <dd>{{ c.timestamp }}</dd>
+            </div>
+          </dl>
           <span v-if="c.note" class="kb-note">{{ c.note }}</span>
-          <div v-if="c.meta || c.pill" class="kb-foot">
-            <span class="kb-meta">{{ c.meta }}</span>
-            <span v-if="c.pill" class="kb-pill">{{ c.pill }}</span>
+          <div v-if="c.box" class="se-card-foot">
+            <span class="kb-pill">{{ c.box }}</span>
           </div>
         </div>
         <div v-if="!byLane[l.key].length" key="empty" class="kb-empty">

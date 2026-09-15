@@ -89,6 +89,10 @@ class TestHandoverActions(IntegrationTestCase):
 		cls.fg_nb = cls._make_item(f"{PREFIX}-FGNB-{suffix}", batch=False)
 		cls.bom = cls._make_bom(cls.fg)
 		cls.bom_nb = cls._make_bom(cls.fg_nb)
+		# FU29: a SECOND batchless item — the fu29 drift test ships from its own
+		# pool so its target_wh balance cannot leak into T31's pool accounting
+		cls.fg_nb2 = cls._make_item(f"{PREFIX}-FGNB2-{suffix}", batch=False)
+		cls.bom_nb2 = cls._make_bom(cls.fg_nb2)
 		cls._receipt(cls.rm, 20000, cls.src_wh)  # covers the run (no per-test rollback)
 
 		cls.prior_target = frappe.db.get_single_value(
@@ -191,11 +195,17 @@ class TestHandoverActions(IntegrationTestCase):
 
 	@classmethod
 	def _make_wo(cls, qty, item=None):
+		if item in (None, cls.fg):
+			bom_no = cls.bom
+		elif item == cls.fg_nb:
+			bom_no = cls.bom_nb
+		else:
+			bom_no = cls.bom_nb2
 		wo = frappe.get_doc(
 			{
 				"doctype": "Work Order",
 				"production_item": item or cls.fg,
-				"bom_no": cls.bom if item in (None, cls.fg) else cls.bom_nb,
+				"bom_no": bom_no,
 				"qty": qty,
 				"company": cls.company,
 				"fg_warehouse": cls.cold_wh,
@@ -908,3 +918,92 @@ class TestHandoverActions(IntegrationTestCase):
 		# desk SE cancel menurunkan state (SE on_cancel)
 		frappe.get_doc("Stock Entry", result["stock_entry"]).cancel()
 		self.assertEqual(status(wo.name), "Siap Kirim")
+
+	# ------------------- FU29. pre-check gudang rute + route_available board
+
+	def test_fu29_send_blocked_when_route_warehouse_lacks_batch(self):
+		"""FU29 root cause (kasus nyata MR 00270): stok lot ada di gudang asal
+		SE, tetapi rute request mengarah ke source setting yang kosong.
+		send_handover wajib menolak terhadap from_warehouse RUTE (pesan
+		Indonesia menyebut gudangnya, nol tulis) — bukan mati di submit native
+		dengan error Inggris mentah."""
+		wo, batch = self._lot_ready(50)
+		prior = frappe.db.get_single_value(
+			"Manufacturing Settings", "custom_default_handover_source_warehouse"
+		)
+		try:
+			warehouse_defaults_save(
+				handover_warehouse=self.target_wh, handover_source_warehouse=self.src_wh
+			)
+			result = self._request(wo)
+			mr = frappe.get_doc("Material Request", result["material_request"])
+			self.assertEqual(mr.items[0].from_warehouse, self.src_wh)  # origin rute
+
+			# peringatan dini di board: stok batch ini di gudang rute = 0
+			req = self._req(result["board"], mr.name)
+			self.assertEqual(flt(req["route_available"]), 0)
+
+			self._postpack(mr, box_1=1)
+			frappe.db.savepoint("fu29_blocked")
+			try:
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					self._send(mr)
+			finally:
+				frappe.db.rollback(save_point="fu29_blocked")
+			self.assertIn("gudang asal", str(ctx.exception))
+			self.assertIn(self.src_wh, str(ctx.exception))  # menyebut gudang rutenya
+			self.assertEqual(
+				len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})), 0
+			)
+		finally:
+			warehouse_defaults_save(
+				handover_warehouse=self.target_wh, handover_source_warehouse=prior
+			)
+
+	def test_fu29_route_available_full_and_send_still_ok(self):
+		"""Rute = tempat batch berada (fallback lot warehouse): tanpa peringatan
+		(route_available == qty) dan kirim tetap sukses — regresi jalur sehat."""
+		wo, batch = self._lot_ready(30)
+		result = self._request(wo)  # setting unset -> rute fallback ke lot warehouse
+		mr = frappe.get_doc("Material Request", result["material_request"])
+		req = self._req(result["board"], mr.name)
+		self.assertEqual(flt(req["route_available"]), 30)
+		self._postpack(mr, box_1=1)
+		res = self._send(mr)
+		self.assertEqual(flt(res["qty"]), 30)
+
+	def test_fu29_batchless_send_follows_route_not_current_setting(self):
+		"""Batchless drift (FU29): request dibuat saat source setting menunjuk
+		pool yang berisi; setting LALU berubah -> kirim tetap mengikuti RUTE
+		(MR from_warehouse) yang benar-benar dipakai SE, bukan pool setting
+		baru. Kode lama memeriksa pool setting terkini dan salah memblokir."""
+		wo = self._make_wo(40, item=self.fg_nb2)
+		self._transfer(wo)
+		self._manufacture(wo, 40)
+		prior = frappe.db.get_single_value(
+			"Manufacturing Settings", "custom_default_handover_source_warehouse"
+		)
+		try:
+			warehouse_defaults_save(
+				handover_warehouse=self.target_wh, handover_source_warehouse=self.cold_wh
+			)
+			result = self._request(wo)  # rute = cold_wh, pool berisi 40
+			mr = frappe.get_doc("Material Request", result["material_request"])
+			self.assertEqual(mr.items[0].from_warehouse, self.cold_wh)
+			req = self._req(result["board"], mr.name)
+			self.assertEqual(flt(req["route_available"]), 40)
+
+			# setting berubah SETELAH request dibuat — rute MR tidak ikut pindah
+			warehouse_defaults_save(
+				handover_warehouse=self.target_wh, handover_source_warehouse=self.src_wh
+			)
+			board = handover_board()
+			self.assertEqual(flt(self._req(board, mr.name)["route_available"]), 40)
+
+			self._postpack(mr)
+			res = self._send(mr)  # route berisi: kirim sah walau setting kini src_wh
+			self.assertEqual(flt(res["qty"]), 40)
+		finally:
+			warehouse_defaults_save(
+				handover_warehouse=self.target_wh, handover_source_warehouse=prior
+			)

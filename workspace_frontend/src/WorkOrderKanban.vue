@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { state, openWo, getWo, setActionError, HANDOVER_LABELS } from './store.js'
-import { fmtDate, qtyStack } from './format.js'
+import { state, openWo, getWo, setActionError } from './store.js'
+import { workOrderCard } from './work-order-card.js'
 import { Boxes, CheckCircle2, ClipboardList, Cog, Flag, GripVertical, Inbox, PackageCheck } from 'lucide-vue-next'
 import StagePersiapan from './stages/StagePersiapan.vue'
 import StageMaterial from './stages/StageMaterial.vue'
@@ -114,7 +114,16 @@ function cancelDialog(event) {
 watch(() => selected.value?.stage, stage => {
   if (stage && openedStage.value && stage !== openedStage.value) close()
 })
-function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status === 'Completed' ? 'b-done' : 'b-run' }
+function cardInfo(w) {
+  return workOrderCard({
+    quantity: w.plannedStockQty,
+    units: w,
+    adonan: w.persiapan.adonanKe,
+    plannedDate: w.plannedDate,
+    completed: w.stage === 'completed',
+    finishedAt: w.finishedAt
+  })
+}
 </script>
 <template>
   <p v-if="opening" role="status">Memuat detail Work Order…</p>
@@ -143,7 +152,7 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
         <div
           v-for="w in byLane[l.key]"
           :key="w.id"
-          class="kb-card live"
+          class="kb-card wo-kb-card live"
           :class="{ dragging: drag && drag.id === w.id }"
           :draggable="!!nextStage(w)"
           @dragstart="onDragStart($event, w)"
@@ -152,22 +161,26 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
         >
           <div class="kb-top">
             <span class="kb-name">{{ w.product }}</span>
-            <span v-if="w.persiapan.adonanKe != null" class="chip chip-off kb-adonan">Adonan ke {{ w.persiapan.adonanKe }}</span>
             <GripVertical v-if="nextStage(w)" class="kb-grip" :size="15" :stroke-width="2" aria-hidden="true" />
           </div>
           <span class="kb-id"><a :href="'#/wo/' + w.id" draggable="false" @click.stop>{{ w.id }}</a></span>
-          <div class="kb-qty">
-            <span class="ql">Rencana Produksi</span>
-            <span class="qv">{{ qtyStack(w.plannedStockQty, w).main }}</span>
-            <span class="qu">{{ qtyStack(w.plannedStockQty, w).sub }}</span>
-          </div>
-          <div class="kb-foot">
-            <span class="kb-meta">
-              {{ w.stage === 'completed' ? `Selesai ${w.finishedAt || ''}` : `Jadwal ${fmtDate(w.plannedDate)}` }}
-            </span>
-            <span v-if="w.handover" class="chip-gudang" :class="w.handover">{{ HANDOVER_LABELS[w.handover] }}</span>
-            <span class="badge" :class="badgeClass(w.status)">{{ w.status }}</span>
-          </div>
+          <dl class="wo-card-rows">
+            <div class="wo-card-row wo-card-qty">
+              <dt>Rencana</dt>
+              <dd>
+                <strong>{{ cardInfo(w).primaryQuantity }}</strong>
+                <span v-if="cardInfo(w).stockQuantity">{{ cardInfo(w).stockQuantity }}</span>
+              </dd>
+            </div>
+            <div class="wo-card-row">
+              <dt>Adonan</dt>
+              <dd>{{ cardInfo(w).adonan || '-' }}</dd>
+            </div>
+            <div class="wo-card-row">
+              <dt>{{ cardInfo(w).dateLabel }}</dt>
+              <dd>{{ cardInfo(w).date }}</dd>
+            </div>
+          </dl>
         </div>
         <div v-if="!byLane[l.key].length" key="empty" class="kb-empty">
           <Inbox :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -190,6 +203,7 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
           <span class="kanban-dialog-eyebrow">Work Order</span>
           <h2 id="kanban-dialog-title" class="mono">{{ selected.id }}</h2>
           <p>{{ selected.product }}</p>
+          <p class="kanban-dialog-adonan">Adonan ke {{ selected.persiapan.adonanKe ?? '-' }}</p>
         </div>
         <button class="btn kanban-dialog-close" :disabled="!!state.pending" @click="close">Tutup</button>
       </header>

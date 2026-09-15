@@ -1,7 +1,8 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
 import { fmtDate, qtyStack } from './format.js'
+import { buildWorkOrderPreferences, normalizeWorkOrderPreferences } from './work-order-preferences.js'
 import { Search, Filter, ChevronRight, SearchX, Table, Kanban } from 'lucide-vue-next'
 import WorkOrderKanban from './WorkOrderKanban.vue'
 
@@ -13,14 +14,10 @@ const fFrom = ref('')
 const fTo = ref('')
 const pageSize = computed(() => listState.pageSize)
 const filterOpen = ref(false)
+const restoring = ref(true)
 let reloadTimer
 
 const products = computed(() => [...new Map(workOrders.map((w) => [w.itemCode, w.product]))].sort((a, b) => a[1].localeCompare(b[1])))
-function normalizeProduct(value) {
-  if (!value || value === 'all') return 'all'
-  if (products.value.some(([code]) => code === value)) return value
-  return products.value.find(([, name]) => name === value)?.[0] || 'all'
-}
 const todayLabel = new Date().toLocaleDateString('id-ID', {
   weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
 })
@@ -31,20 +28,28 @@ const activeFilters = computed(() =>
   (fFrom.value ? 1 : 0) + (fTo.value ? 1 : 0)
 )
 
-function selectedProductCode() {
-  return normalizeProduct(fProduct.value)
-}
 function filterPayload() {
   return {
-    search: q.value.trim(), productionItem: selectedProductCode() === 'all' ? '' : selectedProductCode(),
+    search: q.value.trim(), productionItem: fProduct.value === 'all' ? '' : fProduct.value,
     status: fStatus.value === 'all' ? '' : fStatus.value,
     stage: fStage.value === 'all' ? '' : (fStage.value === 'done' ? 'selesai' : fStage.value),
       startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value
   }
 }
 function saveWoPreferences() {
+  if (restoring.value) return Promise.resolve()
   return saveListPreferences({
-    workOrder: { q: q.value, product: fProduct.value, status: fStatus.value, stage: fStage.value, from: fFrom.value, to: fTo.value, pageSize: pageSize.value, filterOpen: filterOpen.value },
+    workOrder: buildWorkOrderPreferences({
+      q: q.value,
+      product: fProduct.value,
+      status: fStatus.value,
+      stage: fStage.value,
+      from: fFrom.value,
+      to: fTo.value,
+      pageSize: pageSize.value,
+      filterOpen: filterOpen.value,
+      view: listPrefs.view
+    }),
     handover: savedListPreferences.handover || {}
   })
 }
@@ -74,22 +79,34 @@ function todayISO() {
 function today() { fFrom.value = todayISO(); fTo.value = todayISO(); scheduleReload() }
 function goPage(page) { listState.page = page; loadList({ ...filterPayload(), start: (page - 1) * pageSize.value, pageLen: pageSize.value }) }
 const filtered = computed(() => workOrders
-    .filter(w => selectedProductCode() === 'all' || w.itemCode === selectedProductCode())
+  .filter(w => fProduct.value === 'all' || w.itemCode === fProduct.value)
   .filter(w => fStatus.value === 'all' || w.status === fStatus.value)
   .filter(w => fStage.value === 'all' || (fStage.value === 'done' ? w.stage === 'completed' : w.stage === fStage.value))
   .filter(w => !fFrom.value || w.plannedDate >= fFrom.value)
   .filter(w => !fTo.value || w.plannedDate <= fTo.value)
   .filter(w => { const t = q.value.trim().toLowerCase(); return !t || w.id.toLowerCase().includes(t) || w.product.toLowerCase().includes(t) || w.itemCode.toLowerCase().includes(t) }))
 const pagedFiltered = computed(() => filtered.value)
-watch([q, fProduct, fStatus, fStage, fFrom, fTo], () => { listState.page = 1; scheduleReload() })
-// panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
-watch(filterOpen, () => saveWoPreferences())
+watch([q, fProduct, fStatus, fStage, fFrom, fTo], () => {
+  if (restoring.value) return
+  listState.page = 1
+  scheduleReload()
+})
+watch(filterOpen, saveWoPreferences)
+watch(() => listPrefs.view, saveWoPreferences)
 onMounted(() => {
-  const apply = () => {
-    const p = savedListPreferences.workOrder || {}
-    q.value = p.q || ''; fProduct.value = normalizeProduct(p.product); fStatus.value = p.status || 'all'; fStage.value = p.stage || 'all'; fFrom.value = p.from || ''; fTo.value = p.to || ''
+  const apply = async () => {
+    const p = normalizeWorkOrderPreferences(savedListPreferences.workOrder)
+    q.value = p.q
+    fProduct.value = p.product
+    fStatus.value = p.status
+    fStage.value = p.stage
+    fFrom.value = p.from
+    fTo.value = p.to
     listState.pageSize = normalizePageSize(p.pageSize)
-    filterOpen.value = !!p.filterOpen
+    filterOpen.value = p.filterOpen
+    listPrefs.view = p.view
+    await nextTick()
+    restoring.value = false
     reload()
   }
   if (listPreferencesState.loaded) apply()
@@ -97,7 +114,7 @@ onMounted(() => {
     let applied = false
     const run = () => { if (applied) return; applied = true; apply() }
     const timer = setInterval(() => { if (listPreferencesState.loaded) { clearInterval(timer); run() } }, 25)
-    setTimeout(() => { clearInterval(timer); run() }, 2000) // preferensi gagal termuat → daftar tetap jalan
+    setTimeout(() => { clearInterval(timer); run() }, 2000)
   }
 })
 function open(id) { window.location.hash = '#/wo/' + id }
@@ -138,6 +155,7 @@ function stageLabel(w) { return w.stage === 'completed' ? 'Selesai' : STAGE_LABE
           <label>Produk</label>
           <select v-model="fProduct" class="select">
             <option value="all">Semua produk</option>
+            <option v-if="fProduct !== 'all' && !products.some(([code]) => code === fProduct)" :value="fProduct">{{ fProduct }}</option>
             <option v-for="([code, name]) in products" :key="code" :value="code">{{ name }}</option>
           </select>
         </div>

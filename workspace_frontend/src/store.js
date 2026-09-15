@@ -416,6 +416,8 @@ function mapRequest(r) {
     box1: r.box_1, box2: r.box_2, boxes: r.boxes || [],
     lane: r.lane, flag: r.flag,
     fromWarehouse: r.from_warehouse, toWarehouse: r.to_warehouse,
+    // FU29: stok live di gudang asal rute (batch/pool) — null = tak dapat dihitung
+    routeAvailable: r.route_available ?? null,
     postPacking: r.postpacking ? {
       goodQty: r.postpacking.good, rejectQty: r.postpacking.reject,
       trialQty: r.postpacking.trial, sisaQty: r.postpacking.sisa,

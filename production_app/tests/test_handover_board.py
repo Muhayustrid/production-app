@@ -352,25 +352,8 @@ class TestHandoverBoard(IntegrationTestCase):
 
 	# ------------------------------------------------- 1. lots: FIFO + truth
 
-	def test_fu25_gudang_confirmed_hides_lot(self):
-		"""FU25: checkbox Work Order custom_gudang_confirmed menurunkan lotnya
-		dari papan (Cold Storage) — stok masih ada, hanya disembunyikan; uncheck
-		mengembalikannya. Item sendiri: state menumpuk antar test, jadi jangan
-		bagi item dengan test FIFO/hint (lihat header file)."""
-		suffix = random_string(4).upper()
-		fg = _make_item(f"{PREFIX}-FGGC-{suffix}", self.group, self.uom)
-		bom = self._make_bom(fg)
-		with self._pin_settings(handover_source_warehouse=None):
-			wo = self._make_wo(bom, 50, fg, "1")
-			self._transfer(wo)
-			self._manufacture(wo, 50, "10:00:00")
-			names = lambda b: {l["work_order"] for l in b["lots"]}
-
-			self.assertIn(wo.name, names(handover_board()))
-			frappe.db.set_value("Work Order", wo.name, "custom_gudang_confirmed", 1)
-			self.assertNotIn(wo.name, names(handover_board()))
-			frappe.db.set_value("Work Order", wo.name, "custom_gudang_confirmed", 0)
-			self.assertIn(wo.name, names(handover_board()))
+	# FU30: test_fu25_gudang_confirmed_hides_lot dipensiun bersama fieldnya —
+	# lot kini turun murni dari stok (physical 0) / Status Serah Terima.
 
 	def test_t23_lot_fifo_enrichment_and_physical(self):
 		"""Two lots (different items) list FIFO by Manufacture posting; cards
