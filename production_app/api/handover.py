@@ -18,11 +18,18 @@
 #   Requests carry the Work Order's FULL produced_qty (R3); boxes are Float kg
 #   only (R4/R8); send moves the MR's requested qty and never stops the MR (R6).
 
+from collections import defaultdict
+
 import frappe
 from frappe import _
 from frappe.utils import add_days, flt, get_link_to_form, now
 
 from erpnext.stock.doctype.batch.batch import get_batch_qty
+from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+	get_available_batches,
+	get_stock_ledgers_batches,
+	update_available_batches,
+)
 
 from production_app.api.work_order import _enrich_units
 
@@ -101,7 +108,38 @@ def _roles():
 	}
 
 
-def _wo_lot_rows():
+def _batch_quantities(requirements):
+	"""Physical batch quantity by (batch, warehouse), preserving the old
+	get_batch_qty(batch, warehouse) semantics without its per-lot queries."""
+	requirements = {
+		(item_code, batch_no, warehouse)
+		for item_code, batch_no, warehouse in requirements
+		if item_code and batch_no and warehouse
+	}
+	if not requirements:
+		return defaultdict(float)
+
+	kwargs = frappe._dict(
+		item_code=sorted({item_code for item_code, _batch, _warehouse in requirements}),
+		batch_no=sorted({batch_no for _item, batch_no, _warehouse in requirements}),
+		warehouse=sorted({warehouse for _item, _batch, warehouse in requirements}),
+		based_on=frappe.get_single_value("Stock Settings", "pick_serial_and_batch_based_on"),
+		for_stock_levels=False,
+		consider_negative_batches=False,
+	)
+	batches = get_available_batches(kwargs)
+	update_available_batches(batches, get_stock_ledgers_batches(kwargs))
+
+	wanted = {(batch_no, warehouse) for _item, batch_no, warehouse in requirements}
+	quantities = defaultdict(float)
+	for row in batches:
+		key = (row.batch_no, row.warehouse)
+		if key in wanted and flt(row.qty) > 0:
+			quantities[key] += flt(row.qty)
+	return quantities
+
+
+def _wo_lot_rows(wo_names=None):
 	"""One lot row per Work Order that has Manufacture history, enriched with
 	the shared qtyInPack logic (_enrich_units) and item display names.
 
@@ -116,10 +154,16 @@ def _wo_lot_rows():
 	WO's finished-goods total and completed_at the LATEST Manufacture posting
 	(rows iterate ascending, so the stamp is overwritten each iteration).
 	"""
+	filters = {"docstatus": 1}
+	if wo_names is not None:
+		wo_names = sorted({name for name in wo_names if name})
+		if not wo_names:
+			return []
+		filters["name"] = ("in", wo_names)
 	try:
 		wos = frappe.get_list(
 			"Work Order",
-			filters={"docstatus": 1},
+			filters=filters,
 			fields=[
 				"name", "production_item", "qty", "produced_qty", "custom_adonan_ke",
 				"fg_warehouse", "creation",
@@ -260,8 +304,16 @@ def _wo_lot_rows():
 			).format(w.name, " / ".join(parts))
 		else:
 			row.batch = next(iter(unique))
-			row.physical_qty = flt(get_batch_qty(row.batch, row.warehouse) or 0)
 		rows.append(row)
+
+	batch_qty = _batch_quantities(
+		(r.item_code, r.batch, r.warehouse)
+		for r in rows
+		if r.batch and not r.unsupported
+	)
+	for row in rows:
+		if row.batch and not row.unsupported:
+			row.physical_qty = flt(batch_qty.get((row.batch, row.warehouse), 0))
 
 	_enrich_units(rows)  # shared qtyInPack source — UOM logic not duplicated
 	names = _item_names({r.item_code for r in rows})
@@ -271,7 +323,7 @@ def _wo_lot_rows():
 	return rows
 
 
-def _requests(wo_rows):
+def _requests(wo_rows, wo_names=None, item_codes=None):
 	"""Handover request rows — one per Material Request bound to a Work Order
 	via Material Request Item.custom_work_order (T22 field).
 
@@ -283,10 +335,27 @@ def _requests(wo_rows):
 	SE is a dead request (needs a manual desk unstop) parked in the request
 	lane with flag="stopped" — visible, but reserving nothing (§4.3).
 	"""
+	item_filters = {"custom_work_order": ("is", "set")}
+	if wo_names is not None:
+		wo_names = sorted({name for name in wo_names if name})
+		if not wo_names:
+			return []
+		item_filters["custom_work_order"] = ("in", wo_names)
+	if item_codes is not None:
+		item_codes = sorted({code for code in item_codes if code})
+		if not item_codes:
+			return []
+		item_filters["item_code"] = ("in", item_codes)
+	mr_names = frappe.get_all("Material Request Item", filters=item_filters, pluck="parent")
+	if not mr_names:
+		return []
 	try:
 		mrs = frappe.get_list(
 			"Material Request",
-			filters={"material_request_type": "Material Transfer"},
+			filters={
+				"name": ("in", sorted(set(mr_names))),
+				"material_request_type": "Material Transfer",
+			},
 			fields=[
 				"name", "docstatus", "status", "owner", "creation",
 				"set_from_warehouse", "set_warehouse",
@@ -710,11 +779,26 @@ def _lot_for_wo(board, wo_name):
 
 
 def _checked_lot(wo_name):
-    """Server-truth lot for a locked Work Order: re-derived from the same board
-    builders (§4.1). Throws the §4.9 unsupported error (with native SE links)
-    or a no-lot error BEFORE any mutation. Batchless lots (follow-up 8) pass
-    through with batch=None — their stock math is pool-based in _lots()."""
-    lot = _lot_for_wo(_build_board(), wo_name)
+    """Server-truth lot for one locked Work Order. Batchless reservations expand
+    only to Work Orders sharing the item, instead of rebuilding the whole board."""
+    wo_rows = _wo_lot_rows([wo_name])
+    raw_lot = next((row for row in wo_rows if row.work_order == wo_name), None)
+    if raw_lot is not None and raw_lot.unsupported:
+        _throw_unsupported(raw_lot)
+
+    requests = _requests(wo_rows, wo_names=[wo_name])
+    if raw_lot is not None and raw_lot.batchless:
+        requests = _requests(wo_rows, item_codes=[raw_lot.item_code])
+        pool_wos = {
+            r["work_order"]
+            for r in requests
+            if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]
+        }
+        pool_wos.add(wo_name)
+        wo_rows = _wo_lot_rows(pool_wos)
+        requests = _requests(wo_rows, item_codes=[raw_lot.item_code])
+
+    lot = next((row for row in _lots(wo_rows, requests) if row.work_order == wo_name), None)
     if lot is not None and not lot.unsupported:
         return lot
     if lot is not None and lot.unsupported:
@@ -793,8 +877,8 @@ def create_request(work_order):
 
     # R3: one active request per WO — re-derived under the lock so racing
     # creates serialize on the row lock (stopped/draft/cancelled never block)
-    for r in _requests(_wo_lot_rows()):
-        if r["work_order"] == work_order and r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
+    for r in _requests([lot], wo_names=[work_order]):
+        if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
             frappe.throw(
                 _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, r["mr"])
             )

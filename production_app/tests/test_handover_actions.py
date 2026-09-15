@@ -26,6 +26,8 @@
 # Every record is test-only (T24/t24-prefixed); the Frappe test framework rolls
 # the run back. The two real warehouses are never touched.
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, flt, now, random_string, today
@@ -329,6 +331,27 @@ class TestHandoverActions(IntegrationTestCase):
 
 	# -------------------------------------------------- 1. create_request
 
+	def test_fu34_create_request_never_scans_unrelated_work_orders(self):
+		wo, _batch = self._lot_ready(35)
+		from production_app.api import handover
+
+		original = handover._wo_lot_rows
+
+		global_scans = 0
+
+		def tracked(wo_names=None):
+			nonlocal global_scans
+			if wo_names is None:
+				global_scans += 1
+			return original(wo_names=wo_names)
+
+		with patch.object(handover, "_wo_lot_rows", side_effect=tracked):
+			result = self._request(wo)
+
+		self.assertEqual(flt(result["qty"]), 35)
+		self.assertEqual(self._bound_mr_count(wo.name), 1)
+		self.assertEqual(global_scans, 1)  # one final server-truth response only
+
 	def test_t31_create_request_full_wo_qty_source_and_duplicate_guard(self):
 		"""R3: create_request(work_order) requests the WO's FULL produced qty —
 		no qty param; from_warehouse falls back to the SE-derived lot warehouse
@@ -383,6 +406,51 @@ class TestHandoverActions(IntegrationTestCase):
 			warehouse_defaults_save(
 				handover_warehouse=self.target_wh, handover_source_warehouse=prior
 			)
+
+	def test_fu34_batchless_targeted_lot_counts_sibling_reservations(self):
+		suffix = random_string(4).upper()
+		fg = self._make_item(f"{PREFIX}-FGPOOL-{suffix}", batch=False)
+		bom = self._make_bom(fg)
+		cls = type(self)
+		original_bom = cls.bom_nb2
+		cls.bom_nb2 = bom
+		try:
+			wo1 = self._make_wo(60, item=fg)
+			self._transfer(wo1)
+			self._manufacture(wo1, 60)
+			self._request(wo1)
+
+			wo2 = self._make_wo(40, item=fg)
+			self._transfer(wo2)
+			self._manufacture(wo2, 40)
+			pool = flt(_item_stock(fg, self.cold_wh))
+			drain_qty = pool - 60
+			if drain_qty > 0:
+				se = frappe.get_doc(
+					{
+						"doctype": "Stock Entry",
+						"stock_entry_type": "Material Transfer",
+						"company": self.company,
+						"items": [{
+							"item_code": fg,
+							"qty": drain_qty,
+							"basic_rate": 10,
+							"s_warehouse": self.cold_wh,
+							"t_warehouse": self.target_wh,
+							"use_serial_batch_fields": 0,
+						}],
+					}
+				)
+				self._pin_posting(se, "11:10:00")
+				se.insert()
+				se.submit()
+
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				self._request(wo2)
+			self.assertIn("tersedia 0", str(ctx.exception))
+			self.assertEqual(self._bound_mr_count(wo2.name), 0)
+		finally:
+			cls.bom_nb2 = original_bom
 
 	def test_t31_pool_short_blocked_zero_writes(self):
 		"""R3: the availability guard still holds at the WO's full qty — a

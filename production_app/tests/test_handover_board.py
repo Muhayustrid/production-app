@@ -15,6 +15,7 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, flt, now, random_string, today
 
 from contextlib import contextmanager
+from unittest.mock import patch
 
 from erpnext.manufacturing.doctype.work_order.work_order import (
 	make_stock_entry as make_wo_stock_entry,
@@ -397,6 +398,105 @@ class TestHandoverBoard(IntegrationTestCase):
 		self.assertEqual(flt(lot2["qty_in_pack"]), 1)
 		self.assertEqual(flt(lot2["physical_qty"]), 200)
 		self.assertFalse(lot2["has_older_lot_same_item"])  # different item
+
+	def test_fu34_batch_balances_are_bulk_loaded_in_one_query_pair(self):
+		"""Two batches of one item in one warehouse use one native bulk lookup,
+		while every card keeps the exact native per-batch quantity."""
+		wo1 = self._make_wo(self.bom_hint, 50, self.fg_hint, "1")
+		wo2 = self._make_wo(self.bom_hint, 60, self.fg_hint, "2")
+		self._transfer(wo1)
+		self._transfer(wo2)
+		self._manufacture(wo1, 50, "10:10:00")
+		self._manufacture(wo2, 60, "10:20:00")
+		batch1 = self._lot_in_cold(wo1)
+		batch2 = self._lot_in_cold(wo2)
+		expected = {
+			batch1: flt(get_batch_qty(batch1, self.cold_wh)),
+			batch2: flt(get_batch_qty(batch2, self.cold_wh)),
+		}
+
+		from production_app.api import handover
+
+		available = handover.get_available_batches
+		legacy = handover.get_stock_ledgers_batches
+		with (
+			patch.object(handover, "get_available_batches", wraps=available) as available_call,
+			patch.object(handover, "get_stock_ledgers_batches", wraps=legacy) as legacy_call,
+		):
+			rows = handover._wo_lot_rows(wo_names=[wo1.name, wo2.name])
+
+		lots = {row.batch: row for row in rows}
+		self.assertEqual(flt(lots[batch1].physical_qty), expected[batch1])
+		self.assertEqual(flt(lots[batch2].physical_qty), expected[batch2])
+		self.assertEqual(available_call.call_count, 1)
+		self.assertEqual(legacy_call.call_count, 1)
+		kwargs = available_call.call_args.args[0]
+		self.assertEqual(kwargs.item_code, [self.fg_hint])
+		self.assertEqual(kwargs.warehouse, [self.cold_wh])
+		self.assertEqual(set(kwargs.batch_no), {batch1, batch2})
+
+	def test_fu34_bulk_balances_preserve_physical_qty_when_sre_exists(self):
+		wo = self._make_wo(self.bom3, 50, self.fg3, "1")
+		self._transfer(wo)
+		self._manufacture(wo, 50, "10:22:00")
+		batch = self._lot_in_cold(wo)
+
+		from erpnext.stock.doctype.serial_and_batch_bundle import serial_and_batch_bundle
+		from production_app.api import handover
+
+		def reserved_for_item(kwargs):
+			if not kwargs.get("item_code"):
+				return frappe._dict()
+			return frappe._dict(
+				{
+					(batch, self.cold_wh): frappe._dict(
+						batch_no=batch,
+						warehouse=self.cold_wh,
+						qty=-10,
+					)
+				}
+			)
+
+		with patch.object(
+			serial_and_batch_bundle,
+			"get_reserved_batches_for_sre",
+			side_effect=reserved_for_item,
+		):
+			expected = flt(get_batch_qty(batch, self.cold_wh))
+			actual = handover._batch_quantities([(self.fg3, batch, self.cold_wh)])
+
+		self.assertEqual(expected, 50)
+		self.assertEqual(flt(actual[(batch, self.cold_wh)]), expected)
+
+	def test_fu34_checked_lot_does_not_build_the_full_board(self):
+		suffix = random_string(4).upper()
+		fg = _make_item(f"{PREFIX}-FGSC-{suffix}", self.group, self.uom)
+		bom = self._make_bom(fg)
+		wo = self._make_wo(bom, 40, fg, "1")
+		self._transfer(wo)
+		self._manufacture(wo, 40, "10:25:00")
+
+		from production_app.api import handover
+
+		original = handover._wo_lot_rows
+
+		def scoped_only(wo_names=None):
+			if wo_names is None:
+				raise AssertionError("targeted lot lookup must scope Work Orders")
+			return original(wo_names=wo_names)
+
+		with (
+			patch.object(
+				handover,
+				"_build_board",
+				side_effect=AssertionError("targeted lot lookup must not build the full board"),
+			),
+			patch.object(handover, "_wo_lot_rows", side_effect=scoped_only),
+		):
+			lot = handover._checked_lot(wo.name)
+
+		self.assertEqual(lot.work_order, wo.name)
+		self.assertEqual(flt(lot.available_qty), 40)
 
 	# ------------------------------- FU8. batchless lots: item-level pool
 
