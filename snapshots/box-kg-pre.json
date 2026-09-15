@@ -1,0 +1,55 @@
+{
+  "captured_at": "2026-09-14 23:46:09.070863",
+  "custom_fields": [
+    {
+      "allow_on_submit": 1,
+      "description": null,
+      "dt": "Material Request",
+      "fieldname": "custom_box_1",
+      "fieldtype": "Data",
+      "label": "Box 1",
+      "name": "Material Request-custom_box_1",
+      "non_negative": 0
+    },
+    {
+      "allow_on_submit": 1,
+      "description": null,
+      "dt": "Material Request",
+      "fieldname": "custom_box_2",
+      "fieldtype": "Data",
+      "label": "Box 2",
+      "name": "Material Request-custom_box_2",
+      "non_negative": 0
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Identifier Box 1 serah terima (teks, contoh BX-2201)",
+      "dt": "Work Order",
+      "fieldname": "custom_box_1",
+      "fieldtype": "Data",
+      "label": "Box 1",
+      "name": "Work Order-custom_box_1",
+      "non_negative": 0
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Identifier Box 2 serah terima (teks, contoh BX-2202)",
+      "dt": "Work Order",
+      "fieldname": "custom_box_2",
+      "fieldtype": "Data",
+      "label": "Box 2",
+      "name": "Work Order-custom_box_2",
+      "non_negative": 0
+    }
+  ],
+  "stored_values": {
+    "Material Request": {
+      "custom_box_1": {},
+      "custom_box_2": {}
+    },
+    "Work Order": {
+      "custom_box_1": {},
+      "custom_box_2": {}
+    }
+  }
+}

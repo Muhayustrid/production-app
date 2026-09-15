@@ -1317,26 +1317,26 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		wo = self._make_wo(100)
 
 		# submitted WO: workspace fields must be editable via update-after-submit
-		# (Box 1/2 became TEXT identifiers written by the Serah Terima Post-Packing
-		# step — user decision 2026-09-14; upgrade.py migrated Float kg -> Data)
-		wo.db_set("custom_box_1", "BX-2026-01")
-		wo.db_set("custom_box_2", "BX-2026-02")
+		# (T31 ruling R8: Box 1/2 are Float kg weights written at Verifikasi Siap
+		# Kirim; the FU7 text-identifier era was migrated back by upgrade.py)
+		wo.db_set("custom_box_1", 12.5)
+		wo.db_set("custom_box_2", 8.25)
 		wo.db_set("custom_prepacking_confirmed", 1)
 		wo.db_set("custom_leader_produksi", "Budi Santoso")
 		wo.reload()
 
-		self.assertEqual(wo.custom_box_1, "BX-2026-01")
-		self.assertEqual(wo.custom_box_2, "BX-2026-02")
+		# decimal kg round-trip — never converted to PCS/pack units
+		self.assertEqual(flt(wo.custom_box_1), 12.5)
+		self.assertEqual(flt(wo.custom_box_2), 8.25)
 		self.assertEqual(wo.custom_prepacking_confirmed, 1)
 		self.assertEqual(wo.custom_leader_produksi, "Budi Santoso")
 
-		# a numeric string is stored as text, never as a number
-		wo.db_set("custom_leader_produksi", "12")
+		# a whole number stays a plain kg number, not a text or a pack count
+		wo.db_set("custom_leader_produksi", "12")  # leader stays text
+		wo.db_set("custom_box_1", 12)
 		wo.reload()
 		self.assertEqual(wo.custom_leader_produksi, "12")
-		wo.db_set("custom_box_1", "0123")
-		wo.reload()
-		self.assertEqual(wo.custom_box_1, "0123")
+		self.assertEqual(flt(wo.custom_box_1), 12)
 
 
 class TestWorkOrderOperationsProof(IntegrationTestCase):

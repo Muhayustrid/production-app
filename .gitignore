@@ -56,3 +56,6 @@ jspm_packages/
 
 # CodeGraph local index (tooling artifact)
 .codegraph/
+
+# ZCode local agent state
+.zcode/

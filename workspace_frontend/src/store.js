@@ -33,6 +33,13 @@ const STAGE_UI = {
   cancelled: 'cancelled', review: 'review'
 }
 
+// FU20: penanda serah terima per WO (lane paling maju dari MR pengikat)
+export const HANDOVER_LABELS = {
+  request: 'Diminta Gudang',
+  siap_kirim: 'Siap Kirim',
+  terkirim: 'Terkirim'
+}
+
 export const fieldUnits = reactive({})
 export const listPrefs = reactive({ view: 'tabel' })
 export const PAGE_SIZE_OPTIONS = [20, 100, 500, 1000, 2500]
@@ -45,6 +52,8 @@ export const savedListPreferences = reactive({ workOrder: {}, handover: {} })
 export const listPreferencesState = reactive({ loaded: false })
 
 export const state = reactive({ loading: false, error: null, loaded: false, pending: null, actionError: null })
+// FU20: loading halaman detail/pengaturan diteruskan ke spinner global di tepi atas
+export const uiTopLoading = reactive({ active: false })
 
 const ACTION_LABELS = {
   prepare: 'Persiapan',
@@ -53,7 +62,8 @@ const ACTION_LABELS = {
   jobcard_complete: 'Selesaikan Operasi',
   confirm_prepacking: 'Pre-Packing',
   confirm_postpacking: 'Post-Packing',
-  finish: 'Finish'
+  finish: 'Finish',
+  create_request: 'Request Gudang'
 }
 
 function decodeErrorText(value) {
@@ -116,6 +126,7 @@ export function mapDetail(d) {
     plannedDate: (d.planned_start_date || '').slice(0, 10),
     status: d.status,
     stage: STAGE_UI[d.stage] || d.stage,
+    handover: d.handover || null,
     hasOperations: (d.operations || []).length > 0,
     qtyInPack: d.display_conversion_factor ?? null,
     displayUom: d.display_uom || d.stock_uom,
@@ -131,6 +142,9 @@ export function mapDetail(d) {
     warehouse: d.fg_warehouse || '',
     wipWarehouse: d.wip_warehouse || '',
     sourceWarehouse: d.source_warehouse || '',
+    // FU20: template stage membaca wo.suggestionSources.<key> — tanpa ini
+    // undefined.penimbang melempar TypeError dan panel form hilang total.
+    suggestionSources: d.suggestion_sources || {},
     persiapan: {
       adonanKe: d.custom_adonan_ke ?? null,
       jamAdonan: hhmm(d.custom_jam_adonan),
@@ -387,6 +401,7 @@ function mapLot(l) {
     wholeNumber: !!l.stock_uom_whole_number, uomWarning: l.uom_warning,
     physicalQty: l.physical_qty, reservedQty: l.reserved_qty, availableQty: l.available_qty,
     warehouse: l.warehouse, enteredAt: l.entered_at,
+    producedQty: l.produced_qty, completedAt: l.completed_at,
     hasOlderLotSameItem: !!l.has_older_lot_same_item,
     unsupported: !!l.unsupported, unsupportedReason: l.unsupported_reason
   }
@@ -407,12 +422,14 @@ function mapRequest(r) {
       jam: hhmm(r.postpacking.jam_packing), qc: r.postpacking.qc_packing,
       qcLabel: r.postpacking.qc_packing_name, confirmed: !!r.postpacking.confirmed
     } : null,
-    stockEntry: r.stock_entry, sentAt: r.sent_at, ownerName: r.owner_name
+    stockEntry: r.stock_entry, sentAt: r.sent_at, ownerName: r.owner_name,
+    createdAt: r.creation
   }
 }
 
 function applyBoard(board) {
   handoverBoard.targetWarehouse = board.target_warehouse || null
+  handoverBoard.sourceWarehouse = board.source_warehouse || null
   handoverBoard.roles = board.roles || { is_gudang: false, is_produksi: false }
   handoverLots.splice(0, handoverLots.length, ...board.lots.map(mapLot))
   handoverRequests.splice(0, handoverRequests.length, ...board.requests.map(mapRequest))
@@ -443,20 +460,19 @@ async function handoverAction(method, args) {
   }
 }
 
-export function createRequest(workOrder, qty) {
-  return handoverAction('create_request', { work_order: workOrder, qty })
+// T32 (R3): request = qty penuh WO dari server — tidak ada argumen qty
+export function createRequest(workOrder) {
+  return handoverAction('create_request', { work_order: workOrder })
 }
 export function cancelRequest(materialRequest) {
   return handoverAction('cancel_request', { material_request: materialRequest })
 }
-// kwargs wajib: signature aktual (good_qty, jam_packing, qc_packing, reject_qty=0,
-// trial_qty=0, box_1=None, box_2=None) — box diisi produksi di sini, bukan di request
+// T32 (R5): box-only (kg float) — good/jam/qc/reject/trial tidak lagi dikirim
 export function savePostPacking(materialRequest, v) {
   return handoverAction('save_post_packing', {
-    material_request: materialRequest, good_qty: v.goodQty, jam_packing: v.jam,
-    qc_packing: v.qc, reject_qty: v.rejectQty, trial_qty: v.trialQty,
-    box_1: String(v.box1 || '').trim() || null,
-    box_2: String(v.box2 || '').trim() || null
+    material_request: materialRequest,
+    box_1: v.box1 === '' || v.box1 == null ? null : Number(v.box1),
+    box_2: v.box2 === '' || v.box2 == null ? null : Number(v.box2)
   })
 }
 export function sendHandover(materialRequest) {

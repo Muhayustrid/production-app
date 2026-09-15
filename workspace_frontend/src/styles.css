@@ -80,6 +80,36 @@ p { margin: 0; }
   border-bottom: 1px solid var(--line);
 }
 
+/* FU20: indikator loading global — pill muter di tengah topbar */
+.top-loading {
+  position: fixed;
+  top: 9px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgba(36, 48, 58, 0.14);
+  pointer-events: none;
+}
+.top-loading-spin {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2.5px solid var(--line2);
+  border-top-color: var(--accent);
+  animation: kb-spin 0.75s linear infinite;
+}
+.top-loading-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+@keyframes kb-spin { to { transform: rotate(360deg); } }
+
 .navburger {
   flex: none;
   width: 38px;
@@ -482,7 +512,9 @@ textarea.input { height: auto; padding: 8px 10px; }
 
 .wo-thead, .wo-row {
   display: grid;
-  grid-template-columns: 132px 84px minmax(0, 1fr) 76px 116px 122px 178px 16px;
+  /* FU22: kolom Gudang sendiri + lebar proporsional — Produk dan Rencana
+     berbagi ruang sisa (1.25fr : 1fr), chip/badge kolom tetap muat isinya */
+  grid-template-columns: 132px 76px minmax(170px, 1.25fr) 76px 110px 118px 118px minmax(130px, 1fr) 16px;
   gap: 12px;
   align-items: center;
   padding: 9px 16px;
@@ -497,6 +529,14 @@ textarea.input { height: auto; padding: 8px 10px; }
   border-bottom: 1px solid var(--line);
 }
 .wo-thead + .wo-row { border-top: 0; }
+/* FU22: varian kompak untuk layar menengah (layout kartu baru di <=820px) */
+@media (max-width: 1180px) {
+  .wo-thead, .wo-row {
+    grid-template-columns: 122px 64px minmax(150px, 1.2fr) 70px 100px 104px 104px minmax(118px, 1fr) 14px;
+    gap: 9px;
+    padding: 9px 12px;
+  }
+}
 .wo-body {
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -506,7 +546,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.7),
     0 12px 32px -12px rgba(36, 48, 58, 0.12);
-  overflow: hidden;
+  overflow-x: auto; /* FU22: layar sempit men-scroll, tidak menumpuk */
 }
 .wo-row {
   width: 100%;
@@ -1141,6 +1181,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 
 /* kolom Tahap Aktif daftar WO: chip tahap + chip serah terima (WO completed) */
 .c-stage { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.c-gudang { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
 
 /* sub-baris banner Work Order selesai */
 .banner-sub {
@@ -1255,6 +1296,9 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .kb-card.live:active { transform: scale(0.98); cursor: grabbing; }
 .kb-card.dragging { opacity: 0.4; transform: scale(0.98) rotate(0.5deg); }
+/* kartu optimistic (FU19): sedang disimpan di belakang layar */
+.kb-card.pending { animation: kb-pending 1.2s ease-in-out infinite; }
+@keyframes kb-pending { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.8; } }
 
 /* struktur kartu: nama → referensi → kuantitas → catatan → footer */
 .kb-top { display: flex; align-items: flex-start; gap: 8px; }
@@ -1263,6 +1307,22 @@ textarea.input { height: auto; padding: 8px 10px; }
 .kb-grip { flex: none; margin-top: 2px; color: var(--line2); }
 .kb-card.live .kb-grip { color: var(--brand-light); }
 .kb-id { display: block; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
+
+/* FU20: penanda serah terima — WO sudah dikasih ke gudang (MR/SE) */
+.chip-gudang {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+.chip-gudang.siap_kirim { background: var(--warn-bg); color: var(--warn-ink); }
+.chip-gudang.terkirim { background: var(--ok-soft); color: var(--ok-strong); }
 .kb-qty { display: block; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
 .kb-qty .ql {
   display: block;
@@ -1286,6 +1346,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 .kb-foot {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
   padding-top: 8px;
@@ -1470,7 +1531,8 @@ textarea.input { height: auto; padding: 8px 10px; }
       "id status"
       "prod prod"
       "adonan date"
-      "stage qty";
+      "stage gudang"
+      "qty qty";
     row-gap: 7px;
   }
   .wo-row .c-id { grid-area: id; }
@@ -1479,6 +1541,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   .wo-row .c-adonan { grid-area: adonan; }
   .wo-row .c-date { grid-area: date; text-align: right; }
   .wo-row .c-stage { grid-area: stage; }
+  .wo-row .c-gudang { grid-area: gudang; justify-content: flex-end; align-items: flex-end; }
   .wo-row .c-qty { grid-area: qty; text-align: right; }
   .wo-row .c-arrow { display: none; }
   .wo-row .mlabel { display: block; font-size: 10.5px; color: var(--faint); }

@@ -164,12 +164,14 @@ class TestHandoverSetup(IntegrationTestCase):
 
 	def test_t22_apply_idempotent_and_drift_reconciled(self):
 		"""apply() twice: no error; the second run reports every handover step
-		'unchanged'; the Manufacturing User MR row is read/write only."""
+		'unchanged' (incl. box_kg_fields); the Manufacturing User MR row is
+		read/write only."""
 		r1 = upgrade.apply()
 		r2 = upgrade.apply()
-		for key in ("handover_mr_fields", "handover_permissions", "warehouse_default_fields"):
+		for key in ("box_kg_fields", "handover_mr_fields", "handover_permissions", "warehouse_default_fields"):
+			entries = r2[key].values() if isinstance(r2[key], dict) else r2[key]
 			self.assertTrue(
-				all(entry.endswith(": unchanged") for entry in r2[key]),
+				all(entry.endswith(": unchanged") for entry in entries),
 				f"{key} not idempotent: {r2[key]}",
 			)
 		# drift fix: Manufacturing User MR = read/write ONLY (no create/submit/cancel)
@@ -178,9 +180,14 @@ class TestHandoverSetup(IntegrationTestCase):
 			mfg, {"read": 1, "write": 1, "create": 0, "submit": 0, "cancel": 0, "amend": 0}
 		)
 		self.assertTrue(frappe.db.exists("Role", HANDOVER_ROLE))
-		# 5th warehouse default field exists on Manufacturing Settings
+		# 5th + 6th warehouse default fields exist on Manufacturing Settings
 		self.assertTrue(
 			frappe.get_meta("Manufacturing Settings").has_field("custom_default_handover_warehouse")
+		)
+		self.assertTrue(
+			frappe.get_meta("Manufacturing Settings").has_field(
+				"custom_default_handover_source_warehouse"
+			)
 		)
 		# and the full matrix landed at the DocPerm level
 		self.assertEqual(
@@ -189,13 +196,15 @@ class TestHandoverSetup(IntegrationTestCase):
 		)
 		self.assertEqual(_mr_flags("Material Request Item", HANDOVER_ROLE)["create"], 1)
 		self.assertEqual(_mr_flags("Material Request Item", "Manufacturing User")["create"], 0)
-		# follow-up 7: WO box fields are TEXT identifiers (Data, allow_on_submit)
-		# written at Post-Packing; MR boxes became allow_on_submit (submitted MR)
+		# T31 (R8): WO AND MR box fields are Float kg (allow_on_submit — written
+		# at Verifikasi Siap Kirim on submitted docs)
 		wo_meta = frappe.get_meta("Work Order")
-		for fieldname in ("custom_box_1", "custom_box_2"):
-			df = wo_meta.get_field(fieldname)
-			self.assertEqual(df.fieldtype, "Data", fieldname)
-			self.assertTrue(df.allow_on_submit, fieldname)
+		mr_meta = frappe.get_meta("Material Request")
+		for meta, doctype in ((wo_meta, "Work Order"), (mr_meta, "Material Request")):
+			for fieldname in ("custom_box_1", "custom_box_2"):
+				df = meta.get_field(fieldname)
+				self.assertEqual(df.fieldtype, "Float", f"{doctype}.{fieldname}")
+				self.assertTrue(df.allow_on_submit, f"{doctype}.{fieldname}")
 		self.assertEqual(
 			frappe.get_meta("Material Request").get_field("custom_box_1").allow_on_submit, 1
 		)

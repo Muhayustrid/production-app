@@ -5,15 +5,13 @@
 import { computed, nextTick, reactive, onMounted, ref, watch } from 'vue'
 import {
   cancelRequest, createRequest, handoverBoard, handoverLots, handoverRequests, handoverState,
-  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, savePostPacking, sendHandover
+  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, savePostPacking, sendHandover, setActionError
 } from './store.js'
 import { fmtInt, fmtStampShort, packParts, qtyMain } from './format.js'
 import {
   CheckCircle2, ClipboardList, Filter, GripVertical, Inbox,
   PackageCheck, Snowflake, Truck, Undo2
 } from 'lucide-vue-next'
-import LinkInput from './LinkInput.vue'
-import QtyInput from './QtyInput.vue'
 
 const isGudang = computed(() => !!handoverBoard.roles.is_gudang)
 const isProduksi = computed(() => !!handoverBoard.roles.is_produksi)
@@ -42,6 +40,11 @@ function hasAlternate(units) {
     Number.isFinite(units.qtyInPack) && units.qtyInPack > 0
 }
 
+// T32 (R4): box = berat kg pada MR (float) — teks "Box a / b kg" bila ada isian
+const boxText = (r) => (r.box1 != null || r.box2 != null)
+  ? `Box ${r.box1 ?? '-'} / ${r.box2 ?? '-'} kg`
+  : ''
+
 // ---- kartu: sumber tampilan (selalu turunan payload board) ----
 function lotCard(lot) {
   if (lot.unsupported) {
@@ -60,8 +63,8 @@ function lotCard(lot) {
     name: lot.item,
     // batch = identitas lot (identifikasi Work Order, keputusan user 2026-09-14)
     id: lot.batch ? `${lot.workOrder} · ${lot.batch}` : lot.workOrder,
-    ql: reserved > 0 ? 'Bisa diminta' : 'Tersedia',
-    ...qtyPair(lotAvailablePcs(lot), lot),
+    ql: 'Hasil WO',
+    ...qtyPair(lot.producedQty, lot),
     // batchless: stok tidak bisa diatribusikan per WO — seluruh saldo item di
     // gudang ini satu pool (angka sama di semua kartu WO item ini)
     note: lot.batchless
@@ -69,7 +72,8 @@ function lotCard(lot) {
       : reserved > 0
         ? `Fisik ${fmtInt(lotRemainingPcs(lot))} PCS · Tertahan ${fmtInt(reserved)} PCS`
         : '',
-    meta: `Masuk ${fmtStampShort(lot.enteredAt)}`,
+    // T32 (R7): cap selesai = posting Manufacture TERAKHIR; Masuk tetap FIFO saja
+    meta: `Selesai ${fmtStampShort(lot.completedAt || lot.enteredAt)}`,
     pill: `Adonan ${lot.adonanKe ?? '-'}${lot.batchless ? ' · tanpa batch' : ''}`
   }
 }
@@ -84,42 +88,41 @@ function reqCard(r) {
     name: r.item, id: `${r.workOrder} · ${r.materialRequest}`,
     ql: 'Diminta', ...qtyPair(r.requestedQtyPcs, lot0 || r),
     note: stopped ? 'Dihentikan di Desk — perlu unstop manual sebelum bisa dilanjutkan.' : '',
-    meta: [r.batch ? `Batch ${r.batch}` : null, `Adonan ke ${r.adonanKe ?? lot0?.adonanKe ?? '-'}`]
+    meta: [r.batch ? `Batch ${r.batch}` : null, `Adonan ke ${r.adonanKe ?? lot0?.adonanKe ?? '-'}`,
+      `Diminta ${fmtStampShort(r.createdAt)}`]
       .filter(Boolean).join(' · '),
-    pill: `${r.boxes.length} Box`
+    pill: boxText(r) || 'Box belum diisi'
   }
 }
 
 function siapCard(r) {
   const lot0 = lotForWo(r.workOrder)
   const p = r.postPacking
-  const good = p?.goodQty ?? 0
   const recorded = (p?.rejectQty ?? 0) + (p?.trialQty ?? 0) + (p?.sisaQty ?? 0)
   return {
     kind: 'siap', ref: r.id, key: r.id,
     live: isProduksi.value, draggable: isProduksi.value,
     name: r.item, id: `${r.workOrder} · ${r.materialRequest}`,
-    ql: 'Qty Transfer', ...qtyPair(good, lot0 || r),
+    ql: 'Qty Transfer', ...qtyPair(r.requestedQtyPcs, lot0 || r),
     note: recorded > 0
       ? `Reject ${fmtInt(p.rejectQty ?? 0)} · Trial ${fmtInt(p.trialQty ?? 0)} · Sisa ${fmtInt(p.sisaQty ?? 0)} PCS`
       : '',
     meta: [r.batch ? `Batch ${r.batch}` : null, p?.qc ? `QC ${p.qcLabel || p.qc} · ${p.jam}` : null]
       .filter(Boolean).join(' · '),
-    pill: `${r.boxes.length} Box`
+    pill: boxText(r) || 'Box belum diisi'
   }
 }
 
 function doneCard(r) {
   const lot0 = lotForWo(r.workOrder)
-  const good = r.postPacking?.goodQty ?? 0
   return {
     kind: 'done', ref: r.id, key: r.id,
     live: false, draggable: false,
     name: r.item, id: `${r.workOrder} · ${r.stockEntry}`,
-    ql: 'Ditransfer', ...qtyPair(good, lot0 || r),
+    ql: 'Ditransfer', ...qtyPair(r.requestedQtyPcs, lot0 || r),
     note: '',
     meta: [r.batch ? `Batch ${r.batch}` : null, fmtStampShort(r.sentAt)].filter(Boolean).join(' · '),
-    pill: `${r.boxes.length} Box`
+    pill: boxText(r) || 'Box belum diisi'
   }
 }
 
@@ -138,7 +141,7 @@ const coldPageSize = ref(PAGE_SIZE_OPTIONS[0])
 const coldPage = ref(1)
 const saveHandoverPreferences = () => saveListPreferences({
   workOrder: savedListPreferences.workOrder || {},
-  handover: { from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value }
+  handover: { from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value, filterOpen: lotFilterOpen.value }
 })
 function setColdPageSize(value) {
   coldPageSize.value = normalizePageSize(value)
@@ -153,19 +156,25 @@ const filteredLots = computed(() => handoverLots.filter((l) => {
   if (!day) return false
   return (!lotFrom.value || day >= lotFrom.value) && (!lotTo.value || day <= lotTo.value)
 }))
-const coldLots = computed(() => filteredLots.value.filter((l) => l.unsupported || lotAvailablePcs(l) > 0))
+const coldLots = computed(() => filteredLots.value.filter((l) => (l.unsupported || lotAvailablePcs(l) > 0) && !pendingRequests.has(l.workOrder)))
 const coldTotalPages = computed(() => Math.max(1, Math.ceil(coldLots.value.length / coldPageSize.value)))
 const pagedColdLots = computed(() => coldLots.value.slice((coldPage.value - 1) * coldPageSize.value, coldPage.value * coldPageSize.value))
 watch([lotFrom, lotTo], () => { coldPage.value = 1; saveHandoverPreferences() })
+// panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
+watch(lotFilterOpen, () => saveHandoverPreferences())
 function lotToday() { lotFrom.value = todayISO(); lotTo.value = todayISO() }
 function lotAllDates() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
 function lotReset() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
 
 const byLane = computed(() => ({
   cold: pagedColdLots.value.map(lotCard),
-  request: handoverRequests
-    .filter((r) => r.lane === 'request' && r.flag !== 'cancelled' && r.flag !== 'draft')
-    .map(reqCard),
+  request: [
+    // optimistic (FU19): kartu pindah duluan selagi create_request berjalan
+    ...[...pendingRequests].map(optimisticReqCard).filter(Boolean),
+    ...handoverRequests
+      .filter((r) => r.lane === 'request' && r.flag !== 'cancelled' && r.flag !== 'draft')
+      .map(reqCard),
+  ],
   siap: handoverRequests.filter((r) => r.lane === 'siap_kirim').map(siapCard),
   kirim: handoverRequests
     .filter((r) => r.lane === 'terkirim')
@@ -207,151 +216,92 @@ function onDrop(e, laneKey) {
   drag.value = null
   overLane.value = null
   if (!d || !targetLanes(d).includes(laneKey)) return
-  // drop TIDAK mengubah state: hanya membuka dialog aksi bisnis
-  if (d.kind === 'lot') openRequestDialog(d.ref)
+  // drop TIDAK mengubah state: lot = request langsung (R3), lainnya buka dialog
+  if (d.kind === 'lot') requestLot(d.ref)
   else if (d.kind === 'request') {
-    // lane tujuan menentukan aksi: cold = batalkan (gudang), siap = post-packing (produksi)
-    laneKey === 'cold' ? openCancelDialog(d.ref) : openPackingDialog(d.ref)
+    // lane tujuan menentukan aksi: cold = batalkan (gudang), siap = verifikasi (produksi)
+    laneKey === 'cold' ? openCancelDialog(d.ref) : openVerifyDialog(d.ref)
   } else if (d.kind === 'siap') openSendDialog(d.ref)
 }
 
 function clickCard(c) {
   if (!c.live) return
-  if (c.kind === 'lot') openRequestDialog(c.ref)
+  if (c.kind === 'lot') requestLot(c.ref)
   else if (c.kind === 'request') {
     isMultiRole.value ? openChooseDialog(c.ref)
-      : isGudang.value ? openCancelDialog(c.ref) : openPackingDialog(c.ref)
+      : isGudang.value ? openCancelDialog(c.ref) : openVerifyDialog(c.ref)
   } else if (c.kind === 'siap') openSendDialog(c.ref)
 }
 
-// ---- dialog 1 (Gudang): buat Material Request — murni permintaan qty ----
-const dlgReq = ref(null)
-const reqLot = ref(null)
-const reqQty = ref(null)
-const reqQtyOk = ref(false)
-const reqError = ref('')
+// ---- request langsung (R3): drop/klik kartu Cold Storage = request qty penuh WO ----
+// Tanpa dialog; qty & guard ketersediaan disimpulkan server (FIFO tetap server-side).
+// Optimistic (FU19): kartu langsung pindah ke lane Request Gudang selagi server
+// membuat MR; sukses -> board diganti server truth (applyBoard), gagal -> kartu
+// kembali ke Cold Storage + modal error (board lokal memang tak pernah berubah).
+const pendingRequests = reactive(new Set()) // woId yang create_request-nya masih berjalan
 
-const reqAvailable = computed(() => (reqLot.value ? lotAvailablePcs(reqLot.value) : 0))
-const reqOver = computed(() => reqQty.value != null && reqQty.value > reqAvailable.value)
-// saran jumlah: pakai seluruh stok yang bisa diminta
-const reqMaxKey = ref(0)
-function useMaxQty() {
-  if (!reqLot.value) return
-  reqMaxKey.value++ // remount QtyInput agar teks turun dari nilai PCS eksak
-  reqQty.value = reqAvailable.value
+async function requestLot(woId) {
+  if (handoverState.pending) return
+  pendingRequests.add(woId)
+  try { await createRequest(woId) }
+  catch (e) { setActionError(e, 'create_request') } // modal error global (FU14)
+  finally { pendingRequests.delete(woId) }
 }
-// peringatan FIFO halus: ada lot lebih lama untuk item yang sama
-const reqFifoHint = computed(() => {
-  if (!reqLot.value) return ''
-  const older = handoverLots.some(
-    (l) => l.itemCode === reqLot.value.itemCode &&
-      l.enteredAt < reqLot.value.enteredAt && lotAvailablePcs(l) > 0
-  )
-  return older ? 'Ada Work Order lebih lama untuk item ini.' : ''
-})
 
-function openRequestDialog(woId) {
+function optimisticReqCard(woId) {
   const lot = lotForWo(woId)
-  if (!lot || lot.unsupported || lotAvailablePcs(lot) <= 0) return
-  reqLot.value = lot
-  reqQty.value = null
-  reqQtyOk.value = false
-  reqError.value = ''
-  nextTick(() => dlgReq.value.showModal())
-}
-function closeReq() {
-  dlgReq.value.close()
-  reqLot.value = null
-}
-async function confirmRequest() {
-  reqError.value = ''
-  try {
-    await createRequest(reqLot.value.workOrder, reqQty.value)
-    closeReq()
-  } catch (e) {
-    reqError.value = e.message // input dipertahankan untuk perbaikan
+  if (!lot) return null
+  return {
+    kind: 'request', ref: `pending:${woId}`, key: `pending:${woId}`,
+    live: false, draggable: false, pending: true,
+    name: lot.item, id: lot.workOrder,
+    ql: 'Diminta', ...qtyPair(lot.producedQty, lot),
+    note: 'Menyimpan ke ERPNext…',
+    meta: [lot.batch ? `Batch ${lot.batch}` : null, `Adonan ke ${lot.adonanKe ?? '-'}`]
+      .filter(Boolean).join(' · '),
+    pill: 'Box belum diisi'
   }
 }
 
-// ---- dialog 2 (Produksi): Post-Packing / serah terima ----
-const dlgPak = ref(null)
-const pakReq = ref(null)
-const pakLot = ref(null)
-const pakFull = ref(false)
-const pakForm = reactive({ goodQty: null, rejectQty: null, trialQty: null, jam: '', qc: '', box1: '', box2: '' })
-const pakOk = reactive({ goodQty: false, rejectQty: false, trialQty: false })
-const pakError = ref('')
+// ---- dialog (Produksi): Verifikasi Siap Kirim — box-only kg (R4) ----
+const dlgVerify = ref(null)
+const verReq = ref(null)
+const verLot = ref(null)
+const verError = ref('')
+const verForm = reactive({ box1: '', box2: '' })
 
-const pakSisa = computed(() => {
-  const v = [pakForm.goodQty, pakForm.rejectQty, pakForm.trialQty]
-  if (v.some((x) => x == null)) return null
-  return (pakReq.value?.requestedQtyPcs ?? 0) - v.reduce((a, b) => a + b, 0)
-})
-const pakOverGood = computed(() =>
-  pakForm.goodQty != null && pakReq.value != null && pakForm.goodQty > pakReq.value.requestedQtyPcs
-)
-const pakInvalid = computed(() => pakSisa.value != null && pakSisa.value < 0)
-const pakCanSave = computed(() =>
-  Object.values(pakOk).every(Boolean) &&
-  pakForm.jam !== '' && String(pakForm.qc).trim() !== '' &&
-  !pakOverGood.value && !pakInvalid.value
-)
-
-function reservedByOthers(r) {
-  if (!r) return 0
-  return handoverRequests
-    .filter((x) => x !== r && x.workOrder === r.workOrder && !x.flag &&
-      (x.lane === 'request' || x.lane === 'siap_kirim'))
-    .reduce((a, x) => a + x.requestedQtyPcs, 0)
+// required, numerik, >= 0 — '' -> null (belum diisi), non-numerik/negatif -> NaN
+function boxNum(v) {
+  const s = String(v ?? '').trim()
+  if (s === '') return null
+  const n = Number(s)
+  return Number.isFinite(n) && n >= 0 ? n : NaN
 }
+const boxOk = (v) => { const n = boxNum(v); return n != null && !Number.isNaN(n) }
+const verCanSave = computed(() => boxOk(verForm.box1) && boxOk(verForm.box2))
 
-function openPackingDialog(reqId) {
+function openVerifyDialog(reqId) {
   const r = handoverRequests.find((x) => x.id === reqId)
-  if (!r || r.lane !== 'request') return
-  pakReq.value = r
-  pakLot.value = lotForWo(r.workOrder)
-  pakError.value = ''
-  // path sederhana bila yang diminta = seluruh stok yang tersisa untuk request ini
-  pakFull.value = pakLot.value
-    ? r.requestedQtyPcs === lotRemainingPcs(pakLot.value) - reservedByOthers(r)
-    : false
-  Object.assign(pakForm, {
-    goodQty: r.requestedQtyPcs,
-    rejectQty: 0,
-    trialQty: 0,
-    jam: nowHHMM(),
-    qc: '',
-    box1: '',
-    box2: ''
-  })
-  nextTick(() => dlgPak.value.showModal())
+  if (!r || r.lane !== 'request' || r.flag) return
+  verReq.value = r
+  verLot.value = lotForWo(r.workOrder)
+  verError.value = ''
+  verForm.box1 = ''
+  verForm.box2 = ''
+  nextTick(() => dlgVerify.value.showModal())
 }
-function nowHHMM() {
-  const d = new Date()
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+function closeVerify() {
+  dlgVerify.value.close()
+  verReq.value = null
+  verLot.value = null
 }
-function closePak() {
-  dlgPak.value.close()
-  pakReq.value = null
-  pakLot.value = null
-}
-async function confirmPak() {
-  pakError.value = ''
-  // jalur sederhana hanya mengisi ulang good/reject/trial; box & QC tetap dari form
-  const data = {
-    goodQty: pakFull.value ? pakReq.value.requestedQtyPcs : pakForm.goodQty,
-    rejectQty: pakFull.value ? 0 : pakForm.rejectQty,
-    trialQty: pakFull.value ? 0 : pakForm.trialQty,
-    jam: pakForm.jam,
-    qc: String(pakForm.qc).trim(),
-    box1: pakForm.box1,
-    box2: pakForm.box2
-  }
+async function confirmVerify() {
+  verError.value = ''
   try {
-    await savePostPacking(pakReq.value.id, data)
-    closePak()
+    await savePostPacking(verReq.value.id, { box1: verForm.box1, box2: verForm.box2 })
+    closeVerify()
   } catch (e) {
-    pakError.value = e.message // input dipertahankan
+    verError.value = e.message // input dipertahankan
   }
 }
 
@@ -360,9 +310,9 @@ const dlgKirim = ref(null)
 const kirimReq = ref(null)
 const kirimError = ref('')
 const kirimDone = ref(false)
-const kirimStopped = ref(false)
 
-const kirimGood = computed(() => kirimReq.value?.postPacking?.goodQty ?? 0)
+// T32 (R6): qty kirim = qty diminta MR (== produced_qty WO); server tidak pernah stop
+const kirimGood = computed(() => kirimReq.value?.requestedQtyPcs ?? 0)
 const kirimRoute = computed(() =>
   `${kirimReq.value?.fromWarehouse || 'Cold Storage'} → ${kirimReq.value?.toWarehouse || handoverBoard.targetWarehouse || '-'}`
 )
@@ -373,7 +323,6 @@ function openSendDialog(reqId) {
   kirimReq.value = r
   kirimError.value = ''
   kirimDone.value = false
-  kirimStopped.value = false
   nextTick(() => dlgKirim.value.showModal())
 }
 function closeKirim() {
@@ -383,11 +332,10 @@ function closeKirim() {
 async function confirmKirim() {
   kirimError.value = ''
   try {
-    const res = await sendHandover(kirimReq.value.id)
+    await sendHandover(kirimReq.value.id)
     // ganti kartu dengan versi terbaru dari papan server
     const fresh = handoverRequests.find((x) => x.id === kirimReq.value.id)
     if (fresh) kirimReq.value = fresh
-    kirimStopped.value = !!res.stopped
     kirimDone.value = true
   } catch (e) {
     kirimError.value = e.message
@@ -441,10 +389,10 @@ function closeChoose() {
   chooseRef.value = null
 }
 // id harus ditangkap SEBELUM closeChoose meng-null-kan chooseRef (computed jadi null)
-function choosePacking() {
+function chooseVerify() {
   const id = chooseRef.value
   closeChoose()
-  openPackingDialog(id)
+  openVerifyDialog(id)
 }
 function chooseCancel() {
   const id = chooseRef.value
@@ -457,12 +405,15 @@ onMounted(() => {
     const p = savedListPreferences.handover || {}
     lotFrom.value = p.from || ''; lotTo.value = p.to || ''
     coldPageSize.value = normalizePageSize(p.pageSize)
+    lotFilterOpen.value = !!p.filterOpen
     loadBoard()
   }
   if (listPreferencesState.loaded) apply()
   else {
-    const timer = setInterval(() => { if (listPreferencesState.loaded) { clearInterval(timer); apply() } }, 25)
-    setTimeout(() => clearInterval(timer), 2000)
+    let applied = false
+    const run = () => { if (applied) return; applied = true; apply() }
+    const timer = setInterval(() => { if (listPreferencesState.loaded) { clearInterval(timer); run() } }, 25)
+    setTimeout(() => { clearInterval(timer); run() }, 2000) // preferensi gagal termuat → board tetap jalan
   }
 })
 </script>
@@ -476,7 +427,6 @@ onMounted(() => {
     <div class="ph-date">{{ new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) }}</div>
   </div>
 
-  <p v-if="handoverState.loading && !handoverState.loaded" role="status">Memuat papan serah terima…</p>
   <div v-if="handoverState.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ handoverState.error }} — <a href="#" @click.prevent="loadBoard()">coba lagi</a></div>
 
   <div class="toolbar">
@@ -540,7 +490,7 @@ onMounted(() => {
           v-for="c in byLane[l.key]"
           :key="c.key"
           class="kb-card"
-          :class="{ live: c.live, dragging: drag && drag.kind === c.kind && drag.ref === c.ref }"
+          :class="{ live: c.live, pending: c.pending, dragging: drag && drag.kind === c.kind && drag.ref === c.ref }"
           :draggable="c.draggable"
           @dragstart="onDragStart($event, c)"
           @dragend="onDragEnd"
@@ -579,176 +529,49 @@ onMounted(() => {
     </label>
   </div>
 
-  <!-- ============ dialog: buat Material Request (Gudang) ============ -->
-  <dialog ref="dlgReq" class="dialog" @click.self="closeReq">
-    <template v-if="reqLot">
-      <header class="dlg-head">
-        <span class="dlg-ico" aria-hidden="true"><ClipboardList :size="16" :stroke-width="1.9" /></span>
-        <div class="dlg-hgroup">
-          <h3>Material Request</h3>
-          <p class="dlg-sub">
-            <strong>{{ reqLot.workOrder }}</strong> · {{ reqLot.item
-            }}<template v-if="reqLot.batch"> · Batch {{ reqLot.batch }}</template>
-          </p>
-        </div>
-      </header>
-      <div class="dlg-context">
-        <div class="sum-row">
-          <span class="k">Tersedia</span>
-          <span class="v">{{ qtyMain(lotRemainingPcs(reqLot), reqLot) }}</span>
-        </div>
-        <div v-if="reqAvailable !== lotRemainingPcs(reqLot)" class="sum-row">
-          <span class="k">Bisa diminta</span>
-          <span class="v">{{ qtyMain(reqAvailable, reqLot) }}</span>
-        </div>
-      </div>
-      <p v-if="reqFifoHint" class="hint warn">{{ reqFifoHint }}</p>
-
-      <QtyInput
-        :key="reqMaxKey"
-        label="Jumlah Diminta"
-        unit-key="hvRequested"
-        required
-        :units="reqLot"
-        v-model="reqQty"
-        @update:valid="reqQtyOk = $event"
-      >
-        <template #suffix>
-          <button
-            type="button"
-            class="maksbtn"
-            :title="`Isi maksimal yang bisa diminta (${fmtInt(reqAvailable)} PCS)`"
-            @click="useMaxQty"
-          >
-            Maks
-          </button>
-        </template>
-      </QtyInput>
-      <p v-if="reqOver" class="err" style="margin-top: 6px">Melebihi stok yang bisa diminta.</p>
-      <p class="hint" style="margin-top: 6px">
-        Permintaan murni jumlah saja — Box diisi produksi saat Post-Packing.
-      </p>
-
-      <p v-if="reqError" class="err" style="margin-top: 10px" role="alert">{{ reqError }}</p>
-      <p v-if="handoverState.pending" role="status">Menyimpan ke ERPNext…</p>
-      <div class="dlg-actions">
-        <button class="btn" :disabled="!!handoverState.pending" @click="closeReq">Batal</button>
-        <button class="btn btn-primary" :disabled="!reqQtyOk || reqOver || !!handoverState.pending" @click="confirmRequest">
-          Buat Request
-        </button>
-      </div>
-    </template>
-  </dialog>
-
-  <!-- ============ dialog: Post-Packing (Produksi) ============ -->
-  <dialog ref="dlgPak" class="dialog dialog-wide" @click.self="closePak">
-    <template v-if="pakReq">
+  <!-- ============ dialog: Verifikasi Siap Kirim (Produksi) ============ -->
+  <dialog ref="dlgVerify" class="dialog" @click.self="closeVerify">
+    <template v-if="verReq">
       <header class="dlg-head">
         <span class="dlg-ico" aria-hidden="true"><PackageCheck :size="16" :stroke-width="1.9" /></span>
         <div class="dlg-hgroup">
-          <h3>Post-Packing</h3>
+          <h3>Verifikasi Siap Kirim</h3>
           <p class="dlg-sub">
-            <strong>{{ pakReq.workOrder }}</strong> · {{ pakReq.item }} · {{ pakReq.materialRequest
-            }}<template v-if="pakReq.batch"> · Batch {{ pakReq.batch }}</template>
+            <strong>{{ verReq.workOrder }}</strong> · {{ verReq.item }} · {{ verReq.materialRequest
+            }}<template v-if="verReq.batch"> · Batch {{ verReq.batch }}</template>
           </p>
         </div>
       </header>
-
       <div class="dlg-context">
-        <div v-if="pakLot" class="sum-row">
-          <span class="k">Tersedia Cold Storage</span>
-          <span class="v">{{ qtyMain(lotRemainingPcs(pakLot), pakLot) }}</span>
-        </div>
         <div class="sum-row">
           <span class="k">Diminta</span>
-          <span class="v">{{ qtyMain(pakReq.requestedQtyPcs, pakLot || pakReq) }}</span>
+          <span class="v">{{ qtyMain(verReq.requestedQtyPcs, verLot || verReq) }}</span>
+        </div>
+        <div class="sum-row">
+          <span class="k">Hasil akhir Work Order</span>
+          <span class="v">{{ qtyMain(verLot?.producedQty ?? verReq.requestedQtyPcs, verLot || verReq) }}</span>
         </div>
       </div>
-
-      <template v-if="pakFull">
-        <div class="callout ok" style="margin-top: 10px">
-          Good Qty otomatis {{ qtyMain(pakReq.requestedQtyPcs, pakLot || pakReq) }} — tanpa
-          Reject/Trial/Sisa.
-        </div>
-      </template>
-      <template v-else>
-        <div class="grouptitle" style="margin-top: 14px">Hasil Verifikasi</div>
-        <!-- kuantitas 1 baris di desktop, bertumpuk di mobile -->
-        <div class="form-grid cols4">
-          <QtyInput
-            label="Good Qty"
-            unit-key="hvGood"
-            required
-            :units="pakLot || pakReq"
-            v-model="pakForm.goodQty"
-            @update:valid="pakOk.goodQty = $event"
-          />
-          <QtyInput
-            label="Reject Qty"
-            unit-key="hvReject"
-            required
-            :units="pakLot || pakReq"
-            v-model="pakForm.rejectQty"
-            @update:valid="pakOk.rejectQty = $event"
-          />
-          <QtyInput
-            label="Trial Qty"
-            unit-key="hvTrial"
-            required
-            :units="pakLot || pakReq"
-            v-model="pakForm.trialQty"
-            @update:valid="pakOk.trialQty = $event"
-          />
-          <div class="field">
-            <label>Sisa (otomatis)</label>
-            <div class="qtywrap disabled">
-              <input class="qtyinput" type="text" :value="pakSisa != null ? fmtInt(pakSisa) : ''" disabled />
-              <span class="unitbtn" aria-hidden="true">PCS</span>
-            </div>
-          </div>
-        </div>
-        <p v-if="pakOverGood" class="err">Good Qty tidak boleh melebihi jumlah diminta.</p>
-        <p v-if="pakInvalid" class="err">Total Good + Reject + Trial melebihi jumlah diminta.</p>
-      </template>
-
-      <div class="grouptitle" style="margin-top: 14px">Packing</div>
-      <div class="form-grid">
-        <div class="field">
-          <label for="pak-qc">QC Packing <span class="req">*</span></label>
-          <LinkInput id="pak-qc" v-model="pakForm.qc" doctype="User" />
-        </div>
-        <div class="field">
-          <label for="pak-jam">Jam Packing</label>
-          <input id="pak-jam" v-model="pakForm.jam" class="input" type="time" />
-        </div>
-      </div>
-
-      <div class="boxgroup" style="margin-top: 10px">
-        <div class="grouptitle">Box</div>
+      <div class="boxgroup" style="margin-top: 14px">
+        <div class="grouptitle">Box Work Order</div>
         <div class="boxrow">
           <div class="field">
-            <label for="pak-box-1">Box 1</label>
-            <input id="pak-box-1" v-model="pakForm.box1" class="input" type="text" placeholder="BX-2201" />
+            <label for="ver-box-1">Box 1 (kg) <span class="req">*</span></label>
+            <input id="ver-box-1" v-model="verForm.box1" class="input" type="number" step="any" min="0" />
           </div>
           <div class="field">
-            <label for="pak-box-2">Box 2</label>
-            <input id="pak-box-2" v-model="pakForm.box2" class="input" type="text" placeholder="BX-2202" />
+            <label for="ver-box-2">Box 2 (kg) <span class="req">*</span></label>
+            <input id="ver-box-2" v-model="verForm.box2" class="input" type="number" step="any" min="0" />
           </div>
         </div>
       </div>
-      <div class="fgbox" style="margin-top: 8px">
-        <span>Qty Transfer</span>
-        <span>{{ qtyMain(pakFull ? pakReq.requestedQtyPcs : (pakForm.goodQty ?? 0), pakLot || pakReq) }}</span>
-      </div>
-      <p class="hint" style="margin-top: 8px">
-        Reject, Trial, dan Sisa hanya dicatat — tidak mengurangi stok Cold Storage.
-      </p>
+      <p class="hint" style="margin-top: 8px">Box disimpan pada Work Order. Stock Entry baru dibuat saat request dipindahkan ke Terkirim.</p>
 
-      <p v-if="pakError" class="err" style="margin-top: 8px" role="alert">{{ pakError }}</p>
+      <p v-if="verError" class="err" style="margin-top: 8px" role="alert">{{ verError }}</p>
       <p v-if="handoverState.pending" role="status">Menyimpan ke ERPNext…</p>
       <div class="dlg-actions">
-        <button class="btn" :disabled="!!handoverState.pending" @click="closePak">Batal</button>
-        <button class="btn btn-primary" :disabled="!pakCanSave || !!handoverState.pending" @click="confirmPak">Siapkan Kirim</button>
+        <button class="btn" :disabled="!!handoverState.pending" @click="closeVerify">Batal</button>
+        <button class="btn btn-primary" :disabled="!verCanSave || !!handoverState.pending" @click="confirmVerify">Siapkan Kirim</button>
       </div>
     </template>
   </dialog>
@@ -778,7 +601,7 @@ onMounted(() => {
         </div>
         <div class="sum-row">
           <span class="k">Box</span>
-          <span class="v">{{ kirimReq.boxes.join(', ') || '-' }}</span>
+          <span class="v">{{ boxText(kirimReq) || '-' }}</span>
         </div>
         <div class="fgbox" style="margin-top: 10px">
           <span>Qty Transfer</span>
@@ -799,10 +622,6 @@ onMounted(() => {
             <p class="dlg-sub"><strong>{{ kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
           </div>
         </header>
-        <div v-if="kirimStopped" class="callout bad" style="margin-top: 10px">
-          Qty transfer lebih kecil dari jumlah diminta — Material Request dihentikan
-          (short-close). Pembukaan kembali (unstop) dilakukan manual lewat Desk.
-        </div>
         <div class="fgbox">
           <span>Ditransfer</span>
           <span>{{ qtyMain(kirimGood, lotForWo(kirimReq.workOrder) || kirimReq) }}</span>
@@ -864,7 +683,7 @@ onMounted(() => {
       </p>
       <div class="dlg-actions">
         <button class="btn" @click="chooseCancel">Batalkan (Gudang)</button>
-        <button class="btn btn-primary" @click="choosePacking">Post-Packing (Produksi)</button>
+        <button class="btn btn-primary" @click="chooseVerify">Verifikasi Siap Kirim (Produksi)</button>
       </div>
     </template>
   </dialog>

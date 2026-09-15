@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { getWo, workOrders, STAGE_LABELS, openWo, state, producedQty } from './store.js'
+import { getWo, workOrders, STAGE_LABELS, openWo, state, uiTopLoading, producedQty, HANDOVER_LABELS } from './store.js'
 import { fmtDate, qtyMain, qtyStack } from './format.js'
 import { ChevronLeft, Check, CheckCircle2 } from 'lucide-vue-next'
 import StagePersiapan from './stages/StagePersiapan.vue'
@@ -17,8 +17,9 @@ const loading = ref(true)
 const error = ref('')
 async function load() {
   loading.value = true
+  uiTopLoading.active = true
   state.actionError = null
-  try { await openWo(props.id) } catch (e) { error.value = e.message } finally { loading.value = false }
+  try { await openWo(props.id) } catch (e) { error.value = e.message } finally { loading.value = false; uiTopLoading.active = false }
 }
 onMounted(load)
 
@@ -94,7 +95,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-if="loading" class="empty" role="status">Memuat detail Work Order…</div>
+  <!-- FU20: loading halaman ditandai spinner global di tepi atas (App.vue) -->
+  <div v-if="loading" aria-hidden="true"></div>
   <div v-else-if="error" class="err" role="alert">{{ error }} <button class="btn" @click="load">Coba lagi</button></div>
   <div v-else-if="wo">
     <a class="back" href="#/"><ChevronLeft :size="16" :stroke-width="2" /> Daftar Perintah Kerja</a>
@@ -118,6 +120,7 @@ onMounted(() => {
         <div class="ws-eyebrow">
           <span class="ws-ref mono">{{ wo.id }}</span>
           <span class="badge" :class="statusClass">{{ wo.status }}</span>
+          <span v-if="wo.handover" class="chip-gudang" :class="wo.handover">{{ HANDOVER_LABELS[wo.handover] }}</span>
         </div>
         <h1>{{ wo.product }}</h1>
         <p class="ws-meta">

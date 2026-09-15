@@ -50,11 +50,11 @@ STATUS_CANCELLED = "Cancelled"
 
 # The 10 fields the handover design plans (HANDOVER_PLAN.md §3); created and
 # left in place by T21 (controller ruling 3), reused idempotently by T22.
-# Boxes became allow_on_submit (follow-up 7, 2026-09-14): they are written at
-# Post-Packing on the submitted MR, not at request creation anymore.
+# Boxes are Float kg weights (T31, R8): written at Verifikasi Siap Kirim on
+# the submitted MR, allow_on_submit, never converted to PCS.
 PLANNED_MR_FIELDS = [
-	("Material Request", "custom_box_1", "Data", 1),
-	("Material Request", "custom_box_2", "Data", 1),
+	("Material Request", "custom_box_1", "Float", 1),
+	("Material Request", "custom_box_2", "Float", 1),
 	("Material Request", "custom_good_qty_postpacking", "Float", 1),
 	("Material Request", "custom_reject_qty_postpacking", "Float", 1),
 	("Material Request", "custom_trial_qty_postpacking", "Float", 1),

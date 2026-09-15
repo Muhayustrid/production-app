@@ -14,6 +14,8 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, flt, now, random_string, today
 
+from contextlib import contextmanager
+
 from erpnext.manufacturing.doctype.work_order.work_order import (
 	make_stock_entry as make_wo_stock_entry,
 )
@@ -26,7 +28,7 @@ from erpnext.stock.doctype.material_request.material_request import (
 )
 
 from production_app.api.handover import handover_board
-from production_app.api.work_order import warehouse_defaults_save
+from production_app.api.work_order import _warehouse_defaults, warehouse_defaults_save
 
 PREFIX = "T23"
 
@@ -278,8 +280,8 @@ class TestHandoverBoard(IntegrationTestCase):
 				"schedule_date": add_days(now(), 1),
 				"set_from_warehouse": cls.cold_wh,
 				"set_warehouse": cls.target_wh,
-				"custom_box_1": "BX-2201",
-				"custom_box_2": "",  # empty identifiers are dropped from display
+				"custom_box_1": 12.5,
+				"custom_box_2": None,  # empty is dropped from display
 				"items": [
 					{
 						"item_code": wo.production_item,
@@ -335,7 +337,40 @@ class TestHandoverBoard(IntegrationTestCase):
 	def _req(cls, board, mr_name):
 		return next(r for r in board["requests"] if r["mr"] == mr_name)
 
+	@contextmanager
+	def _pin_settings(self, **overrides):
+		"""FU20: hermetic board reads against the OPERATOR's live warehouse
+		defaults (Manufacturing Settings is global, shared production data).
+		warehouse_defaults_save clears omitted keys, so pin all six, run the
+		body under the overridden values, then restore the prior ones."""
+		prior = _warehouse_defaults()
+		warehouse_defaults_save(**{**prior, **overrides})
+		try:
+			yield
+		finally:
+			warehouse_defaults_save(**prior)
+
 	# ------------------------------------------------- 1. lots: FIFO + truth
+
+	def test_fu25_gudang_confirmed_hides_lot(self):
+		"""FU25: checkbox Work Order custom_gudang_confirmed menurunkan lotnya
+		dari papan (Cold Storage) — stok masih ada, hanya disembunyikan; uncheck
+		mengembalikannya. Item sendiri: state menumpuk antar test, jadi jangan
+		bagi item dengan test FIFO/hint (lihat header file)."""
+		suffix = random_string(4).upper()
+		fg = _make_item(f"{PREFIX}-FGGC-{suffix}", self.group, self.uom)
+		bom = self._make_bom(fg)
+		with self._pin_settings(handover_source_warehouse=None):
+			wo = self._make_wo(bom, 50, fg, "1")
+			self._transfer(wo)
+			self._manufacture(wo, 50, "10:00:00")
+			names = lambda b: {l["work_order"] for l in b["lots"]}
+
+			self.assertIn(wo.name, names(handover_board()))
+			frappe.db.set_value("Work Order", wo.name, "custom_gudang_confirmed", 1)
+			self.assertNotIn(wo.name, names(handover_board()))
+			frappe.db.set_value("Work Order", wo.name, "custom_gudang_confirmed", 0)
+			self.assertIn(wo.name, names(handover_board()))
 
 	def test_t23_lot_fifo_enrichment_and_physical(self):
 		"""Two lots (different items) list FIFO by Manufacture posting; cards
@@ -357,6 +392,10 @@ class TestHandoverBoard(IntegrationTestCase):
 		self.assertEqual(lot1["item_name"], self.fg3_name)
 		self.assertEqual(lot1["adonan_ke"], "1")
 		self.assertEqual(flt(lot1["qty"]), 100)  # WO target qty
+		# T31 (R7): the WO's finished-goods qty + latest Manufacture posting
+		self.assertEqual(flt(lot1["produced_qty"]), 100)
+		self.assertEqual(lot1["completed_at"], f"{today()} 10:00:00")
+		self.assertIn("source_warehouse", board)  # T31 payload key (None until set)
 		self.assertEqual(lot1["warehouse"], self.cold_wh)  # derived, not hardcoded
 		self.assertEqual(lot1["entered_at"][-8:], "10:00:00")
 		# qtyInPack source shared with the WO workspace
@@ -383,70 +422,127 @@ class TestHandoverBoard(IntegrationTestCase):
 		is ONE item-level pool — every WO card of the item shows the same
 		physical/reserved/available; a request on any WO pools the reservation;
 		a drained pool drops the unreferenced cards."""
-		suffix = random_string(4).upper()
-		fg = _make_item(f"{PREFIX}-FGNB-{suffix}", self.group, self.uom, batch=False)
-		bom = self._make_bom(fg)
-		wo1 = self._make_wo(bom, 60, fg, "1")
-		wo2 = self._make_wo(bom, 40, fg, "2")
-		self._transfer(wo1)
-		self._transfer(wo2)
-		self._manufacture(wo1, 60, "10:30:00")
-		self._manufacture(wo2, 40, "10:45:00")
+		# FU20: pool math asserts the SE-derived fallback, so the operator's
+		# live source-warehouse setting must not leak into the read.
+		with self._pin_settings(handover_source_warehouse=None):
+			suffix = random_string(4).upper()
+			fg = _make_item(f"{PREFIX}-FGNB-{suffix}", self.group, self.uom, batch=False)
+			bom = self._make_bom(fg)
+			wo1 = self._make_wo(bom, 60, fg, "1")
+			wo2 = self._make_wo(bom, 40, fg, "2")
+			self._transfer(wo1)
+			self._transfer(wo2)
+			self._manufacture(wo1, 60, "10:30:00")
+			self._manufacture(wo2, 40, "10:45:00")
 
-		board = handover_board()
-		lot1, lot2 = self._lot(board, wo1.name), self._lot(board, wo2.name)
-		self.assertTrue(lot1["batchless"])
-		self.assertIsNone(lot1["batch"])
-		self.assertFalse(lot1["unsupported"])
-		self.assertTrue(lot2["batchless"])
-		# one shared pool: both cards show the whole item balance, not per-WO
-		self.assertEqual(flt(lot1["physical_qty"]), 100)
-		self.assertEqual(flt(lot2["physical_qty"]), 100)
-		self.assertEqual(flt(lot1["available_qty"]), 100)
-		self.assertEqual(flt(lot1["reserved_qty"]), 0)
+			board = handover_board()
+			lot1, lot2 = self._lot(board, wo1.name), self._lot(board, wo2.name)
+			self.assertTrue(lot1["batchless"])
+			self.assertIsNone(lot1["batch"])
+			self.assertFalse(lot1["unsupported"])
+			self.assertTrue(lot2["batchless"])
+			# one shared pool: both cards show the whole item balance, not per-WO
+			self.assertEqual(flt(lot1["physical_qty"]), 100)
+			self.assertEqual(flt(lot2["physical_qty"]), 100)
+			self.assertEqual(flt(lot1["available_qty"]), 100)
+			self.assertEqual(flt(lot1["reserved_qty"]), 0)
 
-		mr = self._make_mr(wo1, 100)
-		board = handover_board()
-		lot1, lot2 = self._lot(board, wo1.name), self._lot(board, wo2.name)
-		self.assertEqual(flt(lot1["reserved_qty"]), 100)  # pools across WOs
-		self.assertEqual(flt(lot2["reserved_qty"]), 100)  # visible on BOTH cards
-		self.assertEqual(flt(lot1["available_qty"]), 0)
+			mr = self._make_mr(wo1, 100)
+			board = handover_board()
+			lot1, lot2 = self._lot(board, wo1.name), self._lot(board, wo2.name)
+			self.assertEqual(flt(lot1["reserved_qty"]), 100)  # pools across WOs
+			self.assertEqual(flt(lot2["reserved_qty"]), 100)  # visible on BOTH cards
+			self.assertEqual(flt(lot1["available_qty"]), 0)
 
-		# drain the pool via the native send — batchless shape: NO batch on row
-		se = frappe.get_doc(make_mr_stock_entry(mr.name))
-		self.assertEqual(len(se.items), 1)
-		row = se.items[0]
-		self.assertEqual(flt(row.qty), 100)  # builder: stock_qty - ordered_qty
-		self._pin_posting(se, "15:00:00")
-		se.insert()
-		se.submit()
-		self.assertFalse(row.batch_no)
-		board = handover_board()
-		names = {l["work_order"] for l in board["lots"]}
-		self.assertIn(wo1.name, names)  # its request still anchors the card
-		self.assertNotIn(wo2.name, names)  # empty pool, unanchored -> drops
-		lot1 = self._lot(board, wo1.name)
-		self.assertEqual(flt(lot1["physical_qty"]), 0)  # pool drained honestly
+			# drain the pool via the native send — batchless shape: NO batch on row
+			se = frappe.get_doc(make_mr_stock_entry(mr.name))
+			self.assertEqual(len(se.items), 1)
+			row = se.items[0]
+			self.assertEqual(flt(row.qty), 100)  # builder: stock_qty - ordered_qty
+			self._pin_posting(se, "15:00:00")
+			se.insert()
+			se.submit()
+			self.assertFalse(row.batch_no)
+			board = handover_board()
+			names = {l["work_order"] for l in board["lots"]}
+			self.assertIn(wo1.name, names)  # its request still anchors the card
+			self.assertNotIn(wo2.name, names)  # empty pool, unanchored -> drops
+			lot1 = self._lot(board, wo1.name)
+			self.assertEqual(flt(lot1["physical_qty"]), 0)  # pool drained honestly
 
 	def test_fu8_batchless_multi_manufacture_is_supported(self):
 		"""Follow-up 8: several Manufactures on a BATCHLESS WO flatten honestly
 		(the pool has no batch dimension) — NOT an unsupported card, unlike the
 		batch legacy case."""
-		suffix = random_string(4).upper()
-		fg = _make_item(f"{PREFIX}-FGNB2-{suffix}", self.group, self.uom, batch=False)
-		bom = self._make_bom(fg)
-		wo = self._make_wo(bom, 40, fg, "1")
-		self._transfer(wo)
-		self._manufacture(wo, 30, "10:00:00", restore_rm=False)
-		self._manufacture(wo, 10, "10:30:00", restore_rm=False)
+		with self._pin_settings(handover_source_warehouse=None):
+			suffix = random_string(4).upper()
+			fg = _make_item(f"{PREFIX}-FGNB2-{suffix}", self.group, self.uom, batch=False)
+			bom = self._make_bom(fg)
+			wo = self._make_wo(bom, 40, fg, "1")
+			self._transfer(wo)
+			self._manufacture(wo, 30, "10:00:00", restore_rm=False)
+			self._manufacture(wo, 10, "10:30:00", restore_rm=False)
 
-		board = handover_board()
-		lot = self._lot(board, wo.name)
-		self.assertFalse(lot["unsupported"])
-		self.assertTrue(lot["batchless"])
-		self.assertIsNone(lot["batch"])
-		self.assertEqual(flt(lot["physical_qty"]), 40)
-		self.assertEqual(flt(lot["available_qty"]), 40)
+			board = handover_board()
+			lot = self._lot(board, wo.name)
+			self.assertFalse(lot["unsupported"])
+			self.assertTrue(lot["batchless"])
+			self.assertIsNone(lot["batch"])
+			self.assertEqual(flt(lot["produced_qty"]), 40)  # 30 + 10
+			self.assertEqual(lot["completed_at"], f"{today()} 10:30:00")  # LATEST posting
+			self.assertEqual(flt(lot["physical_qty"]), 40)
+			self.assertEqual(flt(lot["available_qty"]), 40)
+
+	# ------------------- T31 (R2). batchless pool follows the source setting
+
+	def test_t31_batchless_pool_follows_source_setting(self):
+		"""With the source setting set, the batchless pool counts stock in the
+		SETTING warehouse only (stock elsewhere ignored); an MR created BEFORE
+		the setting existed (from_warehouse = SE-derived lot warehouse) keeps
+		reserving the pool afterwards (WO-lot-based keying, not from_warehouse)."""
+		suffix = random_string(4).upper()
+		fg = _make_item(f"{PREFIX}-FGNB3-{suffix}", self.group, self.uom, batch=False)
+		bom = self._make_bom(fg)
+		pool_wh = (
+			frappe.get_doc(
+				{
+					"doctype": "Warehouse",
+					"warehouse_name": f"{PREFIX} Pool {suffix}",
+					"company": self.company,
+					"parent_warehouse": frappe.db.get_value(
+						"Warehouse", self.cold_wh, "parent_warehouse"
+					),
+					"is_group": 0,
+				}
+			)
+			.insert()
+			.name
+		)
+		wo = self._make_wo(bom, 100, fg, "1")
+		self._transfer(wo)
+		self._manufacture(wo, 100, "10:00:00")  # SE lands in the cold warehouse
+		self._receipt(fg, 300, pool_wh)  # setting-warehouse stock is elsewhere
+
+		# FU20: pin all six defaults — phase 1 must read with NO source setting
+		# (SE-derived fallback) regardless of the operator's live value, and
+		# the restores never wipe the other defaults.
+		with self._pin_settings(handover_source_warehouse=None):
+			# legacy MR created BEFORE the setting exists: from_warehouse = cold
+			mr = self._make_mr(wo, 40)
+			board = handover_board()
+			lot = self._lot(board, wo.name)
+			self.assertEqual(flt(lot["physical_qty"]), 100)  # SE-derived fallback
+			self.assertEqual(flt(lot["reserved_qty"]), 40)
+
+			warehouse_defaults_save(
+				**{**_warehouse_defaults(), "handover_source_warehouse": pool_wh}
+			)
+			board = handover_board()
+			self.assertEqual(board["source_warehouse"], pool_wh)
+			lot = self._lot(board, wo.name)
+			self.assertEqual(flt(lot["physical_qty"]), 300)  # SETTING warehouse counts
+			self.assertEqual(flt(lot["reserved_qty"]), 40)  # legacy MR still reserves
+			self.assertEqual(flt(lot["available_qty"]), 260)
 
 	# --------------------------------------- 2. reserved / available math
 
@@ -507,9 +603,9 @@ class TestHandoverBoard(IntegrationTestCase):
 		self.assertFalse(req["postpacking"]["confirmed"])
 		self.assertIsNone(req["stock_entry"])
 		self.assertEqual(flt(req["qty"]), 40)
-		self.assertEqual(req["box_1"], "BX-2201")
+		self.assertEqual(flt(req["box_1"]), 12.5)  # kg floats (T31)
 		self.assertIsNone(req["box_2"])
-		self.assertEqual(req["boxes"], ["BX-2201"])  # empty dropped (mockup joins this)
+		self.assertEqual(req["boxes"], [12.5])  # empty dropped (mockup joins this)
 		self.assertEqual(req["from_warehouse"], self.cold_wh)
 		self.assertEqual(req["to_warehouse"], self.target_wh)
 		self.assertEqual(req["batch"], self._lot(board, wo.name)["batch"])
@@ -662,10 +758,9 @@ class TestHandoverBoard(IntegrationTestCase):
 		manager = self._make_user(
 			f"t23.manager.{suffix}@prodapp.example.com", ["Manufacturing Manager"]
 		)
-		prior = frappe.db.get_single_value(
-			"Manufacturing Settings", "custom_default_handover_warehouse"
-		)
-		try:
+		# FU20: pin all six defaults — the manager's partial saves must never
+		# wipe the operator's other live warehouse settings.
+		with self._pin_settings():
 			frappe.set_user(manager)
 			warehouse_defaults_save(handover_warehouse=self.target_wh)
 			frappe.set_user("Administrator")
@@ -675,10 +770,3 @@ class TestHandoverBoard(IntegrationTestCase):
 			warehouse_defaults_save(handover_warehouse=None)
 			frappe.set_user("Administrator")
 			self.assertIsNone(handover_board()["target_warehouse"])
-		finally:
-			frappe.set_user("Administrator")
-			if prior:
-				frappe.db.set_value(
-					"Manufacturing Settings", None,
-					"custom_default_handover_warehouse", prior,
-				)

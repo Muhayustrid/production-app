@@ -119,3 +119,15 @@ Run the acceptance matrix, desk/mobile smoke with two test users, inspect diffs,
 - This plan is planning output. Implementation starts only on an explicit user instruction; then work T21–T26 in order, one at a time, recording state in `PROJECT_STATE.md` per its protocol.
 - Only `production_app` is touched; no core edits, no commits, no production deployment claims.
 - Known limitation to document, not solve: after a native desk cancel of the SE, the stopped MR needs a manual desk unstop to become requestable again; the board must not resurrect it silently.
+
+## ADDENDUM 2026-09-14 — Section G (STOCKENTRY_KANBAN_PLAN.md): WO-centric board, box kg, source setting
+
+Supersedes the following §4/§6 rows for the implemented flow (contract: `STOCKENTRY_KANBAN_PLAN.md`, rulings R1–R8; evidence: PROJECT_STATE T31–T33):
+
+- **Request (R3):** `create_request(work_order)` — qty is the WO's FULL `produced_qty` (no qty dialog; drag/click = direct action). Duplicate ACTIVE (unshipped, unstopped) request per WO blocked under the WO row lock. Availability guard unchanged (diminta/tersedia). §4 request-with-box and partial-qty matrix rows are obsolete.
+- **Warehouses (R2):** new setting `custom_default_handover_source_warehouse` (Pengaturan input #6). When set it overrides the batchless pool resolution (`_item_stock` warehouse, `_reserved_by_item` keyed by the WO lot row) and the MR `from_warehouse`; batch-tracked lot identity and `get_batch_qty` stay SE-derived (batch seam untouched). When empty, previous SE-derived behavior applies. Reservation keying is WO-lot-based so MRs predating the setting still reserve.
+- **Post-Packing → Verifikasi (R4/R5):** `save_post_packing(material_request, box_1, box_2)` — Box-only. Good/Reject/Trial/Sisa/QC/Jam are NOT asked or written by the board (they live on the WO Post-Packing stage, T27). Dialog is the mockup's "Verifikasi Siap Kirim" (Diminta + Hasil akhir WO context; Box 1/2 kg required in UI; server accepts optional finite ≥0).
+- **Boxes (R8):** `custom_box_1/2` on Work Order AND Material Request are Float kg again (FU7 identifier semantics superseded by user request 2026-09-14). Migration NULLed all old text values (snapshot `snapshots/box-kg-pre.json`; 0 live rows had values). §6 "Boxes = text identifiers" row is obsolete.
+- **Send (R1/R6):** `send_handover` moves qty = the MR's requested qty (== WO produced at request time) at posting time = the actual send moment; batch rows keep `batch_no`; the short-close/stop-MR branch is deleted (§6 "MR stopped when good < requested" row is obsolete — full-qty sends never stop).
+- **Board:** Cold Storage cards show the WO's finished-goods qty ("Hasil WO", `produced_qty`) and `completed_at` (LATEST Manufacture posting, "Selesai …"); `entered_at` (earliest) remains the FIFO sort key. Board payload adds `source_warehouse`.
+- Batch scalability: the WO→(batch | batchless pool) resolution in `_wo_lot_rows` stays the single seam; batch-tracked paths are unchanged, so enabling batch tracking on items requires no code change.

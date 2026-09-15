@@ -208,6 +208,7 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 
 	_batch_enrich(rows)
 	_enrich_units(rows)
+	_handover_enrich(rows)
 	for row in rows:
 		row["stage"] = derive_stage(row)
 	if int(meta):
@@ -250,6 +251,21 @@ def _batch_enrich(rows):
 	for r in rows:
 		r.production_item_name = names.get(r.production_item) or r.production_item
 		r.has_operations = r.name in with_ops
+
+
+def _handover_enrich(rows):
+	"""FU20: penanda serah terima per Work Order untuk daftar/kanban/detail —
+	derivasi LIVE dari dokumen (handover._handover_lanes; sumber yang sama
+	dengan field native custom_handover_status). Tanpa izin baca MR/SE flag
+	diam-diam kosong (halaman tetap jalan)."""
+	if not rows:
+		return
+	# lazy import: handover sudah mengimpor modul ini di level modul
+	from production_app.api.handover import _handover_lanes
+
+	best = _handover_lanes([r["name"] for r in rows])
+	for r in rows:
+		r["handover"] = best.get(r["name"])
 
 
 
@@ -296,6 +312,7 @@ def wo_detail(name):
 		frappe.db.get_value("Item", wo.production_item, "item_name") or wo.production_item
 	)
 	_enrich_units([data])
+	_handover_enrich([data])
 	allowance = _overproduction_allowance()
 
 	operations = frappe.get_all(
@@ -493,7 +510,15 @@ WAREHOUSE_DEFAULT_FIELDS = {
 # WAREHOUSE_DEFAULT_FIELDS which doubles as Work Order fieldnames.
 HANDOVER_WAREHOUSE_FIELD = "custom_default_handover_warehouse"
 
-SETTING_WAREHOUSE_FIELDS = {**WAREHOUSE_DEFAULT_FIELDS, "handover_warehouse": HANDOVER_WAREHOUSE_FIELD}
+# T31 (ruling R2): gudang asal serah terima (Cold Storage) — overrides the
+# batchless pool source and the from_warehouse written by create_request.
+HANDOVER_SOURCE_FIELD = "custom_default_handover_source_warehouse"
+
+SETTING_WAREHOUSE_FIELDS = {
+	**WAREHOUSE_DEFAULT_FIELDS,
+	"handover_warehouse": HANDOVER_WAREHOUSE_FIELD,
+	"handover_source_warehouse": HANDOVER_SOURCE_FIELD,
+}
 
 
 def _warehouse_defaults():
@@ -513,7 +538,7 @@ def warehouse_defaults():
 @frappe.whitelist()
 def warehouse_defaults_save(
 	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None,
-	handover_warehouse=None,
+	handover_warehouse=None, handover_source_warehouse=None,
 ):
 	"""Save the Production App warehouse defaults (empty string clears)."""
 	frappe.has_permission("Manufacturing Settings", "write", throw=True)
@@ -523,6 +548,7 @@ def warehouse_defaults_save(
 		"fg_warehouse": fg_warehouse,
 		"scrap_warehouse": scrap_warehouse,
 		"handover_warehouse": handover_warehouse,
+		"handover_source_warehouse": handover_source_warehouse,
 	}
 	for key, value in payload.items():
 		if value in (None, ""):

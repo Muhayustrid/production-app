@@ -20,20 +20,20 @@ WORKSPACE_FIELDS = [
 	{
 		"fieldname": "custom_box_1",
 		"label": "Box 1",
-		"fieldtype": "Data",
+		"fieldtype": "Float",
 		"insert_after": "custom_sisa_qty_prepacking",
 		"allow_on_submit": 1,
 		"non_negative": 0,
-		"description": "Identifier Box 1 serah terima (teks, contoh BX-2201)",
+		"description": "Berat Box 1 (kg) saat serah terima",
 	},
 	{
 		"fieldname": "custom_box_2",
 		"label": "Box 2",
-		"fieldtype": "Data",
+		"fieldtype": "Float",
 		"insert_after": "custom_box_1",
 		"allow_on_submit": 1,
 		"non_negative": 0,
-		"description": "Identifier Box 2 serah terima (teks, contoh BX-2202)",
+		"description": "Berat Box 2 (kg) saat serah terima",
 	},
 	{
 		"fieldname": "custom_prepacking_confirmed",
@@ -53,6 +53,28 @@ WORKSPACE_FIELDS = [
 		"print_hide": 1,
 		"description": "Marker: postpacking block was deliberately saved/confirmed",
 	},
+	{
+		"fieldname": "custom_handover_status",
+		"label": "Status Serah Terima",
+		"fieldtype": "Select",
+		"options": "\nDiminta Gudang\nSiap Kirim\nTerkirim",
+		"insert_after": "custom_postpacking_confirmed",
+		"allow_on_submit": 1,
+		"read_only": 1,
+		"print_hide": 1,
+		"in_list_view": 1,
+		"in_standard_filter": 1,
+		"description": "Penanda serah terima barang jadi ke gudang — terisi OTOMATIS dari Material Request/Stock Entry (doc_events); kosong = belum diserahkan. Jangan ubah manual.",
+	},
+	{
+		"fieldname": "custom_gudang_confirmed",
+		"label": "Gudang Confirmed",
+		"fieldtype": "Check",
+		"insert_after": "custom_handover_status",
+		"allow_on_submit": 1,
+		"print_hide": 1,
+		"description": "Centang setelah barang jadi WO ini diterima/dikonfirmasi gudang — lotnya turun dari papan Stock Entry (Cold Storage).",
+	},
 ]
 
 # allow-on-submit enablement required by the workspace actions (submitted WOs)
@@ -67,9 +89,15 @@ ALLOW_ON_SUBMIT_FIELDS = [
 
 LEADER_FIELDNAME = "custom_leader_produksi"
 
-BOX_FIELDNAMES = ("custom_box_1", "custom_box_2")
-
 SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "..", "snapshots")
+
+# Box 1/2 on Work Order AND Material Request: Float kg weights written at the
+# "Verifikasi Siap Kirim" step (T31 ruling R8). The FU7 text-identifier era
+# (Data, e.g. BX-2201) is migrated away by ensure_box_kg_fields — old values
+# are NULLed and preserved only in the snapshot.
+BOX_FIELDNAMES = ("custom_box_1", "custom_box_2")
+BOX_KG_DOCTYPES = (DOCTYPE, "Material Request")
+BOX_KG_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "box-kg-pre.json")
 
 
 def snapshot():
@@ -178,6 +206,13 @@ WAREHOUSE_DEFAULT_FIELDS = [
 		"fieldtype": "Link",
 		"options": "Warehouse",
 		"description": "Production App: gudang serah terima default (MR Material Transfer ke gudang ini)",
+	},
+	{
+		"fieldname": "custom_default_handover_source_warehouse",
+		"label": "Default Handover Source Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang asal serah terima (Cold Storage) untuk halaman Stock Entry",
 	},
 ]
 
@@ -316,20 +351,25 @@ HANDOVER_ROLE = "Gudang Barang Jadi"
 
 # Formalizes exactly what T21 created on the site (task-21-report §4); the
 # specs below mirror those live definitions, so the first apply() is a no-op.
+# FU25: field post-packing HANYA tampil di Work Order — di form Material
+# Request disembunyikan (hidden=1) demi kebersihan form; kolom data tetap
+# ada karena alur serah terima (box verifikasi, lane siap_kirim) memakainya.
 MR_CUSTOM_FIELDS = [
 	{
 		"fieldname": "custom_box_1",
 		"label": "Box 1",
-		"fieldtype": "Data",
+		"fieldtype": "Float",
 		"insert_after": "custom_note",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_box_2",
 		"label": "Box 2",
-		"fieldtype": "Data",
+		"fieldtype": "Float",
 		"insert_after": "custom_box_1",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_good_qty_postpacking",
@@ -337,6 +377,7 @@ MR_CUSTOM_FIELDS = [
 		"fieldtype": "Float",
 		"insert_after": "custom_box_2",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_reject_qty_postpacking",
@@ -344,6 +385,7 @@ MR_CUSTOM_FIELDS = [
 		"fieldtype": "Float",
 		"insert_after": "custom_good_qty_postpacking",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_trial_qty_postpacking",
@@ -351,6 +393,7 @@ MR_CUSTOM_FIELDS = [
 		"fieldtype": "Float",
 		"insert_after": "custom_reject_qty_postpacking",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_sisa_qty_postpacking",
@@ -358,6 +401,7 @@ MR_CUSTOM_FIELDS = [
 		"fieldtype": "Float",
 		"insert_after": "custom_trial_qty_postpacking",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_jam_packing",
@@ -365,6 +409,7 @@ MR_CUSTOM_FIELDS = [
 		"fieldtype": "Time",
 		"insert_after": "custom_sisa_qty_postpacking",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_qc_packing",
@@ -373,6 +418,7 @@ MR_CUSTOM_FIELDS = [
 		"options": "User",
 		"insert_after": "custom_jam_packing",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_postpacking_confirmed",
@@ -380,6 +426,7 @@ MR_CUSTOM_FIELDS = [
 		"fieldtype": "Check",
 		"insert_after": "custom_qc_packing",
 		"allow_on_submit": 1,
+		"hidden": 1,
 	},
 	{
 		"fieldname": "custom_work_order",
@@ -535,55 +582,81 @@ def ensure_handover_mr_fields():
 	return out
 
 
-def ensure_box_identifier_fields():
-	"""Follow-up user 2026-09-14: Box 1/2 on Work Order become TEXT identifiers
-	(e.g. BX-2201) written by the Serah Terima Post-Packing step — they were
-	Float kg prepacking weights no row ever used (the snapshot records the
-	non-zero count; verified 0 before this shipped). decimal(21,9) NOT NULL
-	becomes varchar(140) NULL like the leader migration. Runs BEFORE the
-	WORKSPACE_FIELDS upsert in apply() so the fieldtype flip and the column
-	ALTER land together; the upsert then converges label/non_negative/
-	description. Snapshot-first, idempotent."""
-	snap_path = os.path.join(SNAPSHOT_DIR, "box-text-pre.json")
-	if not os.path.exists(snap_path):
-		os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-		with open(snap_path, "w") as f:
-			json.dump(
-				{
-					"captured_at": frappe.utils.now(),
-					"custom_fields": frappe.get_all(
-						"Custom Field",
-						filters={"dt": DOCTYPE, "fieldname": ("in", BOX_FIELDNAMES)},
-						fields=["name", "fieldname", "label", "fieldtype", "non_negative", "allow_on_submit", "description"],
-						order_by="fieldname",
-					),
-					"rows_with_box_value": sum(
-						frappe.db.count(DOCTYPE, {f: ("!=", 0)}) for f in BOX_FIELDNAMES
-					),
-				},
-				f, indent=2, sort_keys=True, default=str,
-			)
+def snapshot_box_kg():
+	"""Pre-change snapshot for the T31 box Data -> Float kg flip (ruling R8):
+	the Custom Field definitions on BOTH doctypes plus the distinct stored
+	values (with counts) so the old text-identifier meaning stays on record —
+	the snapshot is the only recovery after the NULL step. Runs BEFORE any
+	change; apply() calls it only when the file is absent (idempotent)."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"custom_fields": frappe.get_all(
+			"Custom Field",
+			filters={"dt": ("in", BOX_KG_DOCTYPES), "fieldname": ("in", BOX_FIELDNAMES)},
+			fields=[
+				"name", "dt", "fieldname", "label", "fieldtype",
+				"allow_on_submit", "non_negative", "description",
+			],
+			order_by="dt, fieldname",
+		),
+		"stored_values": {},
+	}
+	for dt in BOX_KG_DOCTYPES:
+		data["stored_values"][dt] = {}
+		for fieldname in BOX_FIELDNAMES:
+			distinct = {}
+			for row in frappe.get_all(
+				dt, filters={fieldname: ("is", "set")}, fields=[f"{fieldname} as value"]
+			):
+				key = str(row.value)
+				distinct[key] = distinct.get(key, 0) + 1
+			data["stored_values"][dt][fieldname] = distinct
+	with open(BOX_KG_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return BOX_KG_SNAPSHOT
+
+
+def ensure_box_kg_fields():
+	"""T31 (ruling R8): Box 1/2 on Work Order AND Material Request become Float
+	kg weights for the Verifikasi Siap Kirim step. The old Data values were
+	TEXT identifiers (FU7) with no kg meaning — nothing convertible — so ALL
+	stored values are NULLed first (the snapshot is the recovery) and the
+	nullified count is recorded. ORDER MATTERS: nullify BEFORE the column
+	alter (MariaDB strict mode aborts a text->decimal ALTER on non-numeric
+	values). non_negative is cleared; allow_on_submit is kept (written on
+	submitted docs). Runs BEFORE the WORKSPACE_FIELDS / MR_CUSTOM_FIELDS
+	upserts so column/type land together and the upsert converges label/
+	description. Snapshot-first; per-field fieldtype check = idempotent."""
+	if not os.path.exists(BOX_KG_SNAPSHOT):
+		snapshot_box_kg()  # never rewrite box values without a pre-state
 
 	out = {}
-	for fieldname in BOX_FIELDNAMES:
-		cf = frappe.db.get_value(
-			"Custom Field", {"dt": DOCTYPE, "fieldname": fieldname}, ["name", "fieldtype"], as_dict=True
-		)
-		if not cf:
-			out[fieldname] = "missing (created by WORKSPACE_FIELDS as Data)"
-		elif cf.fieldtype == "Data":
-			out[fieldname] = "unchanged"
-		else:
-			has_values = frappe.db.count(DOCTYPE, {fieldname: ("!=", 0)}) > 0
-			frappe.db.set_value("Custom Field", cf.name, "fieldtype", "Data")
-			frappe.db.change_column_type(DOCTYPE, fieldname, "varchar(140)", nullable=True)
-			if not has_values:
-				# the decimal default 0 casts to a '0'/'0.000000000' string — no
-				# row held a real value (snapshot proves it), so NULL them like a
-				# fresh Data field instead of showing fake identifiers
-				frappe.db.sql(f"update `tab{DOCTYPE}` set {fieldname}=NULL where {fieldname} is not null")
-			out[fieldname] = "migrated Float -> Data" + (" (values kept as text)" if has_values else "")
-	frappe.clear_cache(doctype=DOCTYPE)
+	for dt in BOX_KG_DOCTYPES:
+		for fieldname in BOX_FIELDNAMES:
+			key = f"{dt}.{fieldname}"
+			cf = frappe.db.get_value(
+				"Custom Field",
+				{"dt": dt, "fieldname": fieldname},
+				["name", "fieldtype", "non_negative"],
+				as_dict=True,
+			)
+			if not cf:
+				out[key] = "missing (created by the field upserts as Float)"
+				continue
+			if cf.fieldtype == "Float":
+				out[key] = f"{key}: unchanged"
+				continue
+			nullified = frappe.db.sql(
+				f"update `tab{dt}` set {fieldname}=NULL where {fieldname} is not null"
+			)
+			frappe.db.set_value("Custom Field", cf.name, "fieldtype", "Float")
+			frappe.db.change_column_type(dt, fieldname, "decimal(18,6)", nullable=True)
+			if cf.non_negative:
+				frappe.db.set_value("Custom Field", cf.name, "non_negative", 0)
+			out[key] = f"{key}: migrated {cf.fieldtype} -> Float kg (nullified {int(nullified or 0)} values)"
+	for dt in BOX_KG_DOCTYPES:
+		frappe.clear_cache(doctype=dt)
 	return out
 
 
@@ -709,7 +782,7 @@ def apply():
 		snapshot_qc_packing_text()
 	result = {"fields": [], "leader": "unchanged"}
 
-	result["box_fields"] = ensure_box_identifier_fields()
+	result["box_kg_fields"] = ensure_box_kg_fields()
 	result["name_text_fields"] = ensure_name_text_fields()
 	result["qc_packing_text"] = ensure_qc_packing_text_field()
 	for spec in WORKSPACE_FIELDS:

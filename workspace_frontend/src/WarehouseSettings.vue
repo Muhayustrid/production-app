@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { Warehouse } from 'lucide-vue-next'
-import { call, loadSuggestionPreferences, saveSuggestionPreferences, suggestionPreferences } from './store.js'
+import { call, loadSuggestionPreferences, saveSuggestionPreferences, suggestionPreferences, uiTopLoading } from './store.js'
 import LinkInput from './LinkInput.vue'
 
 const fields = [
@@ -9,7 +9,8 @@ const fields = [
   { key: 'wip_warehouse', label: 'Work-in-Progress Warehouse', desc: 'Lokasi operasi produksi dijalankan.' },
   { key: 'fg_warehouse', label: 'Target Warehouse', desc: 'Lokasi barang jadi disimpan.' },
   { key: 'scrap_warehouse', label: 'Scrap Warehouse', desc: 'Lokasi material scrap disimpan.' },
-  { key: 'handover_warehouse', label: 'Gudang serah terima / barang jadi', desc: 'Tujuan pengiriman serah terima (halaman Stock Entry).' }
+  { key: 'handover_warehouse', label: 'Gudang serah terima / barang jadi', desc: 'Tujuan pengiriman serah terima (halaman Stock Entry).' },
+  { key: 'handover_source_warehouse', label: 'Source Warehouse (Stock Entry)', desc: 'Asal pengiriman serah terima (Cold Storage) — halaman Stock Entry.' }
 ]
 
 const form = reactive({
@@ -17,7 +18,8 @@ const form = reactive({
   wip_warehouse: '',
   fg_warehouse: '',
   scrap_warehouse: '',
-  handover_warehouse: ''
+  handover_warehouse: '',
+  handover_source_warehouse: ''
 })
 const loading = ref(true)
 const saving = ref(false)
@@ -26,6 +28,7 @@ const savedAt = ref('')
 const suggestionSaving = ref(false)
 
 onMounted(async () => {
+  uiTopLoading.active = true
   try {
     await Promise.all([
       call('production_app.api.work_order.warehouse_defaults').then(values => Object.assign(form, values)),
@@ -35,6 +38,7 @@ onMounted(async () => {
     error.value = e.message
   } finally {
     loading.value = false
+    uiTopLoading.active = false
   }
 })
 
@@ -80,7 +84,8 @@ async function save() {
         Persiapan disimpan — nilai yang sudah terisi di Work Order tidak pernah ditimpa.
       </div>
 
-      <div v-if="loading" class="empty">Memuat pengaturan…</div>
+      <!-- FU20: loading ditandai spinner global di tepi atas (App.vue) -->
+      <div v-if="loading" aria-hidden="true"></div>
       <template v-else>
         <div class="settings-block">
           <div class="settings-block-head">

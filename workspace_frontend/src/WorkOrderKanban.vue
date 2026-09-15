@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { state, openWo, getWo, setActionError } from './store.js'
+import { state, openWo, getWo, setActionError, HANDOVER_LABELS } from './store.js'
 import { fmtDate, qtyStack } from './format.js'
 import { Boxes, CheckCircle2, ClipboardList, Cog, Flag, GripVertical, Inbox, PackageCheck } from 'lucide-vue-next'
 import StagePersiapan from './stages/StagePersiapan.vue'
@@ -18,7 +18,7 @@ const lanes = [
   { key: 'prepacking', title: 'Pre-Packing', sub: 'Catat hasil awal packing', icon: PackageCheck, tone: '' },
   { key: 'postpacking', title: 'Post-Packing', sub: 'Catat hasil akhir packing', icon: PackageCheck, tone: '' },
   { key: 'finish', title: 'Finish', sub: 'Siap diselesaikan', icon: Flag, tone: '' },
-  { key: 'completed', title: 'Selesai', sub: 'Barang jadi di Cold Storage', icon: CheckCircle2, tone: 'ok' }
+  { key: 'completed', title: 'Selesai', sub: 'Belum dikirim ke gudang', icon: CheckCircle2, tone: 'ok' }
 ]
 
 // lane berikutnya untuk satu WO — urutan sama dengan Workspace; Operasi hanya
@@ -37,7 +37,13 @@ function nextStage(w) {
 
 const byLane = computed(() => {
   const g = { persiapan: [], material: [], operasi: [], prepacking: [], postpacking: [], finish: [], completed: [] }
-  for (const w of props.list) g[w.stage]?.push(w)
+  for (const w of props.list) {
+    // FU21: lane Selesai (Cold Storage) = antrean barang jadi yang BELUM masuk
+    // alur serah terima; WO yang sudah diminta/siap/terkirim ke gudang sudah
+    // dilacak di papan Stock Entry dan disembunyikan dari sini.
+    if (w.stage === 'completed' && w.handover) continue
+    g[w.stage]?.push(w)
+  }
   return g
 })
 
@@ -159,6 +165,7 @@ function badgeClass(status) { return status === 'Draft' ? 'b-draft' : status ===
             <span class="kb-meta">
               {{ w.stage === 'completed' ? `Selesai ${w.finishedAt || ''}` : `Jadwal ${fmtDate(w.plannedDate)}` }}
             </span>
+            <span v-if="w.handover" class="chip-gudang" :class="w.handover">{{ HANDOVER_LABELS[w.handover] }}</span>
             <span class="badge" :class="badgeClass(w.status)">{{ w.status }}</span>
           </div>
         </div>

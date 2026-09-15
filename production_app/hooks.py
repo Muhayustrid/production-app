@@ -160,13 +160,19 @@ awesomebar_search = ["production_app.search.awesomebar_results"]
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+# FU23: penanda Status Serah Terima di Work Order — cermin derivasi dokumen
+# (api/handover._handover_lanes), disinkronkan tiap MR/SE serah terima berubah.
+doc_events = {
+	"Material Request": {
+		"on_submit": "production_app.api.handover.sync_from_material_request",
+		"on_cancel": "production_app.api.handover.sync_from_material_request",
+		"on_update": "production_app.api.handover.sync_from_material_request",
+	},
+	"Stock Entry": {
+		"on_submit": "production_app.api.handover.sync_from_stock_entry",
+		"on_cancel": "production_app.api.handover.sync_from_stock_entry",
+	},
+}
 
 # Scheduled Tasks
 # ---------------

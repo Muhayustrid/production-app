@@ -12,10 +12,15 @@
 # - No hardcoded warehouses: the lot warehouse is the WO's Manufacture SE
 #   finished-row t_warehouse (WO fg_warehouse fallback); the send target comes
 #   from Manufacturing Settings custom_default_handover_warehouse (§4.10).
+# - T31 (ruling R2): the batchless pool source and new MRs' from_warehouse come
+#   from Manufacturing Settings custom_default_handover_source_warehouse when
+#   set, else the SE-derived lot warehouse; batch-tracked lots stay SE-derived.
+#   Requests carry the Work Order's FULL produced_qty (R3); boxes are Float kg
+#   only (R4/R8); send moves the MR's requested qty and never stops the MR (R6).
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, get_link_to_form, get_time, now
+from frappe.utils import add_days, flt, get_link_to_form, now
 
 from erpnext.stock.doctype.batch.batch import get_batch_qty
 
@@ -55,6 +60,7 @@ def _build_board():
 	requests = _requests(wo_rows)
 	return {
 		"target_warehouse": _target_warehouse(),
+		"source_warehouse": _source_warehouse(),
 		"roles": _roles(),
 		"lots": _lots(wo_rows, requests),
 		"requests": requests,
@@ -68,6 +74,23 @@ def _target_warehouse():
 		)
 		or None
 	)
+
+
+def _source_warehouse():
+	"""T31 (R2): gudang asal serah terima. Empty -> None; every caller falls
+	back to the SE-derived lot warehouse (the board never hard-fails)."""
+	return (
+		frappe.db.get_single_value(
+			"Manufacturing Settings", "custom_default_handover_source_warehouse"
+		)
+		or None
+	)
+
+
+def _pool_warehouse(lot_row):
+	"""The batchless pool source: the source setting overrides the SE-derived
+	lot warehouse; when unset the fallback keeps current behavior (R2)."""
+	return _source_warehouse() or lot_row.warehouse
 
 
 def _roles():
@@ -89,15 +112,17 @@ def _wo_lot_rows():
 	(§4.9). Follow-up 8: an FG item WITHOUT batch tracking yields a BATCHLESS
 	lot (batch=None) — all its WOs share one item-level stock pool (see
 	_lots), and multiple Manufactures are harmless. Numeric lot fields stay
-	None until _lots() applies the reservation.
+	None until _lots() applies the reservation. T31 (R7): produced_qty is the
+	WO's finished-goods total and completed_at the LATEST Manufacture posting
+	(rows iterate ascending, so the stamp is overwritten each iteration).
 	"""
 	try:
 		wos = frappe.get_list(
 			"Work Order",
 			filters={"docstatus": 1},
 			fields=[
-				"name", "production_item", "qty", "custom_adonan_ke",
-				"fg_warehouse", "creation",
+				"name", "production_item", "qty", "produced_qty", "custom_adonan_ke",
+				"fg_warehouse", "creation", "custom_gudang_confirmed",
 			],
 			order_by="creation desc",
 			limit_page_length=0,
@@ -146,11 +171,20 @@ def _wo_lot_rows():
 	history = {}
 	for s in ses:  # ascending posting -> first seen is the earliest entry
 		cur = history.setdefault(
-			s.work_order, {"manufactures": 0, "batches": [], "warehouse": None, "entered_at": None}
+			s.work_order,
+			{
+				"manufactures": 0,
+				"batches": [],
+				"warehouse": None,
+				"entered_at": None,
+				"completed_at": None,
+			},
 		)
 		cur["manufactures"] += 1
+		stamp = f"{s.posting_date} {_time_str(s.posting_time)}"
 		if cur["entered_at"] is None:
-			cur["entered_at"] = f"{s.posting_date} {_time_str(s.posting_time)}"
+			cur["entered_at"] = stamp
+		cur["completed_at"] = stamp  # ascending: the last write is the LATEST
 		for r in rows_by_se.get(s.name, []):
 			cur["warehouse"] = cur["warehouse"] or r.t_warehouse
 			if r.serial_and_batch_bundle:
@@ -188,9 +222,12 @@ def _wo_lot_rows():
 				"production_item": w.production_item,  # consumed by _enrich_units
 				"custom_uom": None,
 				"qty": flt(w.qty),
+				"produced_qty": flt(w.produced_qty),
 				"adonan_ke": w.custom_adonan_ke,
 				"warehouse": cur["warehouse"] or w.fg_warehouse,
 				"entered_at": str(cur["entered_at"]),
+				"completed_at": cur["completed_at"],
+				"gudang_confirmed": bool(w.custom_gudang_confirmed),
 				"physical_qty": None,
 				"reserved_qty": None,
 				"available_qty": None,
@@ -389,6 +426,119 @@ def _sent_se_by_mr(mr_names):
 	return sent
 
 
+# ------------------------------------------------ FU23: field native di WO
+# Penanda serah terima di form Work Order Desk (custom_handover_status).
+# Workspace TETAP memakai derivasi live (work_order._handover_enrich) supaya
+# tidak pernah drift; field ini adalah cermin yang disinkronkan doc_events.
+
+HANDOVER_STATUS_FIELD = "custom_handover_status"
+# nilai Select = label Indonesia (persis options Custom Field upgrade.py)
+HANDOVER_STATUS_LABEL = {
+	LANE_REQUEST: "Diminta Gudang",
+	LANE_SIAP: "Siap Kirim",
+	LANE_KIRIM: "Terkirim",
+}
+
+
+def _handover_lanes(wo_names):
+	"""FU23: lane serah terima paling maju per Work Order — SATU sumber derivasi
+	untuk flag workspace dan field native. Prioritas lane identik _requests:
+	terkirim (SE submitted) > siap_kirim (postpacking confirmed) > request;
+	MR draft/cancelled tidak menandai apa pun. Tanpa izin baca MR/SE
+	mengembalikan {} (pemanggil menampilkan tanpa flag, tanpa error)."""
+	wo_names = [n for n in wo_names if n]
+	if not wo_names:
+		return {}
+	try:
+		items = frappe.get_all(
+			"Material Request Item",
+			filters={"custom_work_order": ("in", wo_names)},
+			fields=["parent", "custom_work_order"],
+			limit=0,
+		)
+		mrs = frappe.get_all(
+			"Material Request",
+			filters={
+				"name": ("in", sorted({i.parent for i in items})),
+				"material_request_type": "Material Transfer",
+			},
+			fields=["name", "docstatus", "status", "custom_postpacking_confirmed"],
+			limit=0,
+		)
+	except frappe.PermissionError:
+		return {}
+	if not mrs:
+		return {}
+	sent = _sent_se_by_mr([m.name for m in mrs])
+	wos_by_mr = {}
+	for i in items:
+		wos_by_mr.setdefault(i.parent, []).append(i.custom_work_order)
+	rank = {LANE_REQUEST: 1, LANE_SIAP: 2, LANE_KIRIM: 3}
+	best = {}
+	for m in mrs:
+		if m.docstatus != 1:
+			continue  # draft/cancelled tidak pernah menandai WO
+		if m.name in sent:
+			lane = LANE_KIRIM
+		elif m.custom_postpacking_confirmed:
+			lane = LANE_SIAP
+		else:
+			lane = LANE_REQUEST  # termasuk Stopped tanpa SE — pernah diminta
+		for wo_name in wos_by_mr.get(m.name, ()):
+			if rank[lane] > rank.get(best.get(wo_name), 0):
+				best[wo_name] = lane
+	return best
+
+
+def sync_handover_status(wo_names):
+	"""Tulis custom_handover_status di Work Order dari derivasi dokumen.
+	Dipanggil oleh doc_events (MR/SE) dan save_post_packing (db_set tanpa
+	event). WO tanpa lane aktif dikosongkan (semua MR batal)."""
+	wo_names = sorted({n for n in wo_names if n})
+	if not wo_names:
+		return
+	lanes = _handover_lanes(wo_names)
+	for wo_name in wo_names:
+		frappe.db.set_value(
+			"Work Order", wo_name, HANDOVER_STATUS_FIELD,
+			HANDOVER_STATUS_LABEL.get(lanes.get(wo_name)), update_modified=False,
+		)
+
+
+def sync_from_material_request(doc, method=None):
+	"""doc_events Material Request (submit/cancel/update) → WO terikat item."""
+	sync_handover_status(
+		[i.custom_work_order for i in (doc.items or []) if i.get("custom_work_order")]
+	)
+
+
+def sync_from_stock_entry(doc, method=None):
+	"""doc_events Stock Entry (submit/cancel) → MR terikat → WO terikat."""
+	mrs = sorted({d.material_request for d in (doc.items or []) if d.get("material_request")})
+	if not mrs:
+		return
+	sync_handover_status(frappe.get_all(
+		"Material Request Item",
+		filters={"parent": ("in", mrs), "custom_work_order": ("is", "set")},
+		pluck="custom_work_order",
+		distinct=True,
+		limit=0,
+	))
+
+
+def backfill_handover_status():
+	"""Sekali (bench execute): sinkronkan field untuk WO yang pernah terikat MR."""
+	wos = frappe.get_all(
+		"Material Request Item",
+		filters={"custom_work_order": ("is", "set")},
+		pluck="custom_work_order",
+		distinct=True,
+		limit=0,
+	)
+	sync_handover_status(wos)
+	return len(wos)
+
+
 def _reserved_by_wo(requests):
 	"""§4.3: reservation = Σ qty of submitted, not stopped/cancelled MRs
 	without a Stock Entry, bound to the Work Order — exactly the request/siap
@@ -401,14 +551,20 @@ def _reserved_by_wo(requests):
 	return reserved
 
 
-def _reserved_by_item(requests):
+def _reserved_by_item(requests, wo_rows):
 	"""Follow-up 8 — batchless pool reservation: batchless stock has no batch
 	dimension, so every active MR of the ITEM (any WO) holds from the same
-	pool in the request's source warehouse."""
+	pool. T31 (R2): the pool warehouse is the WO lot row's POOL warehouse
+	(source setting overrides), NOT the MR's stored from_warehouse — so MRs
+	created before the setting existed still reserve the pool after it appears.
+	Fallback when the WO has no lot row: the request's own from_warehouse."""
+	wo_by_name = {r.work_order: r for r in wo_rows}
 	reserved = {}
 	for r in requests:
 		if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
-			key = (r["item_code"], r["from_warehouse"])
+			lot = wo_by_name.get(r["work_order"])
+			warehouse = _pool_warehouse(lot) if lot else r["from_warehouse"]
+			key = (r["item_code"], warehouse)
 			reserved[key] = reserved.get(key, 0.0) + r["qty"]
 	return reserved
 
@@ -433,11 +589,12 @@ def _lots(wo_rows, requests):
 	negative availability surfaces as-is.
 
 	Follow-up 8: a BATCHLESS lot (FG item without batch tracking) cannot own
-	stock — the item's whole balance in the lot warehouse is one pool shared by
-	every WO of that item, and reservations pool the same way. All batchless
-	WO-cards of an item therefore show the same honest pool numbers."""
+	stock — the item's whole balance in the POOL warehouse (source setting
+	override, R2) is one pool shared by every WO of that item, and reservations
+	pool the same way. All batchless WO-cards of an item therefore show the
+	same honest pool numbers."""
 	reserved = _reserved_by_wo(requests)
-	reserved_item = _reserved_by_item(requests)
+	reserved_item = _reserved_by_item(requests, wo_rows)
 	pool_stock = {}
 	# a request bound to a lane keeps its (even empty) lot listed
 	bound = {r["work_order"] for r in requests if r["lane"]}
@@ -447,15 +604,19 @@ def _lots(wo_rows, requests):
 			lots.append(row)
 			continue
 		if row.batchless:
-			key = (row.item_code, row.warehouse)
+			pool_wh = _pool_warehouse(row)
+			key = (row.item_code, pool_wh)
 			if key not in pool_stock:
-				pool_stock[key] = _item_stock(row.item_code, row.warehouse)
+				pool_stock[key] = _item_stock(row.item_code, pool_wh)
 			row.physical_qty = pool_stock[key]
 			row.reserved_qty = flt(reserved_item.get(key, 0.0))
 		else:
 			row.reserved_qty = reserved.get(row.work_order, 0.0)
 		row.available_qty = row.physical_qty - row.reserved_qty
-		if row.physical_qty <= 0 and row.work_order not in bound:
+		# FU25: lot yang WO-nya sudah dicentang "Gudang Confirmed" turun dari
+		# papan Cold Storage (kecuali masih diikat permintaan aktif — dialognya
+		# butuh data lot).
+		if (row.physical_qty <= 0 or row.gudang_confirmed) and row.work_order not in bound:
 			continue  # empty lot nobody references — drops off the lane
 		lots.append(row)
 
@@ -506,9 +667,6 @@ def _user_names(names):
 from erpnext.stock.doctype.material_request.material_request import (
     make_stock_entry as make_mr_stock_entry,
 )
-from erpnext.stock.doctype.material_request.material_request import (
-    update_status as update_mr_status,  # whitelisted: checks write permission (T21)
-)  # noqa: F401
 
 
 def _require_role(role, message):
@@ -517,18 +675,6 @@ def _require_role(role, message):
     allowed = (role,) if isinstance(role, str) else tuple(role)
     if not any(r in roles for r in allowed):
         frappe.throw(message, frappe.PermissionError)
-
-
-def _finite_qty(value, label, positive=True):
-    """T10 pattern: a number, finite, and (> 0 | >= 0)."""
-    amount = float(value)
-    if amount != amount or amount in (float("inf"), float("-inf")):
-        frappe.throw(_("{0} harus angka yang valid").format(label))
-    if positive and amount <= 0:
-        frappe.throw(_("{0} harus lebih besar dari 0").format(label))
-    if not positive and amount < 0:
-        frappe.throw(_("{0} tidak boleh negatif").format(label))
-    return amount
 
 
 def _enforce_whole_uom(amount, stock_uom, label):
@@ -580,21 +726,28 @@ def _target_warehouse_or_throw():
     return target
 
 
-def _box_text(value):
-    """Boxes are TEXT identifiers: strip, never parse as numbers."""
-    if value is None:
+def _box_kg(value, label):
+    """Box weight in kg (R8): blank -> None; else a finite, non-negative float."""
+    if value is None or str(value).strip() == "":
         return None
-    text = str(value).strip()
-    return text or None
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        frappe.throw(_("{0} harus angka kg yang valid").format(label))
+    if amount != amount or amount in (float("inf"), float("-inf")):
+        frappe.throw(_("{0} harus angka kg yang valid").format(label))
+    if amount < 0:
+        frappe.throw(_("{0} tidak boleh negatif").format(label))
+    return amount
 
 
 @frappe.whitelist()
-def create_request(work_order, qty):
+def create_request(work_order):
     """Gudang side (Gudang Barang Jadi / Stock User): submit a Material Transfer
-    request against one lot — a PURE request (qty only).
-
-    Boxes are NOT part of the request anymore (user decision 2026-09-14):
-    produksi enters them at Post-Packing, where they also edit the Work Order.
+    request for the Work Order's FULL produced qty (R3 — no qty dialog, drag is
+    the direct action). The source warehouse is the handover source setting
+    when set, else the SE-derived lot warehouse (R2). One ACTIVE (unshipped,
+    unstopped) request per Work Order; a duplicate throws.
 
     Re-validates availability under the WO row lock, then inserts + submits the
     MR in this one transaction — zero writes on any validation failure."""
@@ -605,15 +758,27 @@ def create_request(work_order, qty):
     frappe.has_permission("Material Request", "create", throw=True)
     target = _target_warehouse_or_throw()
 
-    amount = _finite_qty(qty, "Qty")
     frappe.db.get_value("Work Order", work_order, "name", for_update=True)  # row lock
     wo = frappe.get_doc("Work Order", work_order)
+    amount = flt(wo.produced_qty)
+    if amount <= 0:
+        frappe.throw(
+            _("Work Order {0} belum punya hasil barang jadi (produced qty 0).").format(work_order)
+        )
     lot = _checked_lot(work_order)
     if lot.batchless:
         # the pool is ITEM-wide: requests from every WO of this item draw from
         # it, so the Item row lock serializes them (the WO lock above cannot)
         frappe.db.get_value("Item", wo.production_item, "name", for_update=True)
         lot = _checked_lot(work_order)  # re-derive under the pool lock
+
+    # R3: one active request per WO — re-derived under the lock so racing
+    # creates serialize on the row lock (stopped/draft/cancelled never block)
+    for r in _requests(_wo_lot_rows()):
+        if r["work_order"] == work_order and r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
+            frappe.throw(
+                _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, r["mr"])
+            )
 
     stock_uom = lot.stock_uom or frappe.db.get_value("Item", wo.production_item, "stock_uom")
     _enforce_whole_uom(amount, stock_uom, "Qty")
@@ -623,6 +788,7 @@ def create_request(work_order, qty):
             _("Qty melebihi lot tersedia: diminta {0}, tersedia {1}.").format(amount, available)
         )
 
+    source = _pool_warehouse(lot)  # setting override, else SE-derived (R2)
     mr = frappe.get_doc(
         {
             "doctype": "Material Request",
@@ -630,7 +796,7 @@ def create_request(work_order, qty):
             "company": wo.company,
             "transaction_date": now(),
             "schedule_date": add_days(now(), 1),
-            "set_from_warehouse": lot.warehouse,
+            "set_from_warehouse": source,
             "set_warehouse": target,
             "items": [
                 {
@@ -638,7 +804,7 @@ def create_request(work_order, qty):
                     "qty": amount,
                     "uom": stock_uom,
                     "stock_uom": stock_uom,
-                    "from_warehouse": lot.warehouse,
+                    "from_warehouse": source,
                     "warehouse": target,
                     "schedule_date": add_days(now(), 1),
                     "custom_work_order": wo.name,
@@ -648,7 +814,7 @@ def create_request(work_order, qty):
     )
     mr.insert()  # session user; submit below — one transaction, native perms
     mr.submit()
-    return {"ok": True, "material_request": mr.name, "board": _build_board()}
+    return {"ok": True, "material_request": mr.name, "qty": amount, "board": _build_board()}
 
 
 @frappe.whitelist()
@@ -677,14 +843,13 @@ def cancel_request(material_request):
     return {"ok": True, "material_request": material_request, "board": _build_board()}
 
 
-# WO mirror: Box 1/2 ONLY (user decision 2026-09-14, FU7) — the identifier
-# entered at handover Post-Packing edits the Work Order; WO custom_box_1/2 are
-# Data text (upgrade.py migrates Float). The WO postpacking qty/jam/qc fields
-# are owned by the Work Order workspace (`confirm_postpacking`, written BEFORE
-# manufacture, T27); this handover block runs AFTER manufacture and caps good
-# at the requested qty, so mirroring it would fabricate the WO's final result
-# (competing writer, POSTPACKING_PLAN §3). Full history lives on the Material
-# Requests; the WO fields are never touched here.
+# WO mirror: Box 1/2 ONLY (T31, R4/R8) — the kg weights entered at the
+# "Verifikasi Siap Kirim" step edit the Work Order (Float kg, upgrade.py
+# migrate). The WO postpacking qty/jam/qc fields are owned by the Work Order
+# workspace (`confirm_postpacking`, written BEFORE manufacture, T27); this
+# handover block runs AFTER manufacture, so mirroring them would fabricate the
+# WO's final result (competing writer, POSTPACKING_PLAN §3). Full history
+# lives on the Material Requests; the WO fields are never touched here.
 WO_MIRROR_FIELDS = (
     "custom_box_1",
     "custom_box_2",
@@ -703,21 +868,14 @@ def _handover_mr(material_request):
 
 
 @frappe.whitelist()
-def save_post_packing(
-    material_request, good_qty, jam_packing, qc_packing, reject_qty=0, trial_qty=0, box_1=None, box_2=None
-):
-    """Manufacturing User: verify the physical goods ONCE (Request -> Siap Kirim).
-
-    Caps per §4.5; sisa is computed server-side; the MR postpacking block is
-    written via db_set behind our own write gate (a full save() of a submitted
-    doc would demand submit permission, which Manufacturing User must not have,
-    T22). The MR keeps its own postpacking block (its truth); the Work Order
-    qty/jam/qc postpacking fields are NOT touched — they belong to the Work
-    Order workspace (`confirm_postpacking`, before manufacture, T27; a mirror
-    here would be a competing writer after manufacture, POSTPACKING_PLAN §3).
-    Only Box 1/2 mirror to the Work Order (identifier fields, user decision
-    FU7, e.g. BX-2201; they edit the WO, the MR stays a pure request document
-    created by gudang without boxes)."""
+def save_post_packing(material_request, box_1=None, box_2=None):
+    """Manufacturing User: "Verifikasi Siap Kirim" (Request -> Siap Kirim) —
+    records ONLY the Box 1/2 weights in kg (R4: good/reject/trial/sisa/jam/qc
+    already live on the Work Order Post-Packing stage, T27) and confirms the
+    request. Written via db_set behind our own write gate (a full save() of a
+    submitted doc would demand submit permission, which Manufacturing User
+    must not have, T22). Boxes mirror to the Work Order (kg semantics, R8);
+    the MR stays a pure request document created by gudang."""
     _require_role(
         ROLE_PRODUKSI, _("Hanya Manufacturing User yang dapat mengisi Post-Packing.")
     )
@@ -731,37 +889,14 @@ def save_post_packing(
     if sent:
         frappe.throw(_("Permintaan {0} sudah terkirim; Post-Packing tidak bisa diisi.").format(material_request))
 
-    requested = flt(mr.items[0].stock_qty or mr.items[0].qty)
-    good = _finite_qty(good_qty, "Good Qty")
-    reject = _finite_qty(reject_qty if reject_qty not in (None, "") else 0, "Reject Qty", positive=False)
-    trial = _finite_qty(trial_qty if trial_qty not in (None, "") else 0, "Trial Qty", positive=False)
-    _enforce_whole_uom(good, mr.items[0].stock_uom, "Good Qty")
-    if good > requested:
-        frappe.throw(_("Good ({0}) melebihi qty diminta ({1}).").format(good, requested))
-    if good + reject + trial > requested:
-        frappe.throw(
-            _("Good + Reject + Trial ({0}) melebihi qty diminta ({1}).").format(good + reject + trial, requested)
-        )
-    sisa = requested - good - reject - trial  # §4.5: computed server-side
-    if not frappe.db.exists("User", qc_packing) or not frappe.db.get_value("User", qc_packing, "enabled"):
-        frappe.throw(_("QC Packing harus User aktif: {0}").format(qc_packing))
-    try:
-        get_time(jam_packing)  # validate BEFORE any write
-    except Exception:
-        frappe.throw(_("Jam Packing tidak valid: {0}").format(jam_packing))
-
-    box1 = _box_text(box_1)
-    box2 = _box_text(box_2)
+    box1 = _box_kg(box_1, "Box 1")
+    box2 = _box_kg(box_2, "Box 2")
+    # kolom box kini NOT NULL (schema canonical Frappe) — kosong disimpan 0;
+    # display "belum diisi" tetap truthiness (0/null sama, catatan T33/FU25)
     values = {
-        "custom_good_qty_postpacking": good,
-        "custom_reject_qty_postpacking": reject,
-        "custom_trial_qty_postpacking": trial,
-        "custom_sisa_qty_postpacking": sisa,
-        "custom_jam_packing": jam_packing,
-        "custom_qc_packing": qc_packing,
+        "custom_box_1": flt(box1),
+        "custom_box_2": flt(box2),
         "custom_postpacking_confirmed": 1,
-        "custom_box_1": box1,
-        "custom_box_2": box2,
     }
     for fieldname, value in values.items():
         mr.db_set(fieldname, value)
@@ -771,31 +906,26 @@ def save_post_packing(
     frappe.db.set_value(
         "Work Order", wo, {f: values[f] for f in WO_MIRROR_FIELDS}
     )
+    # db_set tidak memicu doc_events — sinkronkan field penanda WO manual (FU23)
+    sync_handover_status([wo])
     return {
         "ok": True,
         "material_request": material_request,
-        "postpacking": {
-            "good": good,
-            "reject": reject,
-            "trial": trial,
-            "sisa": sisa,
-            "jam_packing": jam_packing,
-            "qc_packing": qc_packing,
-            "box_1": box1,
-            "box_2": box2,
-        },
+        "box_1": box1,
+        "box_2": box2,
         "board": _build_board(),
     }
 
 
 @frappe.whitelist()
 def send_handover(material_request):
-    """Manufacturing User: create + submit the handover Stock Entry (exactly
-    Good Post-Packing of the lot's batch, Cold Storage -> target), then stop
-    the MR when good < requested. ONE transaction: any failure rolls back with
-    zero partial documents. Shortage that slips past the pre-check dies at
-    submit with BatchNegativeStockError (a frappe.ValidationError, T21) inside
-    the same transaction."""
+    """Manufacturing User: create + submit the handover Stock Entry moving the
+    MR's requested qty (= the WO's produced_qty at request time, R6) from the
+    source warehouse to the handover target. ONE transaction: any failure rolls
+    back with zero partial documents. Batch-tracked rows keep batch_no (the
+    batch seam); batchless rows pre-check the item pool. Shortage that slips
+    past the pre-check dies at submit with BatchNegativeStockError (a
+    frappe.ValidationError, T21) inside the same transaction."""
     _require_role(
         ROLE_PRODUKSI, _("Hanya Manufacturing User yang dapat mengirim serah terima.")
     )
@@ -804,8 +934,9 @@ def send_handover(material_request):
     frappe.has_permission("Stock Entry", "submit", throw=True)
 
     wo_name = mr.items[0].custom_work_order
-    good = flt(mr.custom_good_qty_postpacking)
-    requested = flt(mr.items[0].stock_qty or mr.items[0].qty)
+    qty = flt(mr.items[0].stock_qty or mr.items[0].qty)
+    if qty <= 0:
+        frappe.throw(_("Qty permintaan {0} tidak valid.").format(material_request))
 
     frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # row lock
     mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
@@ -815,8 +946,6 @@ def send_handover(material_request):
         frappe.throw(_("Post-Packing belum dikonfirmasi untuk {0}.").format(material_request))
     if mr.status == "Stopped":
         frappe.throw(_("Permintaan {0} berstatus Stopped; aktifkan kembali lewat Desk.").format(material_request))
-    if good <= 0:
-        frappe.throw(_("Good Post-Packing belum terisi untuk {0}.").format(material_request))
     sent = _sent_se_by_mr([material_request])
     if sent:
         frappe.throw(
@@ -825,14 +954,14 @@ def send_handover(material_request):
             )
         )
     physical = (
-        _item_stock(lot.item_code, lot.warehouse)
+        _item_stock(lot.item_code, _pool_warehouse(lot))
         if lot.batchless
         else flt(get_batch_qty(batch, lot.warehouse) or 0)
     )
-    if physical < good:  # fail atomically here; NegativeStockError is the backstop
+    if physical < qty:  # fail atomically here; NegativeStockError is the backstop
         frappe.throw(
             _("Stok {0} di gudang asal hanya {1}; tidak bisa mengirim {2}.").format(
-                lot.item_code if lot.batchless else f"batch {batch}", physical, good
+                lot.item_code if lot.batchless else f"batch {batch}", physical, qty
             )
         )
 
@@ -840,25 +969,19 @@ def send_handover(material_request):
     if len(se.items) != 1:
         frappe.throw(_("Material Request {0} harus satu baris item.").format(material_request))
     row = se.items[0]
-    row.qty = good
-    row.transfer_qty = good * flt(row.conversion_factor or 1)
+    row.qty = qty
+    row.transfer_qty = qty * flt(row.conversion_factor or 1)
     if not lot.batchless:
         row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
         row.batch_no = batch
     se.insert()
     se.submit()  # native shortage/valuation failures roll the whole request back
 
-    stopped = False
-    if good < requested:
-        update_mr_status(mr.name, "Stopped")  # whitelisted: checks write permission
-        stopped = True
     return {
         "ok": True,
         "material_request": material_request,
         "stock_entry": se.name,
         "batch": batch,
-        "good": good,
-        "requested": requested,
-        "stopped": stopped,
+        "qty": qty,
         "board": _build_board(),
     }

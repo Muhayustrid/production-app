@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
+import { HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
 import { fmtDate, qtyStack } from './format.js'
 import { Search, Filter, ChevronRight, SearchX, Table, Kanban } from 'lucide-vue-next'
 import WorkOrderKanban from './WorkOrderKanban.vue'
@@ -42,13 +42,16 @@ function filterPayload() {
       startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value
   }
 }
+function saveWoPreferences() {
+  return saveListPreferences({
+    workOrder: { q: q.value, product: fProduct.value, status: fStatus.value, stage: fStage.value, from: fFrom.value, to: fTo.value, pageSize: pageSize.value, filterOpen: filterOpen.value },
+    handover: savedListPreferences.handover || {}
+  })
+}
 async function reload() {
   listState.page = 1
   await loadList(filterPayload())
-  await saveListPreferences({
-    workOrder: { q: q.value, product: fProduct.value, status: fStatus.value, stage: fStage.value, from: fFrom.value, to: fTo.value, pageSize: pageSize.value },
-    handover: savedListPreferences.handover || {}
-  })
+  await saveWoPreferences()
 }
 function setPageSize(value) {
   listState.pageSize = normalizePageSize(value)
@@ -79,17 +82,22 @@ const filtered = computed(() => workOrders
   .filter(w => { const t = q.value.trim().toLowerCase(); return !t || w.id.toLowerCase().includes(t) || w.product.toLowerCase().includes(t) || w.itemCode.toLowerCase().includes(t) }))
 const pagedFiltered = computed(() => filtered.value)
 watch([q, fProduct, fStatus, fStage, fFrom, fTo], () => { listState.page = 1; scheduleReload() })
+// panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
+watch(filterOpen, () => saveWoPreferences())
 onMounted(() => {
   const apply = () => {
     const p = savedListPreferences.workOrder || {}
     q.value = p.q || ''; fProduct.value = normalizeProduct(p.product); fStatus.value = p.status || 'all'; fStage.value = p.stage || 'all'; fFrom.value = p.from || ''; fTo.value = p.to || ''
     listState.pageSize = normalizePageSize(p.pageSize)
+    filterOpen.value = !!p.filterOpen
     reload()
   }
   if (listPreferencesState.loaded) apply()
   else {
-    const timer = setInterval(() => { if (listPreferencesState.loaded) { clearInterval(timer); apply() } }, 25)
-    setTimeout(() => clearInterval(timer), 2000)
+    let applied = false
+    const run = () => { if (applied) return; applied = true; apply() }
+    const timer = setInterval(() => { if (listPreferencesState.loaded) { clearInterval(timer); run() } }, 25)
+    setTimeout(() => { clearInterval(timer); run() }, 2000) // preferensi gagal termuat → daftar tetap jalan
   }
 })
 function open(id) { window.location.hash = '#/wo/' + id }
@@ -216,6 +224,7 @@ function stageLabel(w) { return w.stage === 'completed' ? 'Selesai' : STAGE_LABE
       <span>Jadwal</span>
       <span>Status</span>
       <span>Tahap Aktif</span>
+      <span>Gudang</span>
       <span style="text-align: right">Rencana</span>
       <span></span>
     </div>
@@ -235,6 +244,9 @@ function stageLabel(w) { return w.stage === 'completed' ? 'Selesai' : STAGE_LABE
       <span class="c-date">{{ fmtDate(w.plannedDate) }}</span>
       <span class="c-status"><span class="badge" :class="statusClass(w.status)">{{ w.status }}</span></span>
       <span class="c-stage"><span class="chip">{{ stageLabel(w) }}</span></span>
+      <span class="c-gudang">
+        <span v-if="w.handover" class="chip-gudang" :class="w.handover">{{ HANDOVER_LABELS[w.handover] }}</span>
+      </span>
       <span class="wo-qty c-qty">
         <span class="qmain">{{ qtyStack(w.plannedStockQty, w).main }}</span>
         <span class="qsub">{{ qtyStack(w.plannedStockQty, w).sub }}</span>

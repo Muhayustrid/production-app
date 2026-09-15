@@ -4,7 +4,7 @@ import WorkOrderList from './WorkOrderList.vue'
 import Workspace from './Workspace.vue'
 import WarehouseSettings from './WarehouseSettings.vue'
 import HandoverBoard from './HandoverBoard.vue'
-import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, state, handoverBoard, handoverRequests, handoverState, loadBoard } from './store.js'
+import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard } from './store.js'
 import { ClipboardCheck, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
 
 // router hash minimal: '#/' + '#/wo/<id>' (work order), '#/handover' (stock entry)
@@ -58,6 +58,10 @@ const activeCount = computed(() => workOrders.filter((w) => w.stage !== 'complet
 const handoverCount = computed(() =>
   handoverRequests.filter((r) => r.lane === 'request' || r.lane === 'siap_kirim').length
 )
+// FU20: spinner global di tepi atas untuk semua pemuatan halaman
+const busyLoading = computed(() =>
+  state.loading || handoverState.loading || uiTopLoading.active
+)
 onMounted(async () => {
   await loadListPreferences()
   loadList(); loadBoard(); loadSuggestionPreferences()
@@ -83,6 +87,11 @@ function onNavClick() {
 <template>
   <div class="app" :class="{ 'nav-open': navOpen }">
     <div class="backdrop" :class="{ show: navOpen }" aria-hidden="true" @click="navOpen = false"></div>
+
+    <div v-if="busyLoading" class="top-loading" role="status" aria-label="Memuat data">
+      <span class="top-loading-spin" aria-hidden="true"></span>
+      <span class="top-loading-label">Memuat…</span>
+    </div>
 
     <header class="topbar">
       <button class="navburger" aria-label="Buka/tutup menu" @click="navOpen = !navOpen">

@@ -259,3 +259,31 @@ Depends on: T29.
 Scope: 5 suite fresh ×2; HTTP loop end-to-end (termasuk legacy in-flight → post_packing); browser smoke interaktif oleh controller; update IMPLEMENTATION_PLAN.md (addendum supersede), PROJECT_STATE.md; catat migrasi/rollback; bersihkan fixture test.
 
 Acceptance: setiap baris §8 POSTPACKING_PLAN.md punya bukti eksekusi/observasi; dokumen proyek konsisten; berhenti — pekerjaan lanjutan hanya atas request baru.
+
+## G. Stock Entry kanban WO-centric (serah terima tanpa batch)
+
+Business contract: `STOCKENTRY_KANBAN_PLAN.md` (amendemen alur §4 HANDOVER_PLAN.md — request full qty WO, verifikasi box-only kg, SE qty WO, setting source warehouse). Eksekusi SDD subagent-driven; aturan eksekusi sama.
+
+### T31 — Server: setting source warehouse + box Float kg + board/aksi WO-referenced
+
+Depends on: none (section G).
+
+Scope: `upgrade.py` (field `custom_default_handover_source_warehouse`; migrasi box Data→Float kg di Work Order + Material Request, snapshot `box-kg-pre.json`, NULL-kan nilai lama sebelum alter kolom; spesifikasi field box jadi Float kg). `api/work_order.py` (read/save settings + `handover_source_warehouse`). `api/handover.py` (payload board `source_warehouse`/`produced_qty`/`completed_at`; pool & reservasi batchless pakai source setting dengan keying per-lot WO; `create_request(work_order)` qty = `produced_qty` + guard request aktif ganda; `save_post_packing` box-only kg; `send_handover` qty = diminta, hapus short-close/stop). Tests: 5 suite diperbarui + kasus baru.
+
+Acceptance: apply() 2× idempoten (snapshot tertulis); 5 suite hijau ×2; jalur batch-tracked tidak berubah; tanpa perubahan permission; residu fixture 0. Live apply() dijalankan HANYA setelah kode writer box selesai (urutan R8).
+
+### T32 — Frontend SPA: papan WO-centric + Verifikasi Siap Kirim + deploy
+
+Depends on: T31.
+
+Scope: `WarehouseSettings.vue` (input ke-6 Source Warehouse (Stock Entry)); `store.js` (payload/signature baru); `HandoverBoard.vue` (kartu Hasil WO + Selesai; drag/klik lot = langsung buat request tanpa dialog, error via modal global FU14; dialog Post-Packing diganti "Verifikasi Siap Kirim" box kg saja; dialog kirim tanpa branch stop; hapus dialog request lama). Build + deploy container + md5 5 titik + marker bundle + restart backend. HTTP loop 2 user fixture (batchless + batch item).
+
+Acceptance: loop HTTP hijau end-to-end; bundle terverifikasi; tanpa sisa dialog request/goodQty di bundle; state papan selalu server truth.
+
+### T33 — Acceptance run + final state section G
+
+Depends on: T32.
+
+Scope: 5 suite fresh ×2; browser smoke interaktif controller (pengaturan 6 input; kartu Hasil WO/Selesai; drag request tanpa dialog; verifikasi box; kirim → SE; reload; mobile 390); desk view box Float; update HANDOVER_PLAN.md (addendum), TASKS.md, PROJECT_STATE.md; catat rollback; bersihkan fixture; final whole-branch review.
+
+Acceptance: setiap baris punya bukti eksekusi/observasi; dokumen konsisten; berhenti — pekerjaan lanjutan hanya atas request baru.
