@@ -18,6 +18,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import json
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, now, random_string
@@ -269,6 +271,72 @@ class TestHandoverSetup(IntegrationTestCase):
 		self.assertEqual(
 			frappe.get_meta("Material Request").get_field("custom_box_1").allow_on_submit, 1
 		)
+		# T35: three-lane handover metadata — Link + whole-Pack summary fields
+		wo_meta = frappe.get_meta("Work Order", cached=False)
+		expected = {
+			"custom_handover_material_request": ("Link", "Material Request"),
+			"custom_box_1_pack": ("Int", None),
+			"custom_box_2_pack": ("Int", None),
+		}
+		for fieldname, (fieldtype, options) in expected.items():
+			df = wo_meta.get_field(fieldname)
+			self.assertIsNotNone(df)
+			self.assertEqual(df.fieldtype, fieldtype)
+			self.assertEqual(df.options or None, options)
+			self.assertTrue(df.allow_on_submit)
+			self.assertTrue(df.read_only)
+
+		for fieldname in ("custom_box_1", "custom_box_2"):
+			self.assertTrue(wo_meta.get_field(fieldname).read_only)
+
+		self.assertEqual(
+			wo_meta.get_field("custom_handover_status").options,
+			"\nDiminta Gudang\nTerkirim",
+		)
+		# the migration converges: the second apply reports every three-lane
+		# step unchanged and never rewrites correct Links/values
+		entries = (
+			r2["three_lane_handover"].values()
+			if isinstance(r2["three_lane_handover"], dict)
+			else [r2["three_lane_handover"]]
+		)
+		self.assertTrue(
+			all(str(entry).endswith(": unchanged") for entry in entries),
+			f"three_lane_handover not idempotent: {r2['three_lane_handover']}",
+		)
+		# snapshot-first: the evidence must agree with its own data — the OLD
+		# "Siap Kirim" option is required ONLY while the stored status values
+		# prove pre-cutover data; a fresh-install capture holds the current
+		# narrowed options/contract instead (it never saw the old option).
+		with open(upgrade.THREE_LANE_SNAPSHOT) as f:
+			snap = json.load(f)
+		self.assertEqual(
+			set(snap["stored_values"]),
+			{"custom_handover_status", upgrade.THREE_LANE_LINK_FIELD, *upgrade.THREE_LANE_BOX_FIELDS},
+		)
+		status_fields = [
+			cf for cf in snap["custom_fields"] if cf["fieldname"] == "custom_handover_status"
+		]
+		stored_status = snap["stored_values"]["custom_handover_status"]
+		if upgrade.RETIRED_STATUS_VALUE in stored_status:
+			# live-site pre-cutover evidence: old options present, and ONLY
+			# values the old options allowed
+			self.assertTrue(status_fields, "snapshot missed custom_handover_status")
+			self.assertIn(upgrade.RETIRED_STATUS_VALUE, status_fields[0].get("options") or "")
+			self.assertLessEqual(
+				set(stored_status),
+				{"Diminta Gudang", upgrade.RETIRED_STATUS_VALUE, "Terkirim"},
+			)
+		else:
+			# fresh-install evidence: no retired value anywhere; a captured
+			# definition already carries the narrowed options
+			self.assertNotIn(upgrade.RETIRED_STATUS_VALUE, stored_status)
+			if status_fields:
+				self.assertEqual(
+					status_fields[0].get("options"), "\nDiminta Gudang\nTerkirim"
+				)
+		for fieldname in ("custom_handover_status", "custom_box_1", "custom_box_2"):
+			self.assertIsInstance(snap["stored_values"][fieldname], dict)
 
 	# ------------------------------------------------ permission: gudang
 

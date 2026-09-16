@@ -665,8 +665,10 @@ class TestHandoverBoard(IntegrationTestCase):
 	# ------------------------------------- 3. lane transitions (mutations)
 
 	def test_t23_lane_transitions_by_direct_mutation(self):
-		"""request -> siap_kirim -> terkirim, re-deriving the board after each
-		direct mutation (submit MR; db_set postpacking + confirm; native SE)."""
+		"""request -> terkirim, re-deriving the board after each direct
+		mutation (submit MR; native SE). The retired postpacking confirm no
+		longer advances any lane: a legacy confirmed MR without SE stays a
+		plain request and `siap_kirim` never appears on the board."""
 		# SE existence rides `material_request` on Stock Entry Detail (the link
 		# the native MR->SE builder sets, T21); the parent-level SE filter is
 		# resolved natively against the child table (frappe/database/query.py)
@@ -686,15 +688,20 @@ class TestHandoverBoard(IntegrationTestCase):
 		self.assertFalse(req["postpacking"]["confirmed"])
 		self.assertIsNone(req["stock_entry"])
 		self.assertEqual(flt(req["qty"]), 40)
-		self.assertEqual(flt(req["box_1"]), 12.5)  # kg floats (T31)
+		# T35: the doc_events sync claims the WO Link on submit; the row reads
+		# the (still empty) WO summary — legacy MR kg only shows pre-cutover
+		self.assertEqual(self._lot(board, wo.name)["custom_handover_material_request"], mr.name)
+		self.assertIsNone(req["box_1"])
+		self.assertIsNone(req["box_1_pack"])  # Pack never invented from MR data
 		self.assertIsNone(req["box_2"])
-		self.assertEqual(req["boxes"], [12.5])  # empty dropped (mockup joins this)
+		self.assertEqual(req["boxes"], [])
 		self.assertEqual(req["from_warehouse"], self.cold_wh)
 		self.assertEqual(req["to_warehouse"], self.target_wh)
 		self.assertEqual(req["batch"], self._lot(board, wo.name)["batch"])
 		self.assertEqual(flt(self._lot(board, wo.name)["available_qty"]), 60)
 
-		# post-packing + confirm (allow_on_submit fields, db_set as in T22)
+		# legacy post-packing + confirm (allow_on_submit fields, db_set as in
+		# T22): the display block stays, but the lane remains request
 		mr.db_set("custom_good_qty_postpacking", 40)
 		mr.db_set("custom_jam_packing", "13:40:00")
 		mr.db_set("custom_qc_packing", "Administrator")
@@ -702,7 +709,8 @@ class TestHandoverBoard(IntegrationTestCase):
 
 		board = handover_board()
 		req = self._req(board, mr.name)
-		self.assertEqual(req["lane"], "siap_kirim")
+		self.assertEqual(req["lane"], "request")
+		self.assertNotIn("siap_kirim", {r["lane"] for r in board["requests"] if r["lane"]})
 		self.assertTrue(req["postpacking"]["confirmed"])
 		self.assertEqual(flt(req["postpacking"]["good"]), 40)
 		self.assertEqual(req["postpacking"]["jam_packing"], "13:40:00")
@@ -721,6 +729,165 @@ class TestHandoverBoard(IntegrationTestCase):
 		self.assertEqual(flt(lot["reserved_qty"]), 0)
 		self.assertEqual(flt(lot["physical_qty"]), 60)
 		self.assertEqual(flt(lot["available_qty"]), 60)
+
+	# --------------------- T35. three-lane document precedence + summaries
+
+	def test_t35_submitted_se_precedence_over_abnormal_cancel(self):
+		"""A submitted Stock Entry keeps the request terkirim even when the MR
+		is forced to the test-only abnormal docstatus=2 (cancelled AFTER send);
+		both `_requests` and `_handover_lanes` derive the same truth."""
+		from production_app.api import handover as handover_api
+
+		wo = self._make_wo(self.bom, 100, self.fg, "9")
+		self._transfer(wo)
+		self._manufacture(wo, 100, "10:00:00")
+		mr = self._make_mr(wo, 40)
+		batch = self._lot(handover_board(), wo.name)["batch"]
+		se = self._send(mr, 40, batch)
+
+		mr.db_set("docstatus", 2)  # abnormal: cancelled after the send existed
+
+		board = handover_board()
+		req = self._req(board, mr.name)
+		self.assertEqual(req["lane"], "terkirim")
+		self.assertEqual(req["stock_entry"], se.name)
+		self.assertEqual(handover_api._handover_lanes([wo.name]), {wo.name: "terkirim"})
+
+	def test_t35_wo_summary_bulk_mapping_and_fallback(self):
+		"""Request rows read box kg/Pack from the BULK Work Order lot rows only
+		while the WO Link points at the MR; a pre-cutover MR (empty Link) falls
+		back to its own kg with empty Pack — and the mapping performs no
+		per-card Work Order lookup."""
+		from production_app.api import handover as handover_api
+
+		wo1 = self._make_wo(self.bom, 100, self.fg, "1")
+		self._transfer(wo1)
+		self._manufacture(wo1, 100, "10:00:00")
+		wo2 = self._make_wo(self.bom, 100, self.fg, "2")
+		self._transfer(wo2)
+		self._manufacture(wo2, 100, "11:00:00")
+		mr1 = self._make_mr(wo1, 100)
+		mr2 = self._make_mr(wo2, 50)
+		# pre-cutover simulation: the doc_events sync claims the Link on MR
+		# submit, so clear it explicitly (db_set fires no hooks)
+		wo2.db_set("custom_handover_material_request", None)
+
+		wo1.db_set("custom_handover_material_request", mr1.name)
+		wo1.db_set("custom_box_1", 12.5)
+		wo1.db_set("custom_box_1_pack", 20)
+		wo1.db_set("custom_box_2", 8.0)
+		wo1.db_set("custom_box_2_pack", 19)
+		row = self._req(handover_board(), mr1.name)
+		self.assertEqual((row["box_1"], row["box_1_pack"]), (12.5, 20))
+		self.assertEqual((row["box_2"], row["box_2_pack"]), (8.0, 19))
+		# kg precedence proof: the WO value outranks the MR's legacy kg (12.5)
+		wo1.db_set("custom_box_1", 21.5)
+		self.assertEqual(self._req(handover_board(), mr1.name)["box_1"], 21.5)
+
+		# pre-cutover fallback: MR kg fields, both Pack values stay empty
+		mr2.db_set("custom_box_1", 6.5)
+		mr2.db_set("custom_box_2", 2.25)
+		row2 = self._req(handover_board(), mr2.name)
+		self.assertEqual((row2["box_1"], row2["box_1_pack"]), (6.5, None))
+		self.assertEqual((row2["box_2"], row2["box_2_pack"]), (2.25, None))
+
+		# the mapping is bulk: no per-card Work Order lookup inside _requests
+		real_get_value = frappe.db.get_value
+
+		def no_wo_lookups(*args, **kwargs):
+			if args and args[0] == "Work Order":
+				raise AssertionError("request-row mapping must not look up Work Orders per card")
+			return real_get_value(*args, **kwargs)
+
+		wo_rows = handover_api._wo_lot_rows([wo1.name, wo2.name])
+		with patch.object(frappe.db, "get_value", side_effect=no_wo_lookups):
+			rows = handover_api._requests(wo_rows, wo_names=[wo1.name, wo2.name])
+		by_mr = {r["mr"]: r for r in rows}
+		self.assertEqual((by_mr[mr1.name]["box_1"], by_mr[mr1.name]["box_1_pack"]), (21.5, 20))
+		self.assertEqual((by_mr[mr2.name]["box_1"], by_mr[mr2.name]["box_1_pack"]), (6.5, None))
+		self.assertIsNone(by_mr[mr2.name]["box_2_pack"])
+
+	def test_t36_board_single_bulk_seams_no_fan_out(self):
+		"""T36: ONE full board build for MULTIPLE Work Orders hits each bulk
+		seam exactly once — a single (get_available_batches +
+		get_stock_ledgers_batches) pair covers every batch balance, the single
+		bulk Work Order result set already carries the summary Link/kg/Pack
+		fields onto the request rows, and nothing fans out per card:
+		_checked_lot is never used while building the board, and neither
+		frappe.db.get_value nor frappe.get_doc touches a Work Order."""
+		suffix = random_string(4).upper()
+		fg_a = _make_item(f"{PREFIX}-FGA-{suffix}", self.group, self.uom)
+		fg_b = _make_item(f"{PREFIX}-FGB-{suffix}", self.group, self.uom)
+		bom_a = self._make_bom(fg_a)
+		bom_b = self._make_bom(fg_b)
+		wo_a = self._make_wo(bom_a, 50, fg_a, "1")
+		wo_b = self._make_wo(bom_b, 60, fg_b, "2")
+		self._transfer(wo_a)
+		self._transfer(wo_b)
+		self._manufacture(wo_a, 50, "10:30:00")
+		self._manufacture(wo_b, 60, "10:40:00")
+		mr_a = self._make_mr(wo_a, 50)
+		mr_b = self._make_mr(wo_b, 60)
+		batch_a = self._lot_in_cold(wo_a)
+		batch_b = self._lot_in_cold(wo_b)
+		# pre-cutover B keeps only its legacy MR kg (Link cleared, no hooks)
+		wo_b.db_set("custom_handover_material_request", None)
+		# A's summary: distinct kg proves the BULK WO row wins over the MR's 12.5
+		wo_a.db_set("custom_handover_material_request", mr_a.name)
+		wo_a.db_set("custom_box_1", 21.5)
+		wo_a.db_set("custom_box_1_pack", 9)
+		wo_a.db_set("custom_box_2", 7.0)
+		wo_a.db_set("custom_box_2_pack", 2)
+
+		from production_app.api import handover
+
+		available = handover.get_available_batches
+		legacy = handover.get_stock_ledgers_batches
+		real_get_value = frappe.db.get_value
+		real_get_doc = frappe.get_doc
+
+		def no_wo_get_value(*args, **kwargs):
+			if args and args[0] == "Work Order":
+				raise AssertionError("board build must not look Work Orders up per card")
+			return real_get_value(*args, **kwargs)
+
+		def no_wo_get_doc(doctype=None, *args, **kwargs):
+			if doctype == "Work Order":
+				raise AssertionError("board build must not get_doc a Work Order")
+			return real_get_doc(doctype, *args, **kwargs)
+
+		with (
+			patch.object(handover, "get_available_batches", wraps=available) as available_call,
+			patch.object(handover, "get_stock_ledgers_batches", wraps=legacy) as legacy_call,
+			patch.object(
+				handover, "_checked_lot", side_effect=AssertionError("board must not use _checked_lot")
+			),
+			patch.object(frappe.db, "get_value", side_effect=no_wo_get_value),
+			patch.object(frappe, "get_doc", side_effect=no_wo_get_doc),
+		):
+			board = handover_board()
+
+		# the targeted mutation seam also stays scoped: no full board inside
+		with patch.object(
+			handover, "_build_board", side_effect=AssertionError("_checked_lot must not build the board")
+		):
+			lot = handover._checked_lot(wo_a.name)
+		self.assertEqual(flt(lot.reserved_qty), 50)  # scoped re-derivation sees the MR
+
+		# one bulk query pair for the WHOLE board (site-wide lots included)
+		self.assertEqual(available_call.call_count, 1)
+		self.assertEqual(legacy_call.call_count, 1)
+		kwargs = available_call.call_args.args[0]
+		self.assertLessEqual({batch_a, batch_b}, set(kwargs.batch_no))
+
+		row_a = self._req(board, mr_a.name)
+		row_b = self._req(board, mr_b.name)
+		# Link/kg/Pack read from the single bulk Work Order result set
+		self.assertEqual((row_a["box_1"], row_a["box_1_pack"]), (21.5, 9))
+		self.assertEqual((row_a["box_2"], row_a["box_2_pack"]), (7.0, 2))
+		self.assertEqual(self._lot(board, wo_a.name)["custom_handover_material_request"], mr_a.name)
+		# pre-cutover fallback: legacy MR kg, Pack never invented
+		self.assertEqual((row_b["box_1"], row_b["box_1_pack"]), (12.5, None))
 
 	# ------------------------- 4. legacy unsupported + empty-lot drop rule
 

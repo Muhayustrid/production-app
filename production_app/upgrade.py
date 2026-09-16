@@ -58,11 +58,35 @@ WORKSPACE_FIELDS = [
 	_field("custom_detail_produksi_lain", "Detail Produksi Lain", "Section Break", "custom_qc_packing"),
 	_field("custom_jumlah_kru", "Jumlah Kru", "Int", "custom_detail_produksi_lain", allow_on_submit=1),
 	_field("custom_leader_produksi", "Leader Produksi", "Data", "custom_jumlah_kru", allow_on_submit=1),
-	_field("custom_box_1", "Box 1", "Float", "custom_leader_produksi", allow_on_submit=1, non_negative=0, description="Berat Box 1 (kg) saat serah terima"),
-	_field("custom_box_2", "Box 2", "Float", "custom_box_1", allow_on_submit=1, non_negative=0, description="Berat Box 2 (kg) saat serah terima"),
-	_field("custom_prepacking_confirmed", "Pre-Packing Confirmed", "Check", "custom_box_2", allow_on_submit=1, print_hide=1, description="Marker: prepacking block was deliberately saved/confirmed"),
+	# T35 three-lane handover summary — server-owned (read-only) state written
+	# atomically behind the Work Order lock by api/handover.py; Box 1 must be
+	# positive, Box 2 is 0/0 or positive/positive, Pack counts are whole Ints.
+	_field(
+		"custom_box_1", "Box 1 (kg)", "Float", "custom_leader_produksi",
+		allow_on_submit=1, read_only=1, non_negative=1,
+		description="Berat Box 1 (kg) untuk request serah terima aktif/terakhir",
+	),
+	_field(
+		"custom_box_1_pack", "Box 1 (Pack)", "Int", "custom_box_1",
+		allow_on_submit=1, read_only=1, non_negative=1,
+	),
+	_field(
+		"custom_box_2", "Box 2 (kg)", "Float", "custom_box_1_pack",
+		allow_on_submit=1, read_only=1, non_negative=1,
+		description="Berat Box 2 (kg) untuk request serah terima aktif/terakhir",
+	),
+	_field(
+		"custom_box_2_pack", "Box 2 (Pack)", "Int", "custom_box_2",
+		allow_on_submit=1, read_only=1, non_negative=1,
+	),
+	_field(
+		"custom_handover_material_request", "Material Request Serah Terima", "Link",
+		"custom_box_2_pack", options="Material Request", allow_on_submit=1,
+		read_only=1, print_hide=1,
+	),
+	_field("custom_prepacking_confirmed", "Pre-Packing Confirmed", "Check", "custom_handover_material_request", allow_on_submit=1, print_hide=1, description="Marker: prepacking block was deliberately saved/confirmed"),
 	_field("custom_postpacking_confirmed", "Post-Packing Confirmed", "Check", "custom_prepacking_confirmed", allow_on_submit=1, print_hide=1, description="Marker: postpacking block was deliberately saved/confirmed"),
-	_field("custom_handover_status", "Status Serah Terima", "Select", "custom_postpacking_confirmed", options="\nDiminta Gudang\nSiap Kirim\nTerkirim", allow_on_submit=1, read_only=1, print_hide=1, in_list_view=1, in_standard_filter=1, description="Penanda serah terima barang jadi ke gudang — terisi OTOMATIS dari Material Request/Stock Entry (doc_events); kosong = belum diserahkan. Jangan ubah manual."),
+	_field("custom_handover_status", "Status Serah Terima", "Select", "custom_handover_material_request", options="\nDiminta Gudang\nTerkirim", allow_on_submit=1, read_only=1, print_hide=1, in_list_view=1, in_standard_filter=1, description="Penanda serah terima barang jadi ke gudang — terisi OTOMATIS dari Material Request/Stock Entry (doc_events); kosong = belum diserahkan. Jangan ubah manual."),
 ]
 
 ITEM_FIELDS = [
@@ -793,6 +817,127 @@ def ensure_name_text_fields():
 
 GUDANG_CONFIRMED_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "FU30-gudang-confirmed-pre.json")
 
+# ---------------------------------------------------------------------------
+# T35 — three-lane handover cutover (spec 2026-09-16-stock-entry-three-lane):
+# the Work Order gains a summary Link + whole-Pack box fields and the retired
+# "Siap Kirim" status option is removed. Ordered migration, snapshot-first and
+# idempotent: create_only fields -> resolve/backfill/resync data -> verify no
+# live "Siap Kirim" remains -> only then does the full field upsert narrow the
+# Select options. Never exposes narrowed metadata over live old values.
+# ---------------------------------------------------------------------------
+
+THREE_LANE_LINK_FIELD = "custom_handover_material_request"
+THREE_LANE_BOX_FIELDS = ("custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack")
+THREE_LANE_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "three-lane-handover-pre.json")
+RETIRED_STATUS_VALUE = "Siap Kirim"
+
+
+def snapshot_three_lane():
+	"""Pre-change snapshot for the T35 cutover: the affected Work Order Custom
+	Field definitions (the OLD Select options included) plus the distinct live
+	values of every field the migration may rewrite. Runs BEFORE any three-lane
+	change; apply() calls it only when the file is absent (idempotent)."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	fieldnames = ("custom_handover_status", THREE_LANE_LINK_FIELD, *THREE_LANE_BOX_FIELDS)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"custom_fields": frappe.get_all(
+			"Custom Field",
+			filters={"dt": DOCTYPE, "fieldname": ("in", list(fieldnames))},
+			fields=[
+				"fieldname", "label", "fieldtype", "options", "insert_after",
+				"allow_on_submit", "read_only", "non_negative",
+			],
+			order_by="fieldname",
+		),
+		"stored_values": {},
+	}
+	for fieldname in fieldnames:
+		distinct = {}
+		for row in frappe.get_all(
+			DOCTYPE, filters={fieldname: ("is", "set")}, fields=[f"{fieldname} as value"], limit=0
+		):
+			key = str(row.value)
+			distinct[key] = distinct.get(key, 0) + 1
+		data["stored_values"][fieldname] = distinct
+	with open(THREE_LANE_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return THREE_LANE_SNAPSHOT
+
+
+def ensure_three_lane_handover():
+	"""T35 ordered migration. Runs AFTER ensure_app_fields(create_only=True)
+	(missing fields exist, existing options untouched) and BEFORE the full
+	field upsert (which narrows the Select options):
+
+	1. snapshot the affected definitions + distinct live values once;
+	2. resolve + resynchronize every Work Order bound to a handover MR
+	   (Material Request Item.custom_work_order) and every WO still holding
+	   the retired "Siap Kirim" value, through the ONE shared document
+	   resolver (SE evidence first, even on an abnormally cancelled MR; else
+	   the newest submitted non-cancelled MR). Only actual diffs are written:
+	   empty Links are backfilled, Pack values are never invented, WOs whose
+	   evidence vanished lose Link + boxes;
+	3. refuse to finish while any WO still holds "Siap Kirim", so the later
+	   full ensure_app_fields() may safely remove the option.
+
+	Returns stable created/updated/unchanged evidence (every value converges
+	to ": unchanged" on the second run)."""
+	first = not os.path.exists(THREE_LANE_SNAPSHOT)
+	if first:
+		snapshot_three_lane()  # never rewrite handover state without a pre-state
+	out = {"snapshot": "written" if first else "present: unchanged"}
+
+	# lazy import: the shared runtime writer (single source of derivation truth)
+	from production_app.api.handover import sync_handover_status
+
+	bound = frappe.get_all(
+		"Material Request Item",
+		filters={"custom_work_order": ("is", "set")},
+		pluck="custom_work_order",
+		distinct=True,
+		limit=0,
+	)
+	siap = frappe.get_all(
+		DOCTYPE, filters={"custom_handover_status": RETIRED_STATUS_VALUE}, pluck="name", limit=0
+	)
+	wo_names = sorted(set(bound) | set(siap))
+	if not wo_names:
+		out["link_backfill"] = "0 bound Work Orders: unchanged"
+		out["status_resync"] = "0 Work Orders to verify: unchanged"
+		return out
+
+	empty_before = set(frappe.get_all(
+		DOCTYPE,
+		filters={"name": ("in", wo_names), THREE_LANE_LINK_FIELD: ("is", "not set")},
+		pluck="name",
+		limit=0,
+	))
+	written = sync_handover_status(wo_names)
+	still_empty = set(frappe.get_all(
+		DOCTYPE,
+		filters={"name": ("in", wo_names), THREE_LANE_LINK_FIELD: ("is", "not set")},
+		pluck="name",
+		limit=0,
+	))
+	backfilled = empty_before - still_empty
+	out["link_backfill"] = (
+		f"{len(backfilled)} empty Links backfilled" if backfilled
+		else f"{len(empty_before)} empty Links remain (no live request): unchanged"
+	)
+	out["status_resync"] = (
+		f"{len(written)} Work Orders resynchronized" if written
+		else f"{len(wo_names)} Work Orders verified: unchanged"
+	)
+
+	leftover = frappe.db.count(DOCTYPE, filters={"custom_handover_status": RETIRED_STATUS_VALUE})
+	if leftover:
+		frappe.throw(
+			f"{leftover} Work Order masih memegang '{RETIRED_STATUS_VALUE}' — "
+			"opsi tidak boleh dinormalisasi sebelum derivasi dokumen merapikannya."
+		)
+	return out
+
 
 def retire_gudang_confirmed_field():
 	"""FU30: delete the retired manual checkbox (idempotent). Snapshots the
@@ -824,6 +969,10 @@ def apply():
 		snapshot_fu10()  # fields now exist; preserve any legacy values before conversion
 	if not os.path.exists(QC_PACKING_TEXT_SNAPSHOT):
 		snapshot_qc_packing_text()
+
+	# T35: resolve/backfill/resync handover state BEFORE the full upsert below
+	# narrows the custom_handover_status options (data first, metadata second)
+	result["three_lane_handover"] = ensure_three_lane_handover()
 
 	result["box_kg_fields"] = ensure_box_kg_fields()
 	result["name_text_fields"] = ensure_name_text_fields()

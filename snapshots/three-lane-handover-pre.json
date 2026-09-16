@@ -1,0 +1,85 @@
+{
+  "captured_at": "2026-09-17 00:33:57.699286",
+  "custom_fields": [
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_box_1",
+      "fieldtype": "Float",
+      "insert_after": "custom_sisa_qty_prepacking",
+      "label": "Box 1",
+      "non_negative": 0,
+      "options": null,
+      "read_only": 0
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_box_1_pack",
+      "fieldtype": "Int",
+      "insert_after": "custom_box_1",
+      "label": "Box 1 (Pack)",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_box_2",
+      "fieldtype": "Float",
+      "insert_after": "custom_box_1",
+      "label": "Box 2",
+      "non_negative": 0,
+      "options": null,
+      "read_only": 0
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_box_2_pack",
+      "fieldtype": "Int",
+      "insert_after": "custom_box_2",
+      "label": "Box 2 (Pack)",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_handover_material_request",
+      "fieldtype": "Link",
+      "insert_after": "custom_box_2_pack",
+      "label": "Material Request Serah Terima",
+      "non_negative": 0,
+      "options": "Material Request",
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_handover_status",
+      "fieldtype": "Select",
+      "insert_after": "custom_postpacking_confirmed",
+      "label": "Status Serah Terima",
+      "non_negative": 0,
+      "options": "\nDiminta Gudang\nSiap Kirim\nTerkirim",
+      "read_only": 1
+    }
+  ],
+  "stored_values": {
+    "custom_box_1": {
+      "1.0": 1,
+      "11.0": 1,
+      "12.0": 2
+    },
+    "custom_box_1_pack": {},
+    "custom_box_2": {
+      "1.0": 1,
+      "11.0": 1,
+      "12.0": 2
+    },
+    "custom_box_2_pack": {},
+    "custom_handover_material_request": {},
+    "custom_handover_status": {
+      "Diminta Gudang": 1,
+      "Siap Kirim": 1,
+      "Terkirim": 3
+    }
+  }
+}

@@ -287,3 +287,29 @@ Depends on: T32.
 Scope: 5 suite fresh ×2; browser smoke interaktif controller (pengaturan 6 input; kartu Hasil WO/Selesai; drag request tanpa dialog; verifikasi box; kirim → SE; reload; mobile 390); desk view box Float; update HANDOVER_PLAN.md (addendum), TASKS.md, PROJECT_STATE.md; catat rollback; bersihkan fixture; final whole-branch review.
 
 Acceptance: setiap baris punya bukti eksekusi/observasi; dokumen konsisten; berhenti — pekerjaan lanjutan hanya atas request baru.
+
+## H. Stock Entry three-lane handover
+
+Business contract: `docs/superpowers/specs/2026-09-16-stock-entry-three-lane-handover-design.md`.
+Implementation plan: `docs/superpowers/plans/2026-09-16-stock-entry-three-lane-handover.md`.
+
+### T34 — Preflight, baseline, and execution ledger
+Depends on: none.
+Acceptance: branch/base/runtime verified; five suites pass once before edits; warm board query/time baseline recorded.
+
+### T35 — Server metadata, three-lane derivation, and atomic actions
+Depends on: T34.
+Acceptance: ordered migration applies twice; server tests cover fields, lanes, validation, cancellation, send, permissions, retry, batch/batchless, and compatibility.
+
+### T36 — Performance and concurrency gate
+Depends on: T35.
+Acceptance: FU34 query-shape tests pass; concurrent create/send produce at most one document; comparable warm benchmark has no material regression.
+
+### T37 — Three-lane frontend and local asset deployment
+Depends on: T36.
+Acceptance: frontend tests/build pass; three-lane bundle is deployed and hash-identical at all served points; old Siap/verify path is absent.
+
+### T38 — End-to-end acceptance and handoff
+Depends on: T37.
+Acceptance: five backend suites pass twice, HTTP and browser matrices pass, fixture residue is zero, docs and rollback are complete.
+Result: **DONE (2026-09-17), release-candidate browser closure completed.** Automated/data: 5 suite ×2 fresh worker = 112/112 (7+16+31+10+48), lalu final fix wave + fresh verification = backend **114/114** dan frontend **13/13** + build; hash 5 titik final `index.js` `90c491a4…` / `index.css` `cf180377…`; HTTP matrix alur SPA 43/44 + 1 driver artifact (membership batch diverifikasi offline); native Desk 11/11; race/concurrent create-send tepat 1 dokumen; benchmark final pasca-cleanup **0,1452 s / 30 SQL / 9 071 B** (gate ≤0,1918/≤32 lulus). Browser RC ulang dengan fixture `Z5KYTK`: gudang membuat request nyata dari WO `MFG-WO-2026-03392` → MR `MAT-MR-2026-00336` dengan `6 kg · 6 Pack`; logout/login produksi melalui GUI lalu mengirim request langsung → SE `MAT-STE-2026-07025` dan kartu/dialog Terkirim menampilkan MR/SE/qty/box; screenshot mobile 390×844 membuktikan horizontal lane scroller, bottom nav tidak menutup kartu, dan dialog kirim usable. Drag dan chooser multi-role tidak diulang (jalur click + kedua aksi dasar telah terbukti). Fixture RC kemudian dibersihkan: 16 kategori residu nol dan enam Manufacturing Settings pulih persis. Tidak ada deployment produksi.

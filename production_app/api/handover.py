@@ -15,10 +15,24 @@
 # - T31 (ruling R2): the batchless pool source and new MRs' from_warehouse come
 #   from Manufacturing Settings custom_default_handover_source_warehouse when
 #   set, else the SE-derived lot warehouse; batch-tracked lots stay SE-derived.
-#   Requests carry the Work Order's FULL produced_qty (R3); boxes are Float kg
-#   only (R4/R8); send moves the MR's requested qty and never stops the MR (R6).
+#   Requests carry the Work Order's FULL produced_qty (R3); send moves the MR's
+#   requested qty and never stops the MR (R6).
+# - T35 three-lane cutover: TWO lanes derive from native documents only —
+#   request (submitted MR without SE evidence) and terkirim (submitted Stock
+#   Entry evidence, which outranks even an abnormally cancelled MR). The
+#   retired postpacking confirmation advances nothing. Box kg + whole Pack
+#   allocations live on the Work Order summary (Link + 4 fields), written
+#   atomically by create_request behind the WO lock; the MR stays a pure
+#   request document. Pack math uses the RAW _enrich_units factor — never the
+#   `or 1` display fallback.
 
 from collections import defaultdict
+
+import functools
+
+import math
+
+from decimal import Decimal
 
 import frappe
 from frappe import _
@@ -41,7 +55,6 @@ ROLES_GUDANG = ("Gudang Barang Jadi", "Stock User")
 ROLE_PRODUKSI = "Manufacturing User"
 
 LANE_REQUEST = "request"
-LANE_SIAP = "siap_kirim"
 LANE_KIRIM = "terkirim"
 
 
@@ -56,9 +69,9 @@ def _time_str(value):
 
 @frappe.whitelist()
 def handover_board():
-	"""Four-lane Serah Terima board (Cold Storage lots -> Request Gudang ->
-	Siap Kirim -> Terkirim) for the session user."""
-	return _build_board()
+    """Three-lane Serah Terima board (Cold Storage lots -> Request Gudang ->
+    Terkirim) for the session user."""
+    return _build_board()
 
 
 def _build_board():
@@ -167,6 +180,9 @@ def _wo_lot_rows(wo_names=None):
 			fields=[
 				"name", "production_item", "qty", "produced_qty", "custom_adonan_ke",
 				"fg_warehouse", "creation",
+				# T35 summary block: bulk-loaded once, mapped onto request rows
+				"custom_handover_material_request",
+				"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
 			],
 			order_by="creation desc",
 			limit_page_length=0,
@@ -277,6 +293,11 @@ def _wo_lot_rows(wo_names=None):
 				"unsupported": False,
 				"unsupported_reason": None,
 				"has_older_lot_same_item": False,
+				"custom_handover_material_request": w.custom_handover_material_request,
+				"custom_box_1": w.custom_box_1,
+				"custom_box_1_pack": w.custom_box_1_pack,
+				"custom_box_2": w.custom_box_2,
+				"custom_box_2_pack": w.custom_box_2_pack,
 			}
 		)
 		unique = {b for b in cur["batches"] if b}
@@ -327,13 +348,19 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 	"""Handover request rows — one per Material Request bound to a Work Order
 	via Material Request Item.custom_work_order (T22 field).
 
-	Lane mapping (documents only): terkirim = a submitted Stock Entry exists
-	against the MR (Stock Entry Detail `material_request` link, T21); else
-	siap_kirim = submitted + postpacking confirmed; else request = submitted
-	and not stopped. Edge states are never omitted and never raise: draft and
+	Lane mapping (documents only, T35): terkirim = a submitted Stock Entry
+	exists against the MR (Stock Entry Detail `material_request` link, T21) —
+	even if the MR is abnormally cancelled AFTER that send; else request =
+	submitted and not stopped. The retired postpacking confirmation advances
+	nothing. Edge states are never omitted and never raise: draft and
 	cancelled MRs come back with lane=None plus a flag; a stopped MR without
 	SE is a dead request (needs a manual desk unstop) parked in the request
 	lane with flag="stopped" — visible, but reserving nothing (§4.3).
+
+	Box summary (T35): kg + whole Pack come from the BULK Work Order lot rows
+	while the WO Link points at the MR; pre-cutover MRs (empty Link) fall back
+	to their own kg fields with BOTH Pack values empty. No per-card Work Order
+	lookup happens in this loop.
 	"""
 	item_filters = {"custom_work_order": ("is", "set")}
 	if wo_names is not None:
@@ -404,16 +431,14 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 		first = items[0]
 		se = sent.get(m.name)
 		lane, flag = None, None
-		if m.docstatus == 2:
+		if se:
+			lane = LANE_KIRIM  # document evidence outranks an abnormal docstatus
+		elif m.docstatus == 2:
 			flag = "cancelled"  # leaves the lanes, stays on the board (audit)
 		elif m.docstatus == 0:
 			flag = "draft"  # not yet submitted — no reservation, no action
-		elif se:
-			lane = LANE_KIRIM
 		elif m.status == "Stopped":
 			lane, flag = LANE_REQUEST, "stopped"
-		elif m.custom_postpacking_confirmed:
-			lane = LANE_SIAP
 		else:
 			lane = LANE_REQUEST
 		lot = wo_by_name.get(first.custom_work_order)
@@ -425,6 +450,14 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 			enriched = frappe._dict(production_item=first.item_code, custom_uom=None)
 			_enrich_units([enriched])
 			qty_in_pack = flt(enriched.display_conversion_factor or 1)
+		if lot is not None and lot.custom_handover_material_request == m.name:
+			# the WO summary owns the boxes while its Link points here
+			box_1, box_1_pack = lot.custom_box_1 or None, lot.custom_box_1_pack or None
+			box_2, box_2_pack = lot.custom_box_2 or None, lot.custom_box_2_pack or None
+		else:
+			# pre-cutover MR: legacy MR kg, Pack values never invented
+			box_1, box_1_pack = m.custom_box_1 or None, None
+			box_2, box_2_pack = m.custom_box_2 or None, None
 		rows.append(
 			{
 				"mr": m.name,
@@ -440,9 +473,11 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 				"batch": lot.batch if lot and not lot.unsupported else None,
 				"qty_in_pack": qty_in_pack,
 				"adonan_ke": adonan_ke,
-				"box_1": m.custom_box_1 or None,
-				"box_2": m.custom_box_2 or None,
-				"boxes": [b for b in (m.custom_box_1, m.custom_box_2) if b],
+				"box_1": box_1,
+				"box_1_pack": box_1_pack,
+				"box_2": box_2,
+				"box_2_pack": box_2_pack,
+				"boxes": [b for b in (box_1, box_2) if b],
 				"from_warehouse": m.set_from_warehouse or None,
 				"to_warehouse": m.set_warehouse or None,
 				"postpacking": {
@@ -463,14 +498,14 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 			"owner_name": users.get(m.owner),
 			"creation": str(m.creation),
 		}
-	)
+		)
 
-	# FU29: live stock at the ROUTE origin (MR from_warehouse) so request/siap
+	# FU29: live stock at the ROUTE origin (MR from_warehouse) so request
 	# cards can warn BEFORE a send is attempted; cached per (kind, key) — the
 	# same quantities send_handover re-checks under the lock.
 	route_cache = {}
 	for r in rows:
-		if r["lane"] not in (LANE_REQUEST, LANE_SIAP) or not r["from_warehouse"]:
+		if r["lane"] != LANE_REQUEST or not r["from_warehouse"]:
 			continue
 		lot = wo_by_name.get(r["work_order"])
 		if not lot or lot.unsupported or (not lot.batchless and not r["batch"]):
@@ -523,7 +558,6 @@ HANDOVER_STATUS_FIELD = "custom_handover_status"
 # nilai Select = label Indonesia (persis options Custom Field upgrade.py)
 HANDOVER_STATUS_LABEL = {
 	LANE_REQUEST: "Diminta Gudang",
-	LANE_SIAP: "Siap Kirim",
 	LANE_KIRIM: "Terkirim",
 }
 
@@ -544,12 +578,23 @@ def _handover_sync_ready():
 	)
 
 
-def _handover_lanes(wo_names):
-	"""FU23: lane serah terima paling maju per Work Order — SATU sumber derivasi
-	untuk flag workspace dan field native. Prioritas lane identik _requests:
-	terkirim (SE submitted) > siap_kirim (postpacking confirmed) > request;
-	MR draft/cancelled tidak menandai apa pun. Tanpa izin baca MR/SE
-	mengembalikan {} (pemanggil menampilkan tanpa flag, tanpa error)."""
+def _handover_state(wo_names):
+	"""SATU resolver status+Link serah terima per Work Order (dipakai
+	_handover_lanes, sinkronisasi ringkasan, dan migrasi T35 supaya preseden
+	lane dan Link tidak bisa drift). Kandidat diiterasi TERBARU lebih dulu dan
+	kandidat PERTAMA yang relevan memiliki state — sebuah kandidat lebih LAMA
+	(tinggal SE-nya pun) tidak pernah menurunkan MR terpilih yang sama-atau-lebih
+	baru. Preseden dari dokumen:
+
+	- evidence Stock Entry SUBMITTED menentukan lane HANYA saat ia evidence
+	  terbaru yang relevan — termasuk MR yang anehnya sudah cancel setelah
+	  kirim (state = terkirim, Link = MR-nya);
+	- tanpa SE terbaru: MR submitted non-cancelled TERBARU memiliki Link
+	  (state = request; termasuk Stopped tanpa SE — pernah diminta);
+	- MR draft/cancelled tanpa SE tidak memiliki apa pun.
+
+	Mengembalikan {wo_name: {"lane": ..., "mr": ...}}; {} saat kosong/tanpa
+	izin (pemanggil menampilkan tanpa flag, tanpa error)."""
 	wo_names = [n for n in wo_names if n]
 	if not wo_names:
 		return {}
@@ -560,53 +605,120 @@ def _handover_lanes(wo_names):
 			fields=["parent", "custom_work_order"],
 			limit=0,
 		)
-		mrs = frappe.get_all(
-			"Material Request",
-			filters={
-				"name": ("in", sorted({i.parent for i in items})),
-				"material_request_type": "Material Transfer",
-			},
-			fields=["name", "docstatus", "status", "custom_postpacking_confirmed"],
-			limit=0,
+		mr_names = sorted({i.parent for i in items})
+		mrs = (
+			frappe.get_all(
+				"Material Request",
+				filters={
+					"name": ("in", mr_names),
+					"material_request_type": "Material Transfer",
+				},
+				fields=["name", "docstatus", "creation"],
+				order_by="creation desc",
+				limit=0,
+			)
+			if mr_names
+			else []
 		)
 	except frappe.PermissionError:
 		return {}
 	if not mrs:
 		return {}
-	sent = _sent_se_by_mr([m.name for m in mrs])
-	wos_by_mr = {}
+	sent = _sent_se_by_mr(mr_names)
+	wos_by_mr = defaultdict(list)
 	for i in items:
-		wos_by_mr.setdefault(i.parent, []).append(i.custom_work_order)
-	rank = {LANE_REQUEST: 1, LANE_SIAP: 2, LANE_KIRIM: 3}
-	best = {}
-	for m in mrs:
-		if m.docstatus != 1:
-			continue  # draft/cancelled tidak pernah menandai WO
-		if m.name in sent:
-			lane = LANE_KIRIM
-		elif m.custom_postpacking_confirmed:
-			lane = LANE_SIAP
-		else:
-			lane = LANE_REQUEST  # termasuk Stopped tanpa SE — pernah diminta
+		wos_by_mr[i.parent].append(i.custom_work_order)
+	state = {}
+	for m in mrs:  # newest first — the newest relevant candidate owns a WO
 		for wo_name in wos_by_mr.get(m.name, ()):
-			if rank[lane] > rank.get(best.get(wo_name), 0):
-				best[wo_name] = lane
-	return best
+			if wo_name in state:
+				# fix round 1: an OLDER candidate (even one carrying submitted-SE
+				# evidence) never demotes an equal-or-newer selected MR — the
+				# Link must follow the newest request, or the board would hang
+				# the newer request's boxes on the older, already-sent MR
+				continue
+			if m.name in sent:
+				# SE evidence decides the lane only when it is the newest
+				# relevant evidence (incl. an MR abnormally cancelled AFTER send)
+				state[wo_name] = {"lane": LANE_KIRIM, "mr": m.name}
+			elif m.docstatus == 1:
+				state[wo_name] = {"lane": LANE_REQUEST, "mr": m.name}
+	return state
+
+
+def _handover_lanes(wo_names):
+	"""FU23: lane serah terima paling maju per Work Order — kini pembungkus
+	tipis di atas _handover_state bersama (satu derivasi untuk flag workspace,
+	field native, dan ringkasan Link). Tanpa kandidat → {}."""
+	return {
+		wo_name: state["lane"]
+		for wo_name, state in _handover_state(wo_names).items()
+	}
+
+
+WO_SUMMARY_FIELDS = (
+	"custom_handover_material_request",
+	"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
+)
+
+
+def _sync_handover_summary(wo_names):
+	"""Fail-honest summary writer: derive status + Link per Work Order from
+	documents (_handover_state) and write ONLY actual diffs. The summary
+	fields are read_only on the form — this controlled db write is the gate
+	(the role-gated actions + this sync + the migration share it). Clearing
+	rules (T35): a WO whose only evidence vanished (unsent cancelled MR, no
+	replacement) loses the Link and all four box values; a live or sent
+	request keeps the kg and never gains invented Pack values. Returns the
+	WO names actually written."""
+	wo_names = sorted({n for n in wo_names if n})
+	if not wo_names:
+		return []
+	states = _handover_state(wo_names)
+	priors = frappe.get_all(
+		"Work Order",
+		filters={"name": ("in", wo_names)},
+		fields=["name", HANDOVER_STATUS_FIELD, *WO_SUMMARY_FIELDS],
+		limit=0,
+	)
+	written = []
+	for prior in priors:
+		link = prior.custom_handover_material_request or None
+		status = prior.get(HANDOVER_STATUS_FIELD) or None
+		state = states.get(prior.name)
+		values = {}
+		if state:
+			if link != state["mr"]:
+				values["custom_handover_material_request"] = state["mr"]
+				# T36 ruling: the four box values belong to the request that owned
+				# the outgoing Link. Falling back to another MR (cancelled-unsent
+				# M2 above a sent M1) must never inherit them — and the MR is a
+				# pure request document, so the previous allocation is unrecoverable:
+				# cleared is the honest value.
+				if any(flt(prior.get(f)) for f in WO_SUMMARY_FIELDS[1:]):
+					values.update({f: 0 for f in WO_SUMMARY_FIELDS[1:]})
+			label = HANDOVER_STATUS_LABEL[state["lane"]]
+			if status != label:
+				values[HANDOVER_STATUS_FIELD] = label
+		else:
+			if status is not None:
+				values[HANDOVER_STATUS_FIELD] = None
+			if link:
+				# the current Link has no SE evidence (else state would exist):
+				# cancelled unsent request with no replacement -> clear all
+				values["custom_handover_material_request"] = None
+				values.update({f: 0 for f in WO_SUMMARY_FIELDS[1:]})
+		if values:
+			frappe.db.set_value("Work Order", prior.name, values, update_modified=False)
+			written.append(prior.name)
+	return written
 
 
 def sync_handover_status(wo_names):
-	"""Tulis custom_handover_status di Work Order dari derivasi dokumen.
-	Dipanggil oleh doc_events (MR/SE) dan save_post_packing (db_set tanpa
-	event). WO tanpa lane aktif dikosongkan (semua MR batal)."""
-	wo_names = sorted({n for n in wo_names if n})
-	if not wo_names:
-		return
-	lanes = _handover_lanes(wo_names)
-	for wo_name in wo_names:
-		frappe.db.set_value(
-			"Work Order", wo_name, HANDOVER_STATUS_FIELD,
-			HANDOVER_STATUS_LABEL.get(lanes.get(wo_name)), update_modified=False,
-		)
+	"""Kompatibilitas (doc_events + migrasi T35): tulis status + Link ringkasan
+	serah terima di Work Order dari derivasi dokumen. WO tanpa lane aktif
+	dikosongkan (semua MR batal). Mengembalikan nama WO yang berubah."""
+	return _sync_handover_summary(wo_names)
 
 
 def sync_from_material_request(doc, method=None):
@@ -668,12 +780,12 @@ def backfill_handover_status():
 
 def _reserved_by_wo(requests):
 	"""§4.3: reservation = Σ qty of submitted, not stopped/cancelled MRs
-	without a Stock Entry, bound to the Work Order — exactly the request/siap
-	lane rows carrying no edge flag (draft/cancelled have no lane, stopped is
+	without a Stock Entry, bound to the Work Order — exactly the request-lane
+	rows carrying no edge flag (draft/cancelled have no lane, stopped is
 	flagged)."""
 	reserved = {}
 	for r in requests:
-		if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
+		if r["lane"] == LANE_REQUEST and not r["flag"]:
 			reserved[r["work_order"]] = reserved.get(r["work_order"], 0.0) + r["qty"]
 	return reserved
 
@@ -688,7 +800,7 @@ def _reserved_by_item(requests, wo_rows):
 	wo_by_name = {r.work_order: r for r in wo_rows}
 	reserved = {}
 	for r in requests:
-		if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
+		if r["lane"] == LANE_REQUEST and not r["flag"]:
 			lot = wo_by_name.get(r["work_order"])
 			warehouse = _pool_warehouse(lot) if lot else r["from_warehouse"]
 			key = (r["item_code"], warehouse)
@@ -804,6 +916,71 @@ def _require_role(role, message):
         frappe.throw(message, frappe.PermissionError)
 
 
+def _retry_on_deadlock(action):
+    """T36: snapshot REPEATABLE-READ tidak melihat kompetitor yang commit
+    SELAMA request ini menunggu lock baris — dan MariaDB menjawab locking
+    read dengan ER 1020/1213 (frappe.QueryDeadlockError). Rollback + jalankan
+    ulang aksi memberi setiap guard snapshot BARU: guard dihitung ulang,
+    tidak pernah dilewati. Tiga percobaan cukup untuk duel dua sesi —
+    kompetitor hanya commit sekali, sehingga percobaan berikutnya pasti
+    melihatnya; kegagahan terakhir tetap raise jujur."""
+    @functools.wraps(action)
+    def wrapper(*args, **kwargs):
+        for attempt in (0, 1, 2):
+            try:
+                return action(*args, **kwargs)
+            except frappe.QueryDeadlockError:
+                if attempt == 2:
+                    raise
+                frappe.db.rollback()
+    return wrapper
+
+
+def _active_mr_now(mr_name):
+    """CURRENT (locking) active-request check for one MR: submitted, not
+    stopped, without a submitted Stock Entry — the same semantics as the
+    snapshot-based duplicate scan, but authoritative across lock waits."""
+    docstatus, status = frappe.db.get_value(
+        "Material Request", mr_name, ["docstatus", "status"], for_update=True
+    ) or (None, None)
+    if docstatus != 1 or status == "Stopped":
+        return False
+    return not frappe.db.get_value(
+        "Stock Entry Detail",
+        {"material_request": mr_name, "docstatus": 1, "parenttype": "Stock Entry"},
+        "parent",
+        for_update=True,
+    )
+
+
+def _pool_reserved_now(item_code):
+    """T36 race guard: CURRENT total of ACTIVE pool reservations for the item
+    (submitted, not stopped, SE-less Material Transfers). Locking reads see
+    siblings that committed while this request waited on the pool lock — the
+    REPEATABLE-READ snapshot cannot. Item-wide by design: the pool IS the
+    item's stock (one source setting in practice); counting a request from
+    another pool warehouse only ever makes the guard stricter.
+    # ponytail: item-wide sum; split by (item, warehouse) if a second pool
+    # per item ever becomes real"""
+    return flt(
+        frappe.db.sql(
+            """select coalesce(sum(mri.stock_qty), 0)
+                   from `tabMaterial Request Item` mri
+                   join `tabMaterial Request` mr on mr.name = mri.parent
+                  where mri.item_code = %s
+                    and mr.docstatus = 1
+                    and mr.status != 'Stopped'
+                    and mr.material_request_type = 'Material Transfer'
+                    and not exists (
+                        select 1 from `tabStock Entry Detail` sed
+                         where sed.material_request = mr.name and sed.docstatus = 1
+                    )
+                  for update""",
+            (item_code,),
+        )[0][0]
+    )
+
+
 def _enforce_whole_uom(amount, stock_uom, label):
     """Whole-PCS per the QtyInput/UOM contract: integer when the stock UOM is
     marked must_be_whole_number (Pcs); free UOMs are untouched."""
@@ -831,7 +1008,7 @@ def _checked_lot(wo_name):
         pool_wos = {
             r["work_order"]
             for r in requests
-            if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]
+            if r["lane"] == LANE_REQUEST and not r["flag"]
         }
         pool_wos.add(wo_name)
         wo_rows = _wo_lot_rows(pool_wos)
@@ -868,31 +1045,94 @@ def _target_warehouse_or_throw():
     return target
 
 
-def _box_kg(value, label):
-    """Box weight in kg (R8): blank -> None; else a finite, non-negative float."""
+# Box kg columns are decimal(18,6): 12 integer + 6 fractional digits. Decimal
+# (not float) because float("999999999999.999999") == 1e12 — a float bound
+# would let exactly that value through to an out-of-range db write.
+MAX_BOX_KG = Decimal("999999999999.999999")
+
+
+def _finite_kg(value, label, allow_blank=False):
+    """T35 box kg parser: a finite, non-negative number is REQUIRED for Box 1;
+    Box 2 may be blank (= 0 kg). The upper bound is the decimal(18,6) column
+    capacity — a finite float beyond it (e.g. 1e308) must die HERE with an
+    actionable message, never at the db write as a driver error."""
     if value is None or str(value).strip() == "":
-        return None
+        if allow_blank:
+            return 0.0
+        frappe.throw(_("{0} harus angka kg yang valid").format(label))
     try:
         amount = float(value)
     except (TypeError, ValueError):
         frappe.throw(_("{0} harus angka kg yang valid").format(label))
-    if amount != amount or amount in (float("inf"), float("-inf")):
-        frappe.throw(_("{0} harus angka kg yang valid").format(label))
-    if amount < 0:
-        frappe.throw(_("{0} tidak boleh negatif").format(label))
+    if not math.isfinite(amount) or amount < 0 or Decimal(str(amount)) > MAX_BOX_KG:
+        frappe.throw(
+            _("{0} harus angka kg non-negatif yang valid (maksimal {1} kg).").format(
+                label, MAX_BOX_KG
+            )
+        )
     return amount
 
 
+def _expected_pack_count(wo, lot, amount):
+    """Whole Pack count the full `amount` must allocate into, computed from
+    the RAW _enrich_units fields (never qty_in_pack — its `or 1` display
+    fallback would silently accept unconverted items)."""
+    factor = flt(lot.display_conversion_factor)
+    if lot.display_uom != "Pack" or not math.isfinite(factor) or factor <= 0:
+        frappe.throw(_("Item {0} belum memiliki konversi Pack yang valid.").format(wo.production_item))
+    precision = wo.precision("produced_qty") or 3
+    raw = amount / factor
+    expected = round(raw)
+    tolerance = 0.5 * (10 ** (-precision))
+    if abs(raw - expected) >= tolerance:
+        frappe.throw(_("Hasil Work Order {0} tidak membentuk Pack utuh.").format(wo.name))
+    return int(expected)
+
+
+def _whole_pack(value, label):
+    """A whole, non-negative Pack count (Int): no fractions, no NaN/inf."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        frappe.throw(_("{0} harus bilangan Pack bulat.").format(label))
+    if not math.isfinite(number) or number < 0 or number != int(number):
+        frappe.throw(_("{0} harus bilangan Pack bulat non-negatif.").format(label))
+    return int(number)
+
+
+def _validate_box_allocation(box_1, pack_1, box_2, pack_2, expected_packs):
+    """Box 1 always positive; Box 2 exactly 0 kg/0 Pack or positive/positive;
+    the Pack sum must equal the server-computed count of the full amount."""
+    if box_1 <= 0 or pack_1 <= 0:
+        frappe.throw(_("Box 1 harus diisi: berat kg dan jumlah Pack harus positif."))
+    if box_2 <= 0 and pack_2 <= 0:
+        box_2 = pack_2 = 0  # Box 2 kosong sah (0 kg / 0 Pack)
+    elif box_2 <= 0 or pack_2 <= 0:
+        frappe.throw(_("Box 2 harus kosong (0 kg / 0 Pack) atau terisi keduanya."))
+    if pack_1 + pack_2 != expected_packs:
+        frappe.throw(
+            _("Jumlah Pack Box 1 + Box 2 ({0}) harus tepat {1} Pack.").format(
+                pack_1 + pack_2, expected_packs
+            )
+        )
+    return box_1, pack_1, box_2, pack_2
+
+
 @frappe.whitelist()
-def create_request(work_order):
+@_retry_on_deadlock
+def create_request(work_order, box_1=None, box_1_pack=None, box_2=0, box_2_pack=0):
     """Gudang side (Gudang Barang Jadi / Stock User): submit a Material Transfer
     request for the Work Order's FULL produced qty (R3 — no qty dialog, drag is
-    the direct action). The source warehouse is the handover source setting
-    when set, else the SE-derived lot warehouse (R2). One ACTIVE (unshipped,
-    unstopped) request per Work Order; a duplicate throws.
+    the direct action) carrying the validated box allocation. The source
+    warehouse is the handover source setting when set, else the SE-derived lot
+    warehouse (R2). One ACTIVE (unshipped, unstopped) request per Work Order;
+    a duplicate throws.
 
-    Re-validates availability under the WO row lock, then inserts + submits the
-    MR in this one transaction — zero writes on any validation failure."""
+    T35: ALL box/Pack validation happens under the WO row lock BEFORE any
+    write; the native MR is inserted + submitted WITHOUT any box/postpacking
+    custom field, then the Work Order summary (Link + four box values) is
+    written atomically and the status synchronized — one transaction, zero
+    writes on any failure."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
@@ -917,14 +1157,41 @@ def create_request(work_order):
     # R3: one active request per WO — re-derived under the lock so racing
     # creates serialize on the row lock (stopped/draft/cancelled never block)
     for r in _requests([lot], wo_names=[work_order]):
-        if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
+        if r["lane"] == LANE_REQUEST and not r["flag"]:
             frappe.throw(
                 _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, r["mr"])
             )
 
+    # T36 race guard: a competitor that committed while this request waited on
+    # the WO lock is invisible to the snapshot reads above. A locking re-read
+    # of the summary Link sees CURRENT data — while it owns an active request,
+    # the duplicate guard holds (the retry wrapper covers the ER-1020 mood).
+    link_now = frappe.db.get_value(
+        "Work Order", wo.name, "custom_handover_material_request", for_update=True
+    )
+    if link_now and _active_mr_now(link_now):
+        frappe.throw(
+            _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, link_now)
+        )
+
+    # T35 box form: compute + validate EVERYTHING before any write
+    expected_packs = _expected_pack_count(wo, lot, amount)
+    kg_1 = _finite_kg(box_1, "Box 1")
+    packs_1 = _whole_pack(box_1_pack, "Box 1 (Pack)")
+    kg_2 = _finite_kg(box_2, "Box 2", allow_blank=True)
+    packs_2 = _whole_pack(box_2_pack, "Box 2 (Pack)")
+    kg_1, packs_1, kg_2, packs_2 = _validate_box_allocation(
+        kg_1, packs_1, kg_2, packs_2, expected_packs
+    )
+
     stock_uom = lot.stock_uom or frappe.db.get_value("Item", wo.production_item, "stock_uom")
     _enforce_whole_uom(amount, stock_uom, "Qty")
     available = flt(lot.available_qty)
+    if lot.batchless:
+        # T36 race guard: sibling reservations committed while this request
+        # waited on the pool lock are invisible to the snapshot — the CURRENT
+        # total wins (physical stock is untouched by request-only races)
+        available = min(available, flt(lot.physical_qty) - _pool_reserved_now(wo.production_item))
     if amount > available:
         frappe.throw(
             _("Qty melebihi lot tersedia: diminta {0}, tersedia {1}.").format(amount, available)
@@ -956,23 +1223,61 @@ def create_request(work_order):
     )
     mr.insert()  # session user; submit below — one transaction, native perms
     mr.submit()
-    return {"ok": True, "material_request": mr.name, "qty": amount, "board": _build_board()}
+    # atomic summary write (read_only fields: the controlled db_set gate)
+    frappe.db.set_value(
+        "Work Order",
+        wo.name,
+        {
+            "custom_handover_material_request": mr.name,
+            "custom_box_1": kg_1,
+            "custom_box_1_pack": packs_1,
+            "custom_box_2": kg_2,
+            "custom_box_2_pack": packs_2,
+        },
+        update_modified=False,
+    )
+    _sync_handover_summary([wo.name])  # fail-honest: status Diminta Gudang
+    return {
+        "ok": True,
+        "material_request": mr.name,
+        "qty": amount,
+        "expected_pack_count": expected_packs,
+        "box_1": kg_1,
+        "box_1_pack": packs_1,
+        "box_2": kg_2,
+        "box_2_pack": packs_2,
+        "board": _build_board(),
+    }
 
 
 @frappe.whitelist()
+@_retry_on_deadlock
 def cancel_request(material_request):
-    """Gudang side (Gudang Barang Jadi / Stock User): cancel a request BEFORE
-    Post-Packing (native cancel; audit history stays, reservation is released)."""
+    """Gudang side (Gudang Barang Jadi / Stock User): cancel an UNSENT request
+    (native cancel; audit history stays, reservation is released). The Work
+    Order lock is taken FIRST (no MR->WO lock inversion), then the MR is
+    re-read and its submitted-SE evidence re-checked; the summary (Link +
+    boxes) clears through document-derived synchronization in the same
+    transaction."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Gudang Barang Jadi) yang dapat membatalkan permintaan serah terima."),
     )
-    mr = frappe.get_doc("Material Request", material_request)
+    wo_name = frappe.db.get_value(
+        "Material Request Item",
+        {"parent": material_request, "custom_work_order": ("is", "set")},
+        "custom_work_order",
+    )
+    if wo_name:
+        # the summary gate reads + writes this Work Order below, and neither
+        # get_doc nor db reads check permissions — verify the WO read grant
+        # explicitly (same policy as the board: no read, no handover access)
+        frappe.has_permission("Work Order", "read", throw=True)
+        frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # lock WO first
+    mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
     frappe.has_permission("Material Request", "cancel", doc=mr, throw=True)
     if mr.docstatus != 1:
         frappe.throw(_("Permintaan {0} tidak bisa dibatalkan (docstatus {1}).").format(material_request, mr.docstatus))
-    if mr.custom_postpacking_confirmed:
-        frappe.throw(_("Permintaan {0} sudah diverifikasi (Post-Packing); tidak bisa dibatalkan.").format(material_request))
     sent = _sent_se_by_mr([material_request])
     if sent:
         frappe.throw(
@@ -982,20 +1287,9 @@ def cancel_request(material_request):
             )
         )
     mr.cancel()  # native; permission-checked as session user
+    if wo_name:
+        _sync_handover_summary([wo_name])  # fail-honest: clears Link/boxes/status
     return {"ok": True, "material_request": material_request, "board": _build_board()}
-
-
-# WO mirror: Box 1/2 ONLY (T31, R4/R8) — the kg weights entered at the
-# "Verifikasi Siap Kirim" step edit the Work Order (Float kg, upgrade.py
-# migrate). The WO postpacking qty/jam/qc fields are owned by the Work Order
-# workspace (`confirm_postpacking`, written BEFORE manufacture, T27); this
-# handover block runs AFTER manufacture, so mirroring them would fabricate the
-# WO's final result (competing writer, POSTPACKING_PLAN §3). Full history
-# lives on the Material Requests; the WO fields are never touched here.
-WO_MIRROR_FIELDS = (
-    "custom_box_1",
-    "custom_box_2",
-)
 
 
 def _handover_mr(material_request):
@@ -1011,55 +1305,18 @@ def _handover_mr(material_request):
 
 @frappe.whitelist()
 def save_post_packing(material_request, box_1=None, box_2=None):
-    """Manufacturing User: "Verifikasi Siap Kirim" (Request -> Siap Kirim) —
-    records ONLY the Box 1/2 weights in kg (R4: good/reject/trial/sisa/jam/qc
-    already live on the Work Order Post-Packing stage, T27) and confirms the
-    request. Written via db_set behind our own write gate (a full save() of a
-    submitted doc would demand submit permission, which Manufacturing User
-    must not have, T22). Boxes mirror to the Work Order (kg semantics, R8);
-    the MR stays a pure request document created by gudang."""
-    _require_role(
-        ROLE_PRODUKSI, _("Hanya Manufacturing User yang dapat mengisi Post-Packing.")
-    )
-    mr = _handover_mr(material_request)
-    frappe.has_permission("Material Request", "write", doc=mr, throw=True)
-    frappe.db.get_value("Material Request", material_request, "name", for_update=True)  # write-once gate
-    mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
-    if mr.custom_postpacking_confirmed:
-        frappe.throw(_("Post-Packing untuk {0} sudah dikonfirmasi sebelumnya.").format(material_request))
-    sent = _sent_se_by_mr([material_request])
-    if sent:
-        frappe.throw(_("Permintaan {0} sudah terkirim; Post-Packing tidak bisa diisi.").format(material_request))
-
-    box1 = _box_kg(box_1, "Box 1")
-    box2 = _box_kg(box_2, "Box 2")
-    # kolom box kini NOT NULL (schema canonical Frappe) — kosong disimpan 0;
-    # display "belum diisi" tetap truthiness (0/null sama, catatan T33/FU25)
-    values = {
-        "custom_box_1": flt(box1),
-        "custom_box_2": flt(box2),
-        "custom_postpacking_confirmed": 1,
-    }
-    for fieldname, value in values.items():
-        mr.db_set(fieldname, value)
-
-    wo = mr.items[0].custom_work_order
-    frappe.has_permission("Work Order", "write", doc=wo, throw=True)
-    frappe.db.set_value(
-        "Work Order", wo, {f: values[f] for f in WO_MIRROR_FIELDS}
-    )
-    # db_set tidak memicu doc_events — sinkronkan field penanda WO manual (FU23)
-    sync_handover_status([wo])
-    return {
-        "ok": True,
-        "material_request": material_request,
-        "box_1": box1,
-        "box_2": box2,
-        "board": _build_board(),
-    }
+    """Compatibility only (T35): verification moved into create_request — the
+    Request Gudang form owns the box allocation now. Always rejects with the
+    reload message BEFORE any lock/write so an old cached client can neither
+    write the retired four-lane state nor half-mutate a request."""
+    frappe.throw(_(
+        "Verifikasi Siap Kirim sudah dipindahkan ke form Request Gudang. "
+        "Muat ulang halaman sebelum melanjutkan."
+    ))
 
 
 @frappe.whitelist()
+@_retry_on_deadlock
 def send_handover(material_request):
     """Manufacturing User: create + submit the handover Stock Entry moving the
     MR's requested qty (= the WO's produced_qty at request time, R6) from the
@@ -1067,7 +1324,10 @@ def send_handover(material_request):
     back with zero partial documents. Batch-tracked rows keep batch_no (the
     batch seam); the shortage pre-check reads the ROUTE from-warehouse (FU29),
     so a lot whose stock lives elsewhere is refused here with a clear message —
-    native submit validation stays as the backstop in the same transaction."""
+    native submit validation stays as the backstop in the same transaction.
+    T35: no postpacking gate anymore — a submitted request is sendable; the
+    Work Order summary (Link + boxes) is preserved and the status synchronized
+    to Terkirim after the native submit."""
     _require_role(
         ROLE_PRODUKSI, _("Hanya Manufacturing User yang dapat mengirim serah terima.")
     )
@@ -1084,8 +1344,6 @@ def send_handover(material_request):
     mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
     lot = _checked_lot(wo_name)  # §4.9 unsupported error BEFORE any mutation
     batch = lot.batch
-    if not mr.custom_postpacking_confirmed:
-        frappe.throw(_("Post-Packing belum dikonfirmasi untuk {0}.").format(material_request))
     if mr.status == "Stopped":
         frappe.throw(_("Permintaan {0} berstatus Stopped; aktifkan kembali lewat Desk.").format(material_request))
     sent = _sent_se_by_mr([material_request])
@@ -1093,6 +1351,22 @@ def send_handover(material_request):
         frappe.throw(
             _("Pengiriman duplikat: Stock Entry {0} sudah ada untuk {1}.").format(
                 get_link_to_form("Stock Entry", sent[material_request].name), material_request
+            )
+        )
+    # T36 race guard: an SE committed while this send waited on the WO lock is
+    # invisible to the snapshot reads above; the locking re-read sees it
+    # CURRENT and delivers the duplicate-send validation (the retry wrapper
+    # covers the ER-1020 mood instead).
+    se_now = frappe.db.get_value(
+        "Stock Entry Detail",
+        {"material_request": material_request, "docstatus": 1, "parenttype": "Stock Entry"},
+        "parent",
+        for_update=True,
+    )
+    if se_now:
+        frappe.throw(
+            _("Pengiriman duplikat: Stock Entry {0} sudah ada untuk {1}.").format(
+                get_link_to_form("Stock Entry", se_now), material_request
             )
         )
     # FU29: pre-check against the ROUTE origin (the same warehouse
@@ -1126,6 +1400,8 @@ def send_handover(material_request):
         row.batch_no = batch
     se.insert()
     se.submit()  # native shortage/valuation failures roll the whole request back
+
+    _sync_handover_summary([wo_name])  # fail-honest: Terkirim, Link/boxes kept
 
     return {
         "ok": True,
