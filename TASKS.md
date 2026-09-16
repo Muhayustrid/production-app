@@ -287,3 +287,49 @@ Depends on: T32.
 Scope: 5 suite fresh ×2; browser smoke interaktif controller (pengaturan 6 input; kartu Hasil WO/Selesai; drag request tanpa dialog; verifikasi box; kirim → SE; reload; mobile 390); desk view box Float; update HANDOVER_PLAN.md (addendum), TASKS.md, PROJECT_STATE.md; catat rollback; bersihkan fixture; final whole-branch review.
 
 Acceptance: setiap baris punya bukti eksekusi/observasi; dokumen konsisten; berhenti — pekerjaan lanjutan hanya atas request baru.
+
+## H. Stock Entry Kanban bulk select (pilih banyak kartu, satu lane per run)
+
+Business contract: `docs/superpowers/specs/2026-09-16-stock-entry-bulk-select-design.md` (keputusan produk disetujui 2026-09-16; transaksi direvisi pasca safety review) + rencana eksekusi `docs/superpowers/plans/2026-09-16-stock-entry-bulk-select.md`. Eksekusi SDD subagent-driven di branch `feat/stock-entry-bulk-select-fu38`; aturan eksekusi sama (urutan dependensi, satu task aktif, protokol state file, tanpa git commit/push).
+
+### T38 — Server: endpoint `bulk_handover_item` + refactor helper boardless
+
+Depends on: none (section H).
+
+Scope: `production_app/api/handover.py` — ekstrak bagian mutasi keempat endpoint lama menjadi helper internal boardless `_create_request(work_order)`, `_cancel_request(material_request)`, `_save_post_packing(material_request, box_1, box_2)`, `_send_handover(material_request)`; tiap helper mengembalikan payload aksi eksisting persis minus `board`. Endpoint whitelisted lama dipertahankan signature dan bentuk responsnya (panggil helper sekali + satu `board` penuh). Endpoint whitelisted baru `bulk_handover_item(action, entry)`: validasi ketat `action` terhadap allowlist (`create_request`/`cancel_request`/`save_post_packing`/`send_handover`) dan `entry` (satu objek, kunci wajib per aksi, kunci asing ditolak, referensi string non-kosong, box lewat `_box_kg`), dispatch sekali ke helper, kembalikan payload tanpa `board`; tidak pernah memanggil endpoint whitelisted lain via HTTP dan tidak memakai `ignore_permissions`. Tests TDD di `test_handover_actions.py`: RED skema ketat (aksi tak dikenal, entry bukan objek, kunci hilang/kosong, kunci asing) terbukti sebelum mutasi; 4 jalur sukses tanpa `board` (`_build_board` di-patch gagal); regresi field respons endpoint lama termasuk satu board; parity peran gudang/produksi/dual-role/bare.
+
+Acceptance: suite aksi hijau; payload endpoint lama tidak berubah; `bulk_handover_item` tanpa `board` dan tidak pernah memanggil `_build_board`; `git diff --check` bersih.
+
+### T39 — Server: urutan lock + invariant Material Request serah terima
+
+Depends on: T38.
+
+Scope: `production_app/api/handover.py` — shared MR loader wajib membuktikan sebelum mutasi cancel/verify/send: `material_request_type == "Material Transfer"`, `docstatus == 1`, tepat satu baris item, tepat satu `custom_work_order` non-kosong, field rute source/target non-kosong dan konsisten untuk aksi terkait (permission baca normal tetap; helper tetap menegakkan permission tulis/cancel/create/submit eksisting). Hardening urutan lock per spec §6.2: create → lock Work Order lalu Item (batchless); cancel/verify/send → resolve WO dari binding (pre-read minimal) → lock WO → lock + re-read MR → Item (batchless); TIDAK pernah lock MR lalu WO terbalik; lock hanya berlaku dalam satu transaksi HTTP/kartu. Di balik lock: recheck docstatus, tipe Material Transfer, binding satu baris, state konfirmasi, stopped, keberadaan SE submit, field rute, dan prasyarat lane aksi. Hapus inver lock MR→WO yang ada di `save_post_packing`. Jaga guard metadata + doc_events fail-safe FU37. Tests: MR malformed (tipe, docstatus, jumlah baris, binding kosong/menyimpang, mismatch item/qty, rute tidak konsisten) = 0 tulis; tracing urutan lock create dan aksi-MR; race duplikat create/send, verify-vs-cancel, send-vs-cancel/send (paling banyak satu mutasi valid bertahan); pool batch + batchless; rollback kegagalan native.
+
+Acceptance: Gate H server — suite aksi/board/native hijau; bukti eksekusi race "paling banyak satu mutasi valid"; tanpa `ignore_permissions` atau dokumen gabungan.
+
+### T40 — Frontend SPA: orchestrator bulk + UX pilih kartu
+
+Depends on: T38, T39.
+
+Scope: `workspace_frontend/src/handover-bulk.js` (baru, murni, dependency-injected): `BULK_LIMIT = 20`; `validateBoxKg` (blank atau finite ≥ 0); `validateBulkEntries` (1–20 referensi unik, satu source lane, eligible, aksi diizinkan lane+peran, kunci referensi non-kosong); `classifyBulkError` (expected business/permission vs infrastruktur: transport/timeout/5xx/respons malformed → abort); `runBulkItems` sekuensial `maxConcurrent === 1` (satu kartu = satu HTTP lewat adapter `bulkHandoverItem` di `store.js` yang TIDAK memakai `handoverAction`, tidak memutasi `handoverState.pending`, tidak memanggil `applyBoard`, tidak menyentuh `pendingRequests`); expected failure melanjutkan kartu berikutnya; infrastruktur gagal menghentikan run dan memisahkan uncertain in-flight dari unprocessed; callback reload board dipanggil tepat sekali; hasil `N berhasil, M gagal[, K belum diproses]` tanpa SQL/traceback/path/exception mentah. `HandoverBoard.vue` + `styles.css`: tombol toolbar `Pilih` masuk mode seleksi; checkbox pada kartu eligible; kartu pertama mengunci `selectedLane`; lane lain diredup dan tak bisa dipilih; Terkirim tak pernah selectable; klik kartu di mode seleksi = toggle (bukan dialog), drag/drop dan aksi tunggal dinonaktifkan; bar aksi sticky (jumlah terpilih, `Pilih semua di halaman` hanya kartu eligible yang dirender, `Kosongkan`, `Batal`, tombol aksi per peran) di atas navigasi mobile; tolak kartu ke-21 dengan pesan limit 20; keluar mode = bersihkan seleksi + nilai box tersimpan. Dialog konfirmasi per lane/peran: Cold → `Buat N Request Gudang`; Request Gudang → `Batalkan N Request` (gudang) atau Verifikasi box per request (produksi) atau dua tombol eksplisit (dual-role); Siap Kirim → `Kirim N Barang`; state UI sementara (selectionMode, selectedLane, referensi terpilih, box per MR, progress/pending, successes/failures/uncertain/unprocessed) dimiliki komponen, tidak persist antar reload. Selama run: kartu pending, aksi handover lain disable, tanpa optimistic movement, progress `X dari N diproses`; hanya `pendingRequests` single-card lama yang tetap untuk alur non-bulk. Setelah run: `loadBoard()` sekali, rekonsiliasi seleksi terhadap lane asal dari server truth (sukses cleared; gagal/unprocessed dipertahankan hanya bila masih eligible di lane asal; uncertain direkonsiliasi murni dari server sebelum boleh dipilih lagi); dialog hasil + `Coba lagi yang gagal` bila masih actionable + pesan `Papan gagal dimuat…` bila reload final gagal (hasil committed tidak hilang). Tests Node untuk helper murni + orkestrasi (urutan sekuensial, lanjut setelah expected failure, abort + klasifikasi uncertain/unprocessed, reload sekali, seleksi cleared/retained, bulk tak menyentuh `pendingRequests`); aksesibilitas dasar (label checkbox memuat referensi, keyboard tanpa drag/drop, `aria-selected`, bar aksi ekspos nama aksi + count); panel verifikasi jadi stacked panel di 390px; Vite build.
+
+Acceptance: Node tests hijau; build sukses; alur bulk tidak menyentuh `pendingRequests` dan mengganti papan hanya lewat satu `loadBoard()` final (terbukti di test); seleksi tidak persist antar reload.
+
+### T41 — Acceptance run: suite penuh, deploy asset, browser smoke
+
+Depends on: T40.
+
+Scope: targeted suite aksi/board/native lalu 5 suite penuh ×2; `node --test tests/*.test.mjs` + `npm run build`; sinkron bundle ke container backend/frontend + verifikasi hash di 5 titik (source/public/backend/frontend/HTTP) + restart bila perlu; browser smoke fixture terisolasi untuk user gudang, produksi, dan dual-role di desktop + 390px: bulk create, bulk cancel, bulk verify dengan nilai box berbeda per request, bulk send, pilihan aksi dual-role di Request Gudang, partial failure + `Coba lagi yang gagal`, abort infrastruktur bila seam aman tersedia, limit 20 + select-all, reload = server truth, tanpa MR/SE duplikat dan tanpa pergerakan optimistic; ukur run 20 kartu (bulk send) di runtime lokal — turunkan cap sebelum release bila bukti menunjukkan timeout/kontensi lock, jangan naikkan tanpa bukti; bersihkan fixture dan buktikan residu 0; `git diff --check` + audit: tanpa edit core, tanpa dependency baru, tanpa file stash basi, tanpa kredensial/data operasional.
+
+Acceptance: setiap butir smoke punya bukti eksekusi/observasi (NOT RUN dinyatakan jujur beserta sebabnya); 5 suite ×2 hijau; hash bundle identik; residu fixture 0.
+
+Final note (2026-09-16): T41 selesai dengan acceptance PARTIAL — seluruh gate otomatis/backend/frontend/HTTP/timing/build/hash/cleanup PASS, tetapi matriks browser interaktif NOT RUN karena blocker tooling IAB (event SPA tidak ter-dispatch; tombol legacy `Filter` gagal identik), sesuai kata "NOT RUN dinyatakan jujur beserta sebabnya" di acceptance di atas. Detail: work log PROJECT_STATE.md 2026-09-16 T41+T42.
+
+### T42 — Handoff dan final state section H
+
+Depends on: T41.
+
+Scope: catat evidence lengkap ke `PROJECT_STATE.md` sesuai format wajib (changes, verification, evidence lock/race/partial-success, hash bundle, hasil browser, cleanup, limitasi, rollback notes); selaraskan status T38–T42 di task board hanya dari bukti eksekusi; perbarui TASKS.md bila implementasi menyimpang dari rencana; tinggalkan working tree di `feat/stock-entry-bulk-select-fu38` tanpa commit/push; STOP — pekerjaan lanjutan hanya atas request baru.
+
+Acceptance: PROJECT_STATE.md konsisten dengan bukti eksekusi; tidak ada tugas aktif tersisa; tanpa commit/push/edit core.

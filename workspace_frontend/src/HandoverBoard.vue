@@ -5,13 +5,19 @@
 import { computed, nextTick, reactive, onMounted, ref, watch } from 'vue'
 import {
   cancelRequest, createRequest, handoverBoard, handoverLots, handoverRequests, handoverState,
-  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, savePostPacking, sendHandover, setActionError
+  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, savePostPacking, sendHandover, setActionError,
+  bulkHandoverItem
 } from './store.js'
+import {
+  BULK_LIMIT, CARD_LANE,
+  bulkCardEligible, bulkEligibleRefs, bulkEntryOfCard, bulkLaneActions, bulkRequiresReload, bulkRetryAvailable,
+  reconcileBulkSelection, runBulkItems, selectAllBulk, toggleBulkSelection, validateBulkEntries, validateBoxKg
+} from './handover-bulk.js'
 import { fmtInt, qtyMain } from './format.js'
 import { handoverCard } from './handover-card.js'
 import {
   CheckCircle2, ClipboardList, Filter, GripVertical, Inbox,
-  PackageCheck, Snowflake, Truck, Undo2
+  ListChecks, PackageCheck, Snowflake, Truck, Undo2
 } from 'lucide-vue-next'
 
 const isGudang = computed(() => !!handoverBoard.roles.is_gudang)
@@ -222,7 +228,7 @@ function laneDroppable(laneKey) {
   return !!drag.value && targetLanes(drag.value).includes(laneKey)
 }
 function onDragStart(e, c) {
-  if (!c.draggable) return
+  if (bulk.mode || !c.draggable) return
   drag.value = { kind: c.kind, ref: c.ref }
   e.dataTransfer.setData('text/plain', `${c.kind}:${c.ref}`)
   e.dataTransfer.effectAllowed = 'move'
@@ -242,6 +248,7 @@ function onDrop(e, laneKey) {
   const d = drag.value
   drag.value = null
   overLane.value = null
+  if (bulk.mode) return // mode pilih: drag dinonaktifkan (toggling via klik/checkbox)
   if (!d || !targetLanes(d).includes(laneKey)) return
   // drop TIDAK mengubah state: lot = request langsung (R3), lainnya buka dialog
   if (d.kind === 'lot') requestLot(d.ref)
@@ -252,6 +259,7 @@ function onDrop(e, laneKey) {
 }
 
 function clickCard(c) {
+  if (bulk.mode) { toggleBulkCard(c); return } // mode pilih: klik = toggle, bukan dialog
   if (!c.live) return
   if (c.kind === 'lot') requestLot(c.ref)
   else if (c.kind === 'request') {
@@ -432,6 +440,246 @@ function chooseCancel() {
   openCancelDialog(id)
 }
 
+// ============================================================================
+// Bulk select (T40 phase B): mode pilih + orkestrasi runBulkItems.
+// Papan TIDAK pernah diubah selama run — kartu tidak berpindah optimistis,
+// papan digantikan tepat sekali oleh loadBoard() final di dalam runner.
+// Seleksi berupa snapshot datar (bulkEntryOfCard) sehingga tetap sah walau
+// objek kartu dibuat ulang saat reload. pendingRequests tidak disentuh.
+// ============================================================================
+const bulk = reactive({
+  mode: false, lane: null, selected: [], boxes: {},
+  pending: false, progress: null, confirm: null, lastAction: null,
+  notice: '', result: null, requiresReload: false
+})
+const bulkConfirmError = ref('')
+const dlgBulk = ref(null)
+const dlgBulkResult = ref(null)
+
+const bulkSelectedRefs = computed(() => new Set(bulk.selected.map((e) => e.ref)))
+const laneActions = computed(() =>
+  bulk.mode && bulk.lane ? bulkLaneActions(bulk.lane, handoverBoard.roles) : []
+)
+const laneTitle = (key) => lanes.find((l) => l.key === key)?.title || key
+// eligibility murni terhadap lane terkunci + peran; mode/pending dicek terpisah
+// agar dim & checkbox stabil selama run berjalan
+const bulkCanSelect = (c) => bulkCardEligible(c, { roles: handoverBoard.roles, selectedLane: bulk.lane })
+const isBulkSelected = (c) => bulkSelectedRefs.value.has(c.ref)
+const isBulkDim = (c) => bulk.mode && !bulkCanSelect(c)
+const bulkCheckLabel = (c) =>
+  `Pilih ${c.workOrder}${c.document ? ' · ' + c.document : ''} — ${laneTitle(CARD_LANE[c.kind])}`
+
+function enterBulk() {
+  Object.assign(bulk, {
+    mode: true, lane: null, selected: [], boxes: {}, pending: false,
+    progress: null, confirm: null, lastAction: null, notice: '', result: null, requiresReload: false
+  })
+}
+// keluar mode membuang pilihan + nilai Box yang belum disimpan (§3.1);
+// satu-satunya jalan keluar selain reload sukses saat gate stale aktif
+function exitBulk() {
+  if (bulk.pending) return
+  dlgBulk.value?.close()
+  dlgBulkResult.value?.close()
+  Object.assign(bulk, {
+    mode: false, lane: null, selected: [], boxes: {}, progress: null,
+    confirm: null, lastAction: null, notice: '', result: null, requiresReload: false
+  })
+  bulkConfirmError.value = ''
+}
+function clearBulkSelection() {
+  if (bulk.requiresReload || bulk.pending) return
+  bulk.selected = []
+  bulk.boxes = {}
+  bulk.lane = null // pilihan kosong = kunci lane lepas (§3.1)
+  bulk.notice = ''
+}
+
+// isian Box per Material Request (opsional; kosong = konvensi tersimpan 0)
+function ensureBoxRow(e) {
+  if (e.kind !== 'lot' && !bulk.boxes[e.ref]) bulk.boxes[e.ref] = { box1: '', box2: '' }
+}
+
+function toggleBulkCard(c) {
+  if (!bulk.mode || bulk.pending || bulk.requiresReload) return
+  const lane = CARD_LANE[c.kind]
+  if (!bulkCanSelect(c)) {
+    if (bulk.lane && lane && lane !== bulk.lane) {
+      bulk.notice = `Pilihan terkunci ke ${laneTitle(bulk.lane)} — kosongkan pilihan untuk memilih lane lain.`
+    }
+    return
+  }
+  try {
+    bulk.selected = toggleBulkSelection(bulk.selected, bulkEntryOfCard(c))
+    ensureBoxRow(c)
+    bulk.notice = ''
+  } catch (e) {
+    bulk.notice = e.message // kartu ke-21: pesan batas 20 kartu
+  }
+}
+
+function selectAllPage() {
+  if (!bulk.mode || bulk.pending || bulk.requiresReload || !bulk.lane) return
+  const { entries, truncated } = selectAllBulk(byLane.value[bulk.lane], {
+    roles: handoverBoard.roles, selectedLane: bulk.lane, selected: bulk.selected
+  })
+  bulk.selected = entries
+  for (const e of entries) ensureBoxRow(e)
+  bulk.notice = truncated ? `Maksimal ${BULK_LIMIT} kartu per proses massal — sisanya tidak dipilih.` : ''
+}
+
+// ---- dialog konfirmasi massal (per aksi; dual-role Request = dua tombol) ----
+const BULK_CONFIRM_META = {
+  create_request: { title: 'Buat Request Gudang', button: (n) => `Buat ${n} Request Gudang` },
+  cancel_request: { title: 'Batalkan Request', button: (n) => `Batalkan ${n} Request` },
+  save_post_packing: { title: 'Verifikasi Siap Kirim', button: (n) => `Verifikasi ${n} Request` },
+  send_handover: { title: 'Kirim Barang', button: (n) => `Kirim ${n} Barang` }
+}
+const bulkConfirmTitle = computed(() => BULK_CONFIRM_META[bulk.confirm]?.title || 'Konfirmasi')
+const bulkConfirmButton = computed(() => BULK_CONFIRM_META[bulk.confirm]?.button(bulk.selected.length) || 'Proses')
+const bulkLaneIcon = computed(() => lanes.find((l) => l.key === bulk.lane)?.icon || ClipboardList)
+
+// §7.1: seluruh isian Box divalidasi client sebelum run; tombol terkunci selama ada isian salah
+const bulkBoxOk = (v) => { try { validateBoxKg(v); return true } catch { return false } }
+const bulkRowBoxesOk = (e) => bulkBoxOk(bulk.boxes[e.ref]?.box1) && bulkBoxOk(bulk.boxes[e.ref]?.box2)
+const bulkVerifyReady = computed(() =>
+  bulk.confirm !== 'save_post_packing' || bulk.selected.every(bulkRowBoxesOk)
+)
+
+function openBulkConfirm(action) {
+  if (!bulk.mode || !bulk.selected.length || bulk.pending || bulk.requiresReload) return
+  for (const e of bulk.selected) ensureBoxRow(e)
+  bulk.confirm = action
+  bulk.lastAction = action
+  bulkConfirmError.value = ''
+  nextTick(() => dlgBulk.value.showModal())
+}
+function closeBulkConfirm() { dlgBulk.value?.close() }
+function onBulkConfirmClose() {
+  if (bulk.confirm && !bulk.pending) {
+    bulk.confirm = null
+    bulkConfirmError.value = ''
+  }
+}
+
+function bulkRunEntry(e, action) {
+  const entry = action === 'create_request'
+    ? { lane: e.lane, action, work_order: e.ref }
+    : { lane: e.lane, action, material_request: e.ref }
+  if (action === 'save_post_packing') {
+    const b = bulk.boxes[e.ref] || {}
+    entry.box_1 = b.box1 ?? ''
+    entry.box_2 = b.box2 ?? ''
+  }
+  return entry
+}
+
+// refs kartu yang SAAT INI dirender + eligible di lane — sumbernya byLane
+// (jalur render yang sama: filter, halaman, supported, stopped, optimistic
+// pending sudah termuat), dasar rekonsiliasi §8 dan validasi pra-run §7.1
+const bulkEligibleRefsInLane = (laneKey) => bulkEligibleRefs(byLane.value[laneKey], handoverBoard.roles)
+
+async function runBulk() {
+  const action = bulk.confirm
+  // gate stale (§3.4): run terakhir belum diikuti reload sukses — semua aksi terkunci
+  if (!action || bulk.pending || bulk.requiresReload) return
+  // §7.1 pra-run: kartu yang tidak lagi dirender/eligible (filter/halaman
+  // berubah) dipangkas, tidak pernah diproses diam-diam
+  const eligibleRefs = bulkEligibleRefsInLane(bulk.lane)
+  const runnable = bulk.selected.filter((e) => eligibleRefs.has(e.ref))
+  const dropped = bulk.selected.length - runnable.length
+  if (!runnable.length) {
+    bulkConfirmError.value = 'Tidak ada kartu yang masih bisa diproses — periksa filter/halaman papan.'
+    return
+  }
+  const entries = runnable.map((e) => bulkRunEntry(e, action))
+  // §7.1 validasi client envelope (pure, diuji Node) SEBELUM dialog ditutup —
+  // isian salah membuat dialog tetap terbuka; jalur "buka ulang dialog" dihapus
+  try {
+    validateBulkEntries(entries, { roles: handoverBoard.roles })
+  } catch (e) {
+    bulkConfirmError.value = e.message
+    return
+  }
+  bulk.notice = dropped ? `${dropped} kartu tidak lagi tersedia dan tidak diproses.` : ''
+  bulk.selected = runnable
+  closeBulkConfirm()
+  bulk.pending = true
+  try {
+    const result = await runBulkItems({
+      entries,
+      roles: handoverBoard.roles,
+      rpc: bulkHandoverItem,
+      loadBoard: async () => {
+        await loadBoard()
+        if (handoverState.error) throw new Error(handoverState.error)
+      },
+      onProgress: (p) => { bulk.progress = p },
+      runId: `BULK-${Date.now()}`
+    })
+    // satu-satunya pembaruan papan berasal dari loadBoard() final di runner;
+    // seleksi direkonsiliasi ketat terhadap server truth yang dirender (§8)
+    const eligible = bulkEligibleRefsInLane(bulk.lane)
+    bulk.selected = reconcileBulkSelection(bulk.selected, result, (e) => eligible.has(e.ref))
+    bulk.confirm = null
+    bulk.result = result
+    // §3.4: reload gagal = seleksi cocok dengan papan basi — kunci semua aksi
+    bulk.requiresReload = bulkRequiresReload(result)
+    nextTick(() => dlgBulkResult.value.showModal())
+  } catch (e) {
+    // jalur tak terduga (validasi sudah lolos): pilihan & isian tetap utuh
+    bulk.notice = e.message
+  } finally {
+    bulk.pending = false
+    bulk.progress = null
+  }
+}
+
+// ---- dialog hasil: ringkasan + daftar gagal aman + retry + muat ulang ----
+const bulkUnprocessedCount = computed(() =>
+  bulk.result ? bulk.result.unprocessed.length + (bulk.result.uncertain ? 1 : 0) : 0
+)
+const bulkAllOk = computed(() => !!bulk.result && !bulk.result.failures.length && !bulkUnprocessedCount.value)
+// §3.4: retry hanya setelah reload papan SELESAI dan masih ada kandidat —
+// ketika reload gagal seleksi di-reconcile terhadap papan basi, jadi dikunci
+const bulkRetryReady = computed(() => bulkRetryAvailable(bulk.result, bulk.selected.length))
+const bulkFailRows = computed(() => {
+  if (!bulk.result) return []
+  return [
+    ...bulk.result.failures.map((r) => ({ ...r })),
+    ...(bulk.result.uncertain ? [{ ...bulk.result.uncertain }] : []),
+    ...bulk.result.unprocessed.map((r) => ({ ...r, message: r.message || 'Belum diproses karena run dihentikan.' }))
+  ]
+})
+function closeBulkResult() { dlgBulkResult.value?.close() }
+function onBulkResultClose() {
+  if (!bulk.result) return
+  bulk.result = null
+  if (bulk.mode && !bulk.selected.length) exitBulk()
+}
+function retryBulkFailed() {
+  // §3.4: tanpa reload selesai, seleksi hanya cocok dengan papan basi — jangan coba ulang
+  if (!bulk.mode || !bulkRetryReady.value || bulk.pending || bulk.requiresReload) return
+  const action = bulk.lastAction
+  closeBulkResult()
+  bulk.result = null
+  openBulkConfirm(action) // isian Box dipertahankan (bulk.boxes tidak dibersihkan)
+}
+async function reloadAfterBulk() {
+  await loadBoard()
+  if (handoverState.error) return // gagal muat lagi: gate stale TETAP aktif; dialog terbuka
+  if (bulk.result) bulk.result.boardReloaded = true
+  bulk.requiresReload = false // reload sukses: rekonsiliasi ulang, lalu buka kunci
+  // rekonsiliasi ulang seleksi tersisa terhadap server truth terbaru
+  const eligible = bulkEligibleRefsInLane(bulk.lane)
+  bulk.selected = reconcileBulkSelection(
+    bulk.selected,
+    { successes: [], failures: [], uncertain: null, unprocessed: bulk.selected.map((e) => ({ ref: e.ref })) },
+    (e) => eligible.has(e.ref)
+  )
+  if (!bulk.selected.length) closeBulkResult()
+}
+
 onMounted(() => {
   const apply = () => {
     const p = savedListPreferences.handover || {}
@@ -494,9 +742,48 @@ onMounted(() => {
         </div>
       </Transition>
     </div>
+    <button
+      v-if="isGudang || isProduksi"
+      class="btn filterbtn"
+      :class="{ active: bulk.mode }"
+      aria-label="Pilih banyak kartu"
+      :aria-pressed="bulk.mode ? 'true' : 'false'"
+      :disabled="bulk.pending"
+      @click="bulk.mode ? exitBulk() : enterBulk()"
+    >
+      <ListChecks :size="14" :stroke-width="2" />
+      <span class="btext">Pilih</span>
+    </button>
   </div>
 
-  <div class="kb" :class="{ dragging: !!drag }">
+  <!-- bar aksi massal: sticky, di atas navigasi bawah mobile -->
+  <div v-if="bulk.mode" class="bulkbar" role="region" aria-label="Aksi massal kartu terpilih">
+    <span class="bulk-count" role="status">
+      <strong>{{ bulk.selected.length }}</strong> dipilih<template v-if="bulk.lane"> · {{ laneTitle(bulk.lane) }}</template><template v-if="bulk.pending && bulk.progress"> · memproses {{ bulk.progress.done + 1 }} dari {{ bulk.progress.total }} ({{ bulk.progress.ref }})…</template>
+    </span>
+    <span v-if="bulk.pending && !bulk.progress" class="bulk-progress" role="status">Menyiapkan…</span>
+    <span class="bulk-spacer" aria-hidden="true"></span>
+    <button class="btn btn-sm" :disabled="bulk.pending" @click="exitBulk">Batal</button>
+    <!-- gate stale (§3.4): reload papan gagal — hanya Muat ulang / Batal -->
+    <template v-if="bulk.requiresReload">
+      <span class="bulk-progress bulk-stale-warn" role="alert">Papan gagal dimuat — muat ulang sebelum melanjutkan.</span>
+      <button class="btn btn-sm btn-primary" :disabled="bulk.pending" @click="reloadAfterBulk">Muat ulang</button>
+    </template>
+    <template v-else>
+      <button class="btn btn-sm" :disabled="!bulk.lane || bulk.pending" @click="selectAllPage">Pilih semua di halaman</button>
+      <button class="btn btn-sm" :disabled="!bulk.selected.length || bulk.pending" @click="clearBulkSelection">Kosongkan</button>
+      <button
+        v-for="a in laneActions"
+        :key="a"
+        class="btn btn-sm btn-primary"
+        :disabled="!bulk.selected.length || bulk.pending"
+        @click="openBulkConfirm(a)"
+      >{{ BULK_CONFIRM_META[a].button(bulk.selected.length) }}</button>
+    </template>
+    <p v-if="bulk.notice" class="bulk-notice" role="alert">{{ bulk.notice }}</p>
+  </div>
+
+  <div class="kb" :class="{ dragging: !!drag, selecting: bulk.mode }">
     <section
       v-for="l in lanes"
       :key="l.key"
@@ -522,15 +809,33 @@ onMounted(() => {
           v-for="c in byLane[l.key]"
           :key="c.key"
           class="kb-card se-kb-card"
-          :class="{ live: c.live, pending: c.pending, dragging: drag && drag.kind === c.kind && drag.ref === c.ref }"
-          :draggable="c.draggable"
+          :class="{
+            live: c.live,
+            pending: c.pending,
+            dragging: drag && drag.kind === c.kind && drag.ref === c.ref,
+            'bulk-sel': isBulkSelected(c),
+            'bulk-dim': isBulkDim(c),
+            'bulk-run': bulk.pending && isBulkSelected(c)
+          }"
+          :draggable="bulk.mode ? false : c.draggable"
+          :aria-disabled="isBulkDim(c) ? 'true' : undefined"
           @dragstart="onDragStart($event, c)"
           @dragend="onDragEnd"
           @click="clickCard(c)"
         >
           <div class="kb-top">
+            <label v-if="bulk.mode && bulkCanSelect(c)" class="bulk-check">
+              <input
+                type="checkbox"
+                :checked="isBulkSelected(c)"
+                :disabled="bulk.pending || bulk.requiresReload"
+                :aria-label="bulkCheckLabel(c)"
+                @click.stop
+                @change="toggleBulkCard(c)"
+              />
+            </label>
             <span class="kb-name">{{ c.name }}</span>
-            <GripVertical v-if="c.draggable" class="kb-grip" :size="15" :stroke-width="2" aria-hidden="true" />
+            <GripVertical v-if="c.draggable && !bulk.mode" class="kb-grip" :size="15" :stroke-width="2" aria-hidden="true" />
           </div>
           <div class="se-card-docs">
             <span class="kb-id">{{ c.workOrder }}</span>
@@ -731,6 +1036,86 @@ onMounted(() => {
       <div class="dlg-actions">
         <button class="btn" @click="chooseCancel">Batalkan (Gudang)</button>
         <button class="btn btn-primary" @click="chooseVerify">Verifikasi Siap Kirim (Produksi)</button>
+      </div>
+    </template>
+  </dialog>
+
+  <!-- ============ dialog konfirmasi aksi massal (semua peran) ============ -->
+  <dialog ref="dlgBulk" class="dialog dialog-wide" @click.self="closeBulkConfirm" @close="onBulkConfirmClose">
+    <template v-if="bulk.confirm">
+      <header class="dlg-head">
+        <span class="dlg-ico" aria-hidden="true"><component :is="bulkLaneIcon" :size="16" :stroke-width="1.9" /></span>
+        <div class="dlg-hgroup">
+          <h3>{{ bulkConfirmTitle }} — {{ bulk.selected.length }} kartu</h3>
+          <p class="dlg-sub">{{ laneTitle(bulk.lane) }} · diproses berurutan, satu transaksi per kartu</p>
+        </div>
+      </header>
+
+      <div class="bulk-rows">
+        <div
+          v-for="e in bulk.selected"
+          :key="e.ref"
+          class="bulk-row"
+          :class="{ invalid: bulk.confirm === 'save_post_packing' && !bulkRowBoxesOk(e) }"
+        >
+          <div class="bulk-row-main">
+            <span class="bulk-row-name">{{ e.name }}</span>
+            <span class="bulk-row-ref">{{ e.workOrder }}<template v-if="e.materialRequest"> · {{ e.materialRequest }}</template></span>
+            <span v-if="e.batch" class="bulk-row-ref">Batch {{ e.batch }}</span>
+            <span v-if="e.quantity" class="bulk-row-ref">{{ e.quantity }}</span>
+            <span v-if="e.note" class="bulk-row-note">{{ e.note }}</span>
+          </div>
+          <!-- form Box per request (§3.3): responsif, label terikat per baris -->
+          <div v-if="bulk.confirm === 'save_post_packing'" class="bulk-row-boxes">
+            <div class="field">
+              <label :for="`bb1-${e.ref}`">Box 1 (kg)</label>
+              <input :id="`bb1-${e.ref}`" v-model="bulk.boxes[e.ref].box1" class="input" type="number" step="any" min="0" inputmode="decimal" />
+            </div>
+            <div class="field">
+              <label :for="`bb2-${e.ref}`">Box 2 (kg)</label>
+              <input :id="`bb2-${e.ref}`" v-model="bulk.boxes[e.ref].box2" class="input" type="number" step="any" min="0" inputmode="decimal" />
+            </div>
+          </div>
+        </div>
+      </div>
+      <p v-if="bulk.confirm === 'save_post_packing'" class="hint">Box opsional — kosong berarti 0 kg. Nilai disimpan per Material Request.</p>
+      <p v-if="bulk.confirm === 'cancel_request'" class="hint">Reservasi pada Cold Storage akan dilepas untuk setiap request.</p>
+      <p v-if="bulk.confirm === 'create_request'" class="hint">Satu Material Request dibuat per Work Order — tidak digabung.</p>
+
+      <p v-if="bulkConfirmError" class="err" role="alert">{{ bulkConfirmError }}</p>
+      <div class="dlg-actions">
+        <button class="btn" @click="closeBulkConfirm">Kembali</button>
+        <button class="btn btn-primary" :disabled="!bulkVerifyReady" @click="runBulk">{{ bulkConfirmButton }}</button>
+      </div>
+    </template>
+  </dialog>
+
+  <!-- ============ dialog hasil proses massal ============ -->
+  <dialog ref="dlgBulkResult" class="dialog dialog-wide" @click.self="closeBulkResult" @close="onBulkResultClose">
+    <template v-if="bulk.result">
+      <header class="dlg-head">
+        <span class="dlg-ico" :class="{ ok: bulkAllOk }" aria-hidden="true"><CheckCircle2 :size="16" :stroke-width="1.9" /></span>
+        <div class="dlg-hgroup">
+          <h3>Hasil Proses Massal</h3>
+          <p class="dlg-sub">{{ laneTitle(bulk.lane) }}</p>
+        </div>
+      </header>
+      <p class="bulk-summary" role="status">
+        <strong>{{ bulk.result.successes.length }} berhasil</strong>, {{ bulk.result.failures.length }} gagal<template v-if="bulkUnprocessedCount">, {{ bulkUnprocessedCount }} belum diproses</template>
+      </p>
+      <div v-if="bulkFailRows.length" class="bulk-fails">
+        <div v-for="r in bulkFailRows" :key="`${r.action}-${r.ref}`" class="bulk-fail">
+          <span class="bulk-fail-ref">{{ r.ref }}</span>
+          <span class="bulk-fail-msg">{{ r.message }}</span>
+        </div>
+      </div>
+      <p v-if="!bulk.result.boardReloaded" class="callout bad bulk-reload-warn">
+        Papan gagal dimuat. Muat ulang untuk melihat data terbaru.
+        <button class="btn btn-sm" @click="reloadAfterBulk">Muat ulang</button>
+      </p>
+      <div class="dlg-actions">
+        <button v-if="bulkRetryReady" class="btn" @click="retryBulkFailed">Coba lagi yang gagal</button>
+        <button class="btn btn-primary" @click="closeBulkResult">Tutup</button>
       </div>
     </template>
   </dialog>

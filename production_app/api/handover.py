@@ -893,6 +893,12 @@ def create_request(work_order):
 
     Re-validates availability under the WO row lock, then inserts + submits the
     MR in this one transaction — zero writes on any validation failure."""
+    return {**_create_request(work_order), "board": _build_board()}
+
+
+def _create_request(work_order):
+    """Boardless create_request mutation: the exact action payload minus
+    board (T38 bulk dispatch + the whitelisted endpoint share it)."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
@@ -914,13 +920,34 @@ def create_request(work_order):
         frappe.db.get_value("Item", wo.production_item, "name", for_update=True)
         lot = _checked_lot(work_order)  # re-derive under the pool lock
 
-    # R3: one active request per WO — re-derived under the lock so racing
-    # creates serialize on the row lock (stopped/draft/cancelled never block)
-    for r in _requests([lot], wo_names=[work_order]):
-        if r["lane"] in (LANE_REQUEST, LANE_SIAP) and not r["flag"]:
-            frappe.throw(
-                _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, r["mr"])
-            )
+    # R3: satu permintaan aktif per WO — T39-fix1 (I1): keputusan duplikat
+    # memakai CURRENT read (FOR UPDATE, join MRI->MR) di bawah lock WO (dan
+    # Item batchless): snapshot RR bisa luput dari MR yang di-commit
+    # kompetitor selama lock wait. Paritas lane lama: submitted tanpa SE
+    # menghalangi; draft/cancelled/stopped/terkirim tidak. Setiap create
+    # lain harus lewat lock WO yang sama dulu, jadi tidak ada MR aktif baru
+    # yang bisa muncul tanpa terlihat oleh read ini (phantom aman).
+    bound = frappe.db.sql(
+        "select mri.parent as mr, mr.docstatus, mr.status"
+        " from `tabMaterial Request Item` mri"
+        " join `tabMaterial Request` mr on mr.name = mri.parent"
+        " where mri.custom_work_order = %s"
+        " for update",
+        (work_order,),
+        as_dict=True,
+    )
+    seen_mr = set()
+    for row in bound:
+        if row.mr in seen_mr:
+            continue  # MR multi-baris: putuskan sekali
+        seen_mr.add(row.mr)
+        if row.docstatus != 1 or row.status == "Stopped":
+            continue
+        if _sent_se_name_locked(row.mr):
+            continue  # terkirim: request baru tetap sah (lane parity)
+        frappe.throw(
+            _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, row.mr)
+        )
 
     stock_uom = lot.stock_uom or frappe.db.get_value("Item", wo.production_item, "stock_uom")
     _enforce_whole_uom(amount, stock_uom, "Qty")
@@ -956,33 +983,40 @@ def create_request(work_order):
     )
     mr.insert()  # session user; submit below — one transaction, native perms
     mr.submit()
-    return {"ok": True, "material_request": mr.name, "qty": amount, "board": _build_board()}
+    return {"ok": True, "material_request": mr.name, "qty": amount}
 
 
 @frappe.whitelist()
 def cancel_request(material_request):
     """Gudang side (Gudang Barang Jadi / Stock User): cancel a request BEFORE
     Post-Packing (native cancel; audit history stays, reservation is released)."""
+    return {**_cancel_request(material_request), "board": _build_board()}
+
+
+def _cancel_request(material_request):
+    """Boardless cancel_request mutation: the exact action payload minus
+    board (T38). T39 §6.2: resolve binding read-only, lalu lock WO -> MR,
+    re-read + §6.1 di bawah lock, baru recheck lane."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Gudang Barang Jadi) yang dapat membatalkan permintaan serah terima."),
     )
-    mr = frappe.get_doc("Material Request", material_request)
+    wo_name = _handover_binding(material_request)
+    frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # 1. WO (§6.2)
+    mr, current = _handover_mr(material_request, wo_name)  # 2. lock MR + re-read + §6.1
     frappe.has_permission("Material Request", "cancel", doc=mr, throw=True)
-    if mr.docstatus != 1:
-        frappe.throw(_("Permintaan {0} tidak bisa dibatalkan (docstatus {1}).").format(material_request, mr.docstatus))
-    if mr.custom_postpacking_confirmed:
+    if current.custom_postpacking_confirmed:
         frappe.throw(_("Permintaan {0} sudah diverifikasi (Post-Packing); tidak bisa dibatalkan.").format(material_request))
-    sent = _sent_se_by_mr([material_request])
+    sent = _sent_se_name_locked(material_request)  # current read (T39-fix1)
     if sent:
         frappe.throw(
             _("Permintaan {0} sudah terkirim ({1}); tidak bisa dibatalkan.").format(
                 material_request,
-                get_link_to_form("Stock Entry", sent[material_request].name),
+                get_link_to_form("Stock Entry", sent),
             )
         )
     mr.cancel()  # native; permission-checked as session user
-    return {"ok": True, "material_request": material_request, "board": _build_board()}
+    return {"ok": True, "material_request": material_request}
 
 
 # WO mirror: Box 1/2 ONLY (T31, R4/R8) — the kg weights entered at the
@@ -998,15 +1032,118 @@ WO_MIRROR_FIELDS = (
 )
 
 
-def _handover_mr(material_request):
-    """Load the handover MR: read-gated, docstatus 1, one Work Order-bound row."""
+def _handover_binding(material_request):
+    """T39 §6.2 pre-read (hanya baca, sebelum lock apa pun): resolve SATU
+    binding Work Order non-kosong agar baris WO bisa di-lock lebih dulu. MR
+    tanpa tepat satu binding tak mungkin permintaan serah terima yang sah —
+    menolak di sini aman (nol tulis) dan menghindari lock pada input rusak."""
+    bindings = {
+        row.custom_work_order
+        for row in frappe.get_all(
+            "Material Request Item",
+            filters={"parent": material_request},
+            fields=["custom_work_order"],
+            order_by="idx asc",
+        )
+        if row.custom_work_order
+    }
+    if len(bindings) != 1:
+        frappe.throw(
+            _("Material Request {0} bukan permintaan serah terima (tanpa Work Order).").format(
+                material_request
+            )
+        )
+    return bindings.pop()
+
+
+def _handover_mr(material_request, wo_name, route=False):
+    """T39 §6.1 invariant permintaan serah terima — pemanggil WAJIB memegang
+    lock baris Work Order; fungsi ini me-lock baris Material Request dan
+    mengembalikan (mr, current). T39-fix1 (I1): field keputusan
+    (docstatus/konfirmasi/status) dibaca dengan locking read (SELECT ...
+    FOR UPDATE) — di MariaDB REPEATABLE-READ plain read memakai snapshot
+    transaksi yang dipin SEBELUM lock wait, jadi bisa melewatkan commit
+    kompetitor; locking read selalu membaca data tercommit terbaru. Baris
+    struktural (tipe, baris item, binding, qty, rute) immutable pada MR
+    docstatus 1 di alur serah terima — plain get_doc cukup (ruling review).
+    Menegakkan: izin baca; Material Transfer; docstatus 1 (current); tepat
+    satu baris item; binding tunggal masih menunjuk wo_name (rebinding di
+    bawah lock ditolak); qty baris valid; dan untuk aksi yang memindah stok
+    (route=True) rute asal/tujuan non-kosong dan konsisten baris vs header.
+    Izin tulis/cancel/submit tetap milik helper aksi."""
+    current = frappe.db.get_value(
+        "Material Request",
+        material_request,
+        ["docstatus", "custom_postpacking_confirmed", "status"],
+        for_update=True,  # lock baris MR + current read untuk gerbang keputusan
+        as_dict=True,
+    )
+    if not current:
+        frappe.throw(_("Material Request {0} tidak ditemukan.").format(material_request))
     mr = frappe.get_doc("Material Request", material_request)
     frappe.has_permission("Material Request", "read", doc=mr, throw=True)
-    if mr.docstatus != 1:
-        frappe.throw(_("Material Request {0} tidak aktif (docstatus {1}).").format(material_request, mr.docstatus))
-    if not mr.items or not mr.items[0].get("custom_work_order"):
+    if mr.material_request_type != "Material Transfer":
+        frappe.throw(
+            _("Material Request {0} bukan permintaan Material Transfer.").format(material_request)
+        )
+    if current.docstatus != 1:
+        frappe.throw(_("Material Request {0} tidak aktif (docstatus {1}).").format(material_request, current.docstatus))
+    if len(mr.items or []) != 1:
+        frappe.throw(_("Material Request {0} harus satu baris item.").format(material_request))
+    row = mr.items[0]
+    if not row.get("custom_work_order"):
         frappe.throw(_("Material Request {0} bukan permintaan serah terima (tanpa Work Order).").format(material_request))
-    return mr
+    if row.custom_work_order != wo_name:
+        frappe.throw(
+            _("Material Request {0} terikat ke {1}, bukan {2}.").format(
+                material_request, row.custom_work_order, wo_name
+            )
+        )
+    if flt(row.stock_qty or row.qty) <= 0:
+        frappe.throw(_("Material Request {0} punya qty baris tidak valid.").format(material_request))
+    if route:
+        source = row.from_warehouse or mr.set_from_warehouse
+        target = row.warehouse or mr.set_warehouse
+        if not source or not target:
+            frappe.throw(
+                _("Material Request {0} punya rute gudang tidak lengkap (asal {1}, tujuan {2}).").format(
+                    material_request, source, target
+                )
+            )
+        if row.from_warehouse and mr.set_from_warehouse and row.from_warehouse != mr.set_from_warehouse:
+            frappe.throw(
+                _("Material Request {0}: gudang asal baris ({1}) berbeda dari header ({2}).").format(
+                    material_request, row.from_warehouse, mr.set_from_warehouse
+                )
+            )
+        if row.warehouse and mr.set_warehouse and row.warehouse != mr.set_warehouse:
+            frappe.throw(
+                _("Material Request {0}: gudang tujuan baris ({1}) berbeda dari header ({2}).").format(
+                    material_request, row.warehouse, mr.set_warehouse
+                )
+            )
+    return mr, current
+
+
+def _sent_se_name_locked(material_request):
+    """T39-fix1 (I1): keberadaan SE submitted untuk satu MR sebagai CURRENT
+    read (FOR UPDATE) — snapshot transaksi RR tidak melihat SE yang di-commit
+    kompetitor selama lock wait kita, jadi gerbang duplikat tidak boleh
+    memakai plain read. `SED.material_request` berindeks native (scan murah);
+    mengembalikan nama SE terakhir (posting terlama) atau None."""
+    rows = frappe.db.sql(
+        "select sed.parent as name"
+        " from `tabStock Entry Detail` sed"
+        " join `tabStock Entry` se on se.name = sed.parent"
+        " where sed.material_request = %s"
+        " and sed.docstatus = 1 and se.docstatus = 1"
+        " and sed.parenttype = 'Stock Entry'"
+        " order by se.posting_date asc, se.posting_time asc, se.creation asc"
+        " limit 1 for update",
+        (material_request,),
+        as_dict=True,
+    )
+    return rows[0].name if rows else None
 
 
 @frappe.whitelist()
@@ -1018,16 +1155,26 @@ def save_post_packing(material_request, box_1=None, box_2=None):
     submitted doc would demand submit permission, which Manufacturing User
     must not have, T22). Boxes mirror to the Work Order (kg semantics, R8);
     the MR stays a pure request document created by gudang."""
+    return {
+        **_save_post_packing(material_request, box_1, box_2),
+        "board": _build_board(),
+    }
+
+
+def _save_post_packing(material_request, box_1, box_2):
+    """Boardless save_post_packing mutation: the exact action payload minus
+    board (T38). T39 §6.2: lock WO -> MR (inversi MR->WO lama dihapus), lalu
+    re-read + §6.1 dan recheck di bawah lock."""
     _require_role(
         ROLE_PRODUKSI, _("Hanya Manufacturing User yang dapat mengisi Post-Packing.")
     )
-    mr = _handover_mr(material_request)
+    wo_name = _handover_binding(material_request)
+    frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # 1. WO (§6.2)
+    mr, current = _handover_mr(material_request, wo_name)  # 2. lock MR + re-read + §6.1
     frappe.has_permission("Material Request", "write", doc=mr, throw=True)
-    frappe.db.get_value("Material Request", material_request, "name", for_update=True)  # write-once gate
-    mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
-    if mr.custom_postpacking_confirmed:
+    if current.custom_postpacking_confirmed:
         frappe.throw(_("Post-Packing untuk {0} sudah dikonfirmasi sebelumnya.").format(material_request))
-    sent = _sent_se_by_mr([material_request])
+    sent = _sent_se_name_locked(material_request)  # current read (T39-fix1)
     if sent:
         frappe.throw(_("Permintaan {0} sudah terkirim; Post-Packing tidak bisa diisi.").format(material_request))
 
@@ -1055,7 +1202,6 @@ def save_post_packing(material_request, box_1=None, box_2=None):
         "material_request": material_request,
         "box_1": box1,
         "box_2": box2,
-        "board": _build_board(),
     }
 
 
@@ -1068,31 +1214,40 @@ def send_handover(material_request):
     batch seam); the shortage pre-check reads the ROUTE from-warehouse (FU29),
     so a lot whose stock lives elsewhere is refused here with a clear message —
     native submit validation stays as the backstop in the same transaction."""
+    return {**_send_handover(material_request), "board": _build_board()}
+
+
+def _send_handover(material_request):
+    """Boardless send_handover mutation: the exact action payload minus
+    board (T38). T39 §6.2: resolve binding read-only, lock WO -> MR ->
+    (batchless) Item, re-read + §6.1, lalu recheck konfirmasi/stopped/duplikat
+    SE/stok rute di bawah lock."""
     _require_role(
         ROLE_PRODUKSI, _("Hanya Manufacturing User yang dapat mengirim serah terima.")
     )
-    mr = _handover_mr(material_request)
     frappe.has_permission("Stock Entry", "create", throw=True)
     frappe.has_permission("Stock Entry", "submit", throw=True)
 
-    wo_name = mr.items[0].custom_work_order
+    wo_name = _handover_binding(material_request)
+    frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # 1. WO (§6.2)
+    mr, current = _handover_mr(material_request, wo_name, route=True)  # 2. lock MR + §6.1
     qty = flt(mr.items[0].stock_qty or mr.items[0].qty)
-    if qty <= 0:
-        frappe.throw(_("Qty permintaan {0} tidak valid.").format(material_request))
-
-    frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # row lock
-    mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
     lot = _checked_lot(wo_name)  # §4.9 unsupported error BEFORE any mutation
+    if lot.batchless:
+        # the pool is ITEM-wide: sends from every WO of this item draw from it,
+        # so the Item row lock serializes them (the WO/MR locks above cannot)
+        frappe.db.get_value("Item", lot.item_code, "name", for_update=True)  # 3. Item (§6.2)
+        lot = _checked_lot(wo_name)  # re-derive under the pool lock
     batch = lot.batch
-    if not mr.custom_postpacking_confirmed:
+    if not current.custom_postpacking_confirmed:
         frappe.throw(_("Post-Packing belum dikonfirmasi untuk {0}.").format(material_request))
-    if mr.status == "Stopped":
+    if current.status == "Stopped":
         frappe.throw(_("Permintaan {0} berstatus Stopped; aktifkan kembali lewat Desk.").format(material_request))
-    sent = _sent_se_by_mr([material_request])
+    sent = _sent_se_name_locked(material_request)  # current read (T39-fix1)
     if sent:
         frappe.throw(
             _("Pengiriman duplikat: Stock Entry {0} sudah ada untuk {1}.").format(
-                get_link_to_form("Stock Entry", sent[material_request].name), material_request
+                get_link_to_form("Stock Entry", sent), material_request
             )
         )
     # FU29: pre-check against the ROUTE origin (the same warehouse
@@ -1133,5 +1288,57 @@ def send_handover(material_request):
         "stock_entry": se.name,
         "batch": batch,
         "qty": qty,
-        "board": _build_board(),
     }
+
+
+# --------------------------------------- T38 bulk: single-card dispatch endpoint
+#
+# ONE card per HTTP request (spec §4.2): the browser orchestrator provides the
+# bulk behavior, this endpoint only strictly validates one action + one entry
+# and dispatches to the allowlisted boardless helper. It never calls
+# _build_board, never calls another whitelisted endpoint over HTTP, never uses
+# ignore_permissions, and never catches action exceptions (expected failures
+# surface as their native Frappe exceptions; schema refusals happen BEFORE any
+# mutation because helpers are only reached after validation passes).
+
+BULK_ACTION_KEYS = {
+    "create_request": ("work_order",),
+    "cancel_request": ("material_request",),
+    "save_post_packing": ("material_request", "box_1", "box_2"),
+    "send_handover": ("material_request",),
+}
+
+
+@frappe.whitelist()
+def bulk_handover_item(action, entry):
+    """Single-card bulk dispatch: returns the action payload minus `board`
+    (the board is reloaded once by the client after the whole run)."""
+    if not isinstance(action, str) or action not in BULK_ACTION_KEYS:
+        frappe.throw(_("Aksi bulk {0} tidak dikenal.").format(action))
+    if not isinstance(entry, dict):
+        frappe.throw(_("Entry harus satu objek JSON."))
+    keys = BULK_ACTION_KEYS[action]
+    missing = [k for k in keys if k not in entry]
+    unknown = [k for k in entry if k not in keys]
+    if missing:
+        frappe.throw(
+            _("Kunci {0} wajib ada untuk aksi {1}.").format(", ".join(missing), action)
+        )
+    if unknown:
+        frappe.throw(
+            _("Kunci tidak dikenal untuk aksi {0}: {1}.").format(action, ", ".join(unknown))
+        )
+    for key in keys:
+        if key in ("box_1", "box_2"):
+            continue  # kg floats: blank/None valid, validated by _box_kg in the helper
+        value = entry[key]
+        if not isinstance(value, str) or not value.strip():
+            frappe.throw(_("{0} wajib teks tidak kosong.").format(key))
+
+    if action == "create_request":
+        return _create_request(entry["work_order"])
+    if action == "cancel_request":
+        return _cancel_request(entry["material_request"])
+    if action == "save_post_packing":
+        return _save_post_packing(entry["material_request"], entry["box_1"], entry["box_2"])
+    return _send_handover(entry["material_request"])

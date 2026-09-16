@@ -218,24 +218,67 @@ function applyDetail(mapped) {
   return workOrders.find(w => w.id === mapped.id)
 }
 
-export async function call(method, args) {
-  const res = await fetch(`/api/method/${method}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Frappe-CSRF-Token': window.csrf_token || ''
-    },
-    body: JSON.stringify(args || {})
-  })
-  const data = await res.json()
-  if (!res.ok) {
-    const msg = data && data._server_messages
-      ? JSON.parse(data._server_messages).map((m) => JSON.parse(m).message).join(' ')
-      : (data && data.exc) ? 'Validasi ERPNext gagal'
-        : (data && data.message) || res.statusText
-    throw new Error(msg)
+// bulk-select §7.3: error dibedakan lewat `bulkKind` — 'expected' (penolakan
+// bisnis/izin, kartu berikutnya lanjut) vs 'transport'/'malformed'
+// (infrastruktur: network/timeout/5xx/respon rusak — run bulk wajib berhenti
+// dengan status uncertain). Properti tambahan tidak mengubah pemanggil lama
+// yang hanya membaca `.message`.
+export async function call(method, args, opts = {}) {
+  // Review T3 (phase B): timeout finit khusus bulk — hanya opts.timeoutMs yang
+  // mengaktifkan AbortSignal, sehingga seluruh pemanggil lama tidak berubah.
+  const controller = opts.timeoutMs ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), opts.timeoutMs) : null
+  try {
+    let res
+    try {
+      res = await fetch(`/api/method/${method}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': window.csrf_token || ''
+        },
+        body: JSON.stringify(args || {}),
+        ...(controller ? { signal: controller.signal } : {})
+      })
+    } catch {
+      if (controller && controller.signal.aborted) {
+        throw Object.assign(new Error('Waktu tunggu server habis. Muat ulang untuk melihat keadaan terbaru.'), { bulkKind: 'timeout' })
+      }
+      throw Object.assign(new Error('Koneksi ke server gagal.'), { bulkKind: 'transport' })
+    }
+    let data
+    try {
+      data = await res.json()
+    } catch {
+      throw Object.assign(new Error('Respon server tidak valid.'), { bulkKind: 'malformed' })
+    }
+    if (!res.ok) {
+      // _server_messages = pesan user-facing terjemahan Frappe (frappe.throw) —
+      // penolakan bisnis yang diharapkan, meski Frappe membalas 500.
+      if (data && data._server_messages) {
+        const msg = JSON.parse(data._server_messages).map((m) => JSON.parse(m).message).join(' ')
+        throw Object.assign(new Error(msg), { bulkKind: 'expected' })
+      }
+      if (res.status === 401 || res.status === 403) {
+        // Review T3 (phase B): sesi berakhir/izin tanpa pesan server = gangguan
+        // infrastruktur — bulk run wajib berhenti (uncertain), bukan "gagal" bisnis.
+        throw Object.assign(new Error('Sesi berakhir atau akses ditolak. Muat ulang halaman untuk melanjutkan.'), { bulkKind: 'transport' })
+      }
+      if (res.status >= 500) {
+        // internal error/deadlock/lock timeout (biasanya `exc`): keadaan server
+        // tak pasti — jangan tampilkan jejak mentah.
+        throw Object.assign(new Error('Server gagal memproses permintaan. Muat ulang untuk melihat keadaan terbaru.'), { bulkKind: 'transport' })
+      }
+      const msg = (data && data.message) || res.statusText
+      throw Object.assign(new Error(msg), { bulkKind: 'expected' })
+    }
+    if (!data || typeof data !== 'object' || !('message' in data)) {
+      throw Object.assign(new Error('Respon server tidak valid.'), { bulkKind: 'malformed' })
+    }
+    return data.message
+  } finally {
+    if (timer) clearTimeout(timer)
   }
-  return data.message
 }
 
 export const suggestionPreferences = reactive({ enabled: true })
@@ -479,6 +522,19 @@ export function savePostPacking(materialRequest, v) {
 }
 export function sendHandover(materialRequest) {
   return handoverAction('send_handover', { material_request: materialRequest })
+}
+
+// bulk-select §8: adapter item tunggal TANPA papan untuk orkestrasi bulk
+// (runBulkItems di handover-bulk.js). Sengaja TIDAK memakai handoverAction
+// (selalu mengganti papan), tidak menyentuh handoverState.pending /
+// pendingRequests, dan tidak memindah kartu — papan hanya diganti oleh satu
+// loadBoard() final setelah seluruh kartu selesai. `entry` adalah objek JSON;
+// untuk save_post_packing kedua box SELALU terkirim (null = kosong).
+// Review T3: satu-satunya pemanggil dengan timeout finit (45s < umumnya proxy
+// 60s); habis -> bulkKind 'timeout' -> kartu uncertain, run berhenti.
+const BULK_RPC_TIMEOUT_MS = 45000
+export async function bulkHandoverItem(action, entry) {
+  return call('production_app.api.handover.bulk_handover_item', { action, entry }, { timeoutMs: BULK_RPC_TIMEOUT_MS })
 }
 
 export function lotForWo(woId) {

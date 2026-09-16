@@ -26,6 +26,7 @@
 # Every record is test-only (T24/t24-prefixed); the Frappe test framework rolls
 # the run back. The two real warehouses are never touched.
 
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -39,8 +40,10 @@ from erpnext.manufacturing.doctype.work_order.work_order import (
 )
 from erpnext.stock.doctype.batch.batch import get_batch_qty
 
+from production_app.api import handover
 from production_app.api.handover import (
     _item_stock,
+    bulk_handover_item,
     cancel_request,
     create_request,
     handover_board,
@@ -1182,3 +1185,799 @@ class TestHandoverActions(IntegrationTestCase):
 			warehouse_defaults_save(
 				handover_warehouse=self.target_wh, handover_source_warehouse=prior
 			)
+
+	# ------------- T38. bulk_handover_item: skema ketat + dispatch boardless
+
+	def test_t38_bulk_schema_rejects_before_mutation(self):
+		"""Skema satu-entry ketat (spec §7.2): aksi tak dikenal, entry bukan
+		objek, kunci hilang/kosong/bukan teks, kunci asing — semuanya ditolak
+		SEBELUM mutasi apa pun (0 MR terikat pada WO)."""
+		wo, _ = self._lot_ready(50)
+		cases = [
+			("aksi tak dikenal", "unknown_action", {"work_order": wo.name}),
+			("aksi bukan teks", 123, {"work_order": wo.name}),
+			("entry bukan objek", "create_request", [wo.name]),
+			("entry null", "create_request", None),
+			("kunci hilang", "create_request", {}),
+			("referensi kosong", "create_request", {"work_order": "   "}),
+			("referensi bukan teks", "create_request", {"work_order": 50}),
+			("kunci asing", "create_request", {"work_order": wo.name, "qty": 5}),
+			("cancel tanpa kunci", "cancel_request", {}),
+			("send referensi kosong", "send_handover", {"material_request": ""}),
+			(
+				"verify tanpa box_1",
+				"save_post_packing",
+				{"material_request": "MAT-MR-X", "box_2": 1},
+			),
+			(
+				"verify tanpa box_2",
+				"save_post_packing",
+				{"material_request": "MAT-MR-X", "box_1": 1},
+			),
+			(
+				"verify kunci asing",
+				"save_post_packing",
+				{"material_request": "MAT-MR-X", "box_1": 1, "box_2": 2, "good": 3},
+			),
+		]
+		frappe.set_user(self.gudang)  # error skema mendahului gerbang peran
+		try:
+			for label, action, entry in cases:
+				with self.subTest(label):
+					with self.assertRaises(frappe.ValidationError):
+						bulk_handover_item(action, entry)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(self._bound_mr_count(wo.name), 0)  # nol mutasi
+
+	def test_t38_bulk_success_paths_boardless(self):
+		"""Empat jalur sukses bulk mengembalikan payload aksi persis minus
+		board; _build_board di-patch meledak — bulk tidak pernah membangunnya
+		dan tidak pernah menelan exception aksi."""
+		wo, batch = self._lot_ready(60)
+
+		def board_boom():
+			raise AssertionError("bulk_handover_item memanggil _build_board")
+
+		try:
+			with patch(
+				"production_app.api.handover._build_board", side_effect=board_boom
+			):
+				frappe.set_user(self.gudang)
+				created = bulk_handover_item("create_request", {"work_order": wo.name})
+				self.assertEqual(set(created), {"ok", "material_request", "qty"})
+				self.assertEqual(flt(created["qty"]), 60)
+				mr_name = created["material_request"]
+
+				cancelled = bulk_handover_item(
+					"cancel_request", {"material_request": mr_name}
+				)
+				self.assertEqual(set(cancelled), {"ok", "material_request"})
+				self.assertEqual(
+					frappe.db.get_value("Material Request", mr_name, "docstatus"), 2
+				)
+
+				recreated = bulk_handover_item(
+					"create_request", {"work_order": wo.name}
+				)  # cancel melepas reservasi -> request kedua sah
+				mr2 = recreated["material_request"]
+
+				frappe.set_user(self.prod)
+				verified = bulk_handover_item(
+					"save_post_packing",
+					{"material_request": mr2, "box_1": 12.5, "box_2": 8.25},
+				)
+				self.assertEqual(
+					set(verified), {"ok", "material_request", "box_1", "box_2"}
+				)
+				self.assertEqual(flt(verified["box_1"]), 12.5)
+				self.assertEqual(flt(verified["box_2"]), 8.25)
+
+				sent = bulk_handover_item("send_handover", {"material_request": mr2})
+				self.assertEqual(
+					set(sent),
+					{"ok", "material_request", "stock_entry", "batch", "qty"},
+				)
+				self.assertEqual(flt(sent["qty"]), 60)
+				self.assertEqual(sent["batch"], batch)
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_t38_legacy_endpoints_keep_exact_payload_with_one_board(self):
+		"""Regresi: endpoint whitelisted lama mempertahankan field respons persis
+		termasuk SATU board penuh — ekstraksi helper tidak mengubah bentuknya."""
+		wo, _ = self._lot_ready(70)
+		created = self._request(wo)
+		self.assertEqual(set(created), {"ok", "material_request", "qty", "board"})
+		self.assertEqual(
+			set(created["board"]),
+			{"target_warehouse", "source_warehouse", "roles", "lots", "requests"},
+		)
+		mr = frappe.get_doc("Material Request", created["material_request"])
+
+		verified = self._postpack(mr, box_1=3.5, box_2=1.25)
+		self.assertEqual(
+			set(verified), {"ok", "material_request", "box_1", "box_2", "board"}
+		)
+
+		sent = self._send(mr)
+		self.assertEqual(
+			set(sent),
+			{"ok", "material_request", "stock_entry", "batch", "qty", "board"},
+		)
+
+		# bentuk cancel pada request yang belum diverifikasi (WO kedua)
+		wo2, _ = self._lot_ready(40)
+		mr2 = frappe.get_doc("Material Request", self._request(wo2)["material_request"])
+		frappe.set_user(self.gudang)
+		try:
+			cancelled = cancel_request(mr2.name)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(set(cancelled), {"ok", "material_request", "board"})
+
+	def test_t38_bulk_role_parity_gudang_produksi_dual_bare(self):
+		"""Paritas peran bulk = gerbang lama: gudang hanya create/cancel;
+		produksi hanya verify/send; dual-role loop penuh satu akun; bare user
+		ditolak semuanya dengan nol mutasi."""
+		both = self._make_user(
+			f"t38.both.{random_string(4).lower()}@prodapp.example.com",
+			["Stock User", "Manufacturing User"],
+		)
+		wo, _ = self._lot_ready(80)
+		mr = frappe.get_doc("Material Request", self._request(wo)["material_request"])
+
+		# gudang: verify/send ditolak (exception aksi tidak ditelan bulk)
+		frappe.set_user(self.gudang)
+		try:
+			with self.assertRaises(frappe.PermissionError):
+				bulk_handover_item(
+					"save_post_packing",
+					{"material_request": mr.name, "box_1": 1, "box_2": 1},
+				)
+			with self.assertRaises(frappe.PermissionError):
+				bulk_handover_item("send_handover", {"material_request": mr.name})
+		finally:
+			frappe.set_user("Administrator")
+		self.assertFalse(
+			frappe.db.get_value("Material Request", mr.name, "custom_postpacking_confirmed")
+		)
+
+		# produksi: create/cancel ditolak
+		frappe.set_user(self.prod)
+		try:
+			with self.assertRaises(frappe.PermissionError):
+				bulk_handover_item("create_request", {"work_order": wo.name})
+			with self.assertRaises(frappe.PermissionError):
+				bulk_handover_item("cancel_request", {"material_request": mr.name})
+		finally:
+			frappe.set_user("Administrator")
+
+		# bare: semuanya ditolak, nol tulis
+		frappe.set_user(self.bare)
+		try:
+			for action, entry in (
+				("create_request", {"work_order": wo.name}),
+				("cancel_request", {"material_request": mr.name}),
+				(
+					"save_post_packing",
+					{"material_request": mr.name, "box_1": None, "box_2": None},
+				),
+				("send_handover", {"material_request": mr.name}),
+			):
+				with self.assertRaises(frappe.PermissionError):
+					bulk_handover_item(action, entry)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(self._bound_mr_count(wo.name), 1)  # hanya request asli
+
+		# dual-role: satu akun, loop penuh lewat bulk
+		wo2, batch2 = self._lot_ready(40)
+		wo3, _ = self._lot_ready(30)
+		frappe.set_user(both)
+		try:
+			res = bulk_handover_item("create_request", {"work_order": wo2.name})
+			mr2 = frappe.get_doc("Material Request", res["material_request"])
+			bulk_handover_item(
+				"save_post_packing", {"material_request": mr2.name, "box_1": 2, "box_2": 1}
+			)
+			sent = bulk_handover_item("send_handover", {"material_request": mr2.name})
+			self.assertEqual(flt(sent["qty"]), 40)
+			self.assertEqual(sent["batch"], batch2)
+
+			res3 = bulk_handover_item("create_request", {"work_order": wo3.name})
+			cancelled = bulk_handover_item(
+				"cancel_request", {"material_request": res3["material_request"]}
+			)
+			self.assertTrue(cancelled["ok"])
+			self.assertEqual(
+				frappe.db.get_value("Material Request", res3["material_request"], "docstatus"),
+				2,
+			)
+		finally:
+			frappe.set_user("Administrator")
+
+	# ------------- T39. spec §6.1/§6.2: invariant MR, urutan lock, balapan
+
+	def _trace_locks(self):
+		"""Instrumentasi urutan lock §6.2 (deterministik, bukan paralel nyata):
+		merekam pre-read binding dan SETIAP row lock for_update dalam urutan
+		pemanggilan. IntegrationTestCase berjalan satu koneksi/satu transaksi,
+		jadi dua transaksi paralel tidak bisa dibuktikan di sini — yang
+		dibuktikan adalah (a) urutan lock pada kode dan (b) recheck terjadi
+		SETELAH lock (lihat laporan tugas untuk batas buktinya)."""
+		events = []
+		real_binding, real_gv = handover._handover_binding, frappe.db.get_value
+
+		def traced_binding(material_request):
+			events.append("binding")
+			return real_binding(material_request)
+
+		def traced_gv(doctype, *args, **kwargs):
+			if kwargs.get("for_update"):
+				events.append(f"lock:{doctype}")
+			return real_gv(doctype, *args, **kwargs)
+
+		stack = ExitStack()
+		stack.enter_context(
+			patch.object(handover, "_handover_binding", side_effect=traced_binding, create=True)
+		)
+		stack.enter_context(patch.object(frappe.db, "get_value", side_effect=traced_gv))
+		return events, stack
+
+	@staticmethod
+	def _our_locks(events):
+		"""Hanya event §6.2 (binding + lock WO/MR/Item), abaikan lock native
+		lain agar asersi urutan tidak rapuh terhadap noise internal ERPNext."""
+		return [
+			e
+			for e in events
+			if e == "binding" or e.split(":", 1)[-1] in ("Work Order", "Material Request", "Item")
+		]
+
+	def test_t39_malformed_mr_refused_zero_writes(self):
+		"""§6.1 loader: salah tipe, docstatus 0, dua baris (satu/dua WO),
+		binding kosong, qty nol — cancel/verify/send semuanya menolak dengan
+		NOL tulis (docstatus utuh, belum dikonfirmasi, tanpa SE)."""
+		wo, _ = self._lot_ready(50)
+		wo2, _ = self._lot_ready(30)
+
+		def desk(mr_type="Material Transfer", submit=True, second_wo=None):
+			items = [
+				{
+					"item_code": wo.production_item,
+					"qty": 10,
+					"uom": self.uom,
+					"from_warehouse": self.cold_wh,
+					"warehouse": self.target_wh,
+					"schedule_date": add_days(now(), 1),
+					"custom_work_order": wo.name,
+				}
+			]
+			if second_wo:
+				items.append(
+					{
+						"item_code": wo2.production_item,
+						"qty": 5,
+						"uom": self.uom,
+						"from_warehouse": self.cold_wh,
+						"warehouse": self.target_wh,
+						"schedule_date": add_days(now(), 1),
+						"custom_work_order": second_wo,
+					}
+				)
+			mr = frappe.get_doc(
+				{
+					"doctype": "Material Request",
+					"material_request_type": mr_type,
+					"company": self.company,
+					"transaction_date": now(),
+					"schedule_date": add_days(now(), 1),
+					"set_from_warehouse": self.cold_wh,
+					"set_warehouse": self.target_wh,
+					"items": items,
+				}
+			)
+			mr.insert()
+			if submit:
+				mr.submit()
+			return mr
+
+		purchase = desk(mr_type="Purchase")
+		draft = desk(submit=False)
+		twin = desk(second_wo=wo.name)  # dua baris, SATU WO
+		mixed = desk(second_wo=wo2.name)  # dua baris, DUA WO (pre-read menolak)
+		blank = desk()
+		frappe.db.set_value("Material Request Item", blank.items[0].name, "custom_work_order", "")
+		zero = desk()
+		frappe.db.set_value(
+			"Material Request Item", zero.items[0].name, {"qty": 0, "stock_qty": 0}
+		)
+
+		for mr in (purchase, draft, twin, mixed, blank, zero):
+			with self.subTest(mr=mr.name):
+				frappe.set_user(self.gudang)
+				try:
+					with self.assertRaises(frappe.ValidationError):
+						cancel_request(mr.name)
+				finally:
+					frappe.set_user("Administrator")
+				frappe.set_user(self.prod)
+				try:
+					with self.assertRaises(frappe.ValidationError):
+						save_post_packing(mr.name, box_1=1, box_2=1)
+					with self.assertRaises(frappe.ValidationError):
+						send_handover(mr.name)
+				finally:
+					frappe.set_user("Administrator")
+
+		# NOL tulis dari ketiga aksi pada semua kasus malformed
+		for mr in (purchase, draft, twin, mixed, blank, zero):
+			with self.subTest(mr=mr.name):
+				self.assertEqual(
+					frappe.db.get_value("Material Request", mr.name, "docstatus"),
+					mr.docstatus,
+				)
+				self.assertFalse(
+					frappe.db.get_value("Material Request", mr.name, "custom_postpacking_confirmed")
+				)
+				self.assertEqual(
+					len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})),
+					0,
+				)
+
+	def test_t39_send_refuses_inconsistent_or_missing_route_zero_writes(self):
+		"""§6.1 rute (untuk aksi yang memindah stok): asal baris ≠ header
+		ditolak; asal/tujuan kosong total ditolak — NOL tulis; cancel TETAP sah
+		pada MR ber-rute rusak (rute bukan prasyarat cancel)."""
+		wo, _ = self._lot_ready(40)
+
+		# (a) baris vs header gudang asal tidak konsisten
+		mr1 = self._desk_mr(wo.name, wo.production_item, 10)
+		frappe.db.set_value("Material Request Item", mr1.items[0].name, "from_warehouse", self.src_wh)
+		frappe.db.set_value("Material Request", mr1.name, "custom_postpacking_confirmed", 1)
+
+		# (b) asal hilang di baris dan header
+		mr2 = self._desk_mr(wo.name, wo.production_item, 10)
+		frappe.db.set_value("Material Request Item", mr2.items[0].name, "from_warehouse", None)
+		frappe.db.set_value(
+			"Material Request", mr2.name, {"set_from_warehouse": None, "custom_postpacking_confirmed": 1}
+		)
+
+		# (c) tujuan hilang di baris dan header (tidak dikonfirmasi: loader rute
+		# berjalan SEBELUM gerbang konfirmasi, jadi pesannya tetap soal rute)
+		mr3 = self._desk_mr(wo.name, wo.production_item, 10)
+		frappe.db.set_value("Material Request Item", mr3.items[0].name, "warehouse", None)
+		frappe.db.set_value("Material Request", mr3.name, "set_warehouse", None)
+
+		frappe.set_user(self.prod)
+		try:
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				send_handover(mr1.name)
+			self.assertIn("berbeda", str(ctx.exception))
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				send_handover(mr2.name)
+			self.assertIn("rute", str(ctx.exception))
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				send_handover(mr3.name)
+			self.assertIn("rute", str(ctx.exception))
+		finally:
+			frappe.set_user("Administrator")
+
+		for mr in (mr1, mr2, mr3):  # NOL tulis
+			self.assertEqual(
+				len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})),
+				0,
+			)
+			self.assertEqual(frappe.db.get_value("Material Request", mr.name, "docstatus"), 1)
+
+		# lingkup aksi: cancel tidak butuh rute — MR (c) tetap bisa dibatalkan
+		frappe.set_user(self.gudang)
+		try:
+			cancel_request(mr3.name)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(frappe.db.get_value("Material Request", mr3.name, "docstatus"), 2)
+
+	def test_t39_binding_rebind_race_refused_zero_writes(self):
+		"""Binding berubah di bawah tangan (simulasi deterministik: pre-read
+		mengembalikan WO lain) — ketiga aksi menolak dengan NOL tulis, bukan
+		memutasi MR milik WO pertama."""
+		wo, _ = self._lot_ready(50)
+		wo2, _ = self._lot_ready(30)
+		mr = self._desk_mr(wo.name, wo.production_item, 20)
+		frappe.db.set_value("Material Request", mr.name, "custom_postpacking_confirmed", 1)
+
+		with patch.object(handover, "_handover_binding", return_value=wo2.name):
+			frappe.set_user(self.gudang)
+			try:
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					cancel_request(mr.name)
+				self.assertIn("terikat", str(ctx.exception))
+			finally:
+				frappe.set_user("Administrator")
+			frappe.set_user(self.prod)
+			try:
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					save_post_packing(mr.name, box_1=1, box_2=1)
+				self.assertIn("terikat", str(ctx.exception))
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					send_handover(mr.name)
+				self.assertIn("terikat", str(ctx.exception))
+			finally:
+				frappe.set_user("Administrator")
+
+		self.assertEqual(frappe.db.get_value("Material Request", mr.name, "docstatus"), 1)
+		self.assertTrue(
+			frappe.db.get_value("Material Request", mr.name, "custom_postpacking_confirmed")
+		)
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})),
+			0,
+		)
+
+	def test_t39_send_refuses_stopped_mr_zero_writes(self):
+		"""Prasyarat lane kirim: MR berstatus Stopped ditolak (recheck di bawah
+		lock), NOL tulis."""
+		wo, _ = self._lot_ready(40)
+		mr = frappe.get_doc("Material Request", self._request(wo)["material_request"])
+		self._postpack(mr, box_1=1)
+		frappe.db.set_value("Material Request", mr.name, "status", "Stopped")
+
+		frappe.set_user(self.prod)
+		try:
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				send_handover(mr.name)
+			self.assertIn("Stopped", str(ctx.exception))
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})),
+			0,
+		)
+
+	def test_t39_race_duplicate_create_and_send_batch_and_batchless(self):
+		"""Balapan (interleaving deterministik: aktor pertama commit utuh,
+		aktor kedua recheck di bawah lock): create kedua untuk WO yang sama
+		ditolak NOL tulis; send kedua ditolak — tepat satu SE terkirim.
+		Dibuktikan untuk pool berbatch dan batchless."""
+		# batch
+		wo, batch = self._lot_ready(60)
+		first = self._request(wo)
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			self._request(wo)
+		self.assertIn("sudah punya permintaan aktif", str(ctx.exception))
+		self.assertEqual(self._bound_mr_count(wo.name), 1)
+		mr = frappe.get_doc("Material Request", first["material_request"])
+		self._postpack(mr, box_1=1)
+		self._send(mr)
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			self._send(mr)
+		self.assertIn("Pengiriman duplikat", str(ctx.exception))
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name, "docstatus": 1})),
+			1,
+		)
+
+		# batchless (pool item-level)
+		wonb = self._make_wo(20, item=self.fg_nb)
+		self._transfer(wonb)
+		self._manufacture(wonb, 20)
+		first_nb = self._request(wonb)
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			self._request(wonb)
+		self.assertIn("sudah punya permintaan aktif", str(ctx.exception))
+		mr_nb = frappe.get_doc("Material Request", first_nb["material_request"])
+		self._postpack(mr_nb, box_1=1)
+		res = self._send(mr_nb)
+		self.assertIsNone(res["batch"])
+		with self.assertRaises(frappe.ValidationError):
+			self._send(mr_nb)
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr_nb.name, "docstatus": 1})),
+			1,
+		)
+
+	def test_t39_race_verify_vs_cancel_then_send_vs_cancel(self):
+		"""Balapan existing-MR (aktor pertama commit utuh, aktor kedua recheck
+		di bawah lock): verify menang -> cancel ditolak; send menang -> cancel
+		ditolak; kontrol: request segar yang belum diverifikasi tetap sah
+		dibatalkan."""
+		wo, _ = self._lot_ready(50)
+		mr = frappe.get_doc("Material Request", self._request(wo)["material_request"])
+
+		# verify menang lebih dulu, cancel belakangan -> tolak
+		self._postpack(mr, box_1=2)
+		frappe.set_user(self.gudang)
+		try:
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				cancel_request(mr.name)
+			self.assertIn("sudah diverifikasi", str(ctx.exception))
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(frappe.db.get_value("Material Request", mr.name, "docstatus"), 1)
+
+		# send menang, cancel belakangan -> tolak (gerbang konfirmasi berjalan
+		# sebelum gerbang terkirim, jadi pesannya "sudah diverifikasi")
+		self._send(mr)
+		frappe.set_user(self.gudang)
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				cancel_request(mr.name)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(frappe.db.get_value("Material Request", mr.name, "docstatus"), 1)
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name, "docstatus": 1})),
+			1,
+		)
+
+		# kontrol: batal pada request segar (pra-verifikasi) tetap sah
+		wo2, _ = self._lot_ready(30)
+		mr2 = frappe.get_doc("Material Request", self._request(wo2)["material_request"])
+		frappe.set_user(self.gudang)
+		try:
+			result = cancel_request(mr2.name)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertTrue(result["ok"])
+		self.assertEqual(frappe.db.get_value("Material Request", mr2.name, "docstatus"), 2)
+
+	def test_t39_lock_order_create_wo_then_item_batchless_only(self):
+		"""§6.2 create: lock Work Order duluan; Item HANYA saat batchless; tanpa
+		lock Material Request (duplikat aktif direcheck di bawah lock WO)."""
+		wob, _ = self._lot_ready(20)
+		events, cms = self._trace_locks()
+		with cms:
+			self._request(wob)
+		self.assertEqual(self._our_locks(events), ["lock:Work Order"])
+
+		wonb = self._make_wo(30, item=self.fg_nb)
+		self._transfer(wonb)
+		self._manufacture(wonb, 30)
+		events, cms = self._trace_locks()
+		with cms:
+			self._request(wonb)
+		self.assertEqual(self._our_locks(events), ["lock:Work Order", "lock:Item"])
+
+	def test_t39_lock_order_existing_mr_actions_binding_wo_mr_item(self):
+		"""§6.2 aksi MR lama: pre-read binding -> lock WO -> lock MR ->
+		(untuk send batchless) lock Item; tidak pernah MR dulu lalu WO."""
+		wonb = self._make_wo(40, item=self.fg_nb)
+		self._transfer(wonb)
+		self._manufacture(wonb, 40)
+		mr_nb = frappe.get_doc("Material Request", self._request(wonb)["material_request"])
+		self._postpack(mr_nb, box_1=1)  # di luar trace
+
+		events, cms = self._trace_locks()
+		with cms:
+			res = self._send(mr_nb)  # batchless: kirim sukses
+		self.assertIsNone(res["batch"])
+		self.assertEqual(
+			self._our_locks(events),
+			["binding", "lock:Work Order", "lock:Material Request", "lock:Item"],
+		)
+
+		# send berbatch: tanpa lock Item
+		wob, _ = self._lot_ready(30)
+		mr_b = frappe.get_doc("Material Request", self._request(wob)["material_request"])
+		self._postpack(mr_b, box_1=1)
+		events, cms = self._trace_locks()
+		with cms:
+			self._send(mr_b)
+		self.assertEqual(
+			self._our_locks(events),
+			["binding", "lock:Work Order", "lock:Material Request"],
+		)
+
+		# verify: binding -> WO -> MR (tanpa Item)
+		wo3, _ = self._lot_ready(20)
+		mr3 = frappe.get_doc("Material Request", self._request(wo3)["material_request"])
+		events, cms = self._trace_locks()
+		with cms:
+			self._postpack(mr3, box_1=1)
+		self.assertEqual(
+			self._our_locks(events),
+			["binding", "lock:Work Order", "lock:Material Request"],
+		)
+
+		# cancel: binding -> WO -> MR (mr3 sudah terverifikasi: penolakan pun
+		# terjadi di bawah lock yang sama)
+		events, cms = self._trace_locks()
+		with cms:
+			frappe.set_user(self.gudang)
+			try:
+				with self.assertRaises(frappe.ValidationError):
+					cancel_request(mr3.name)
+			finally:
+				frappe.set_user("Administrator")
+		self.assertEqual(
+			self._our_locks(events),
+			["binding", "lock:Work Order", "lock:Material Request"],
+		)
+
+	def test_t39_batchless_native_failure_rolls_back_zero_partial(self):
+		"""Rollback native (batchless): pool habis di antara pre-check dan
+		submit (interleaving deterministik via seam builder) — submit native
+		gagal, SE sempat ter-insert, lalu NOL dokumen parsial bertahan di
+		batas transaksi; MR tak tersentuh."""
+		wonb = self._make_wo(40, item=self.fg_nb)
+		self._transfer(wonb)
+		self._manufacture(wonb, 40)
+		mr = frappe.get_doc("Material Request", self._request(wonb)["material_request"])
+		self._postpack(mr, box_1=1)
+
+		real_make = handover.make_mr_stock_entry
+
+		def drain_then_build(mr_name):
+			template = real_make(mr_name)
+			pool = flt(_item_stock(self.fg_nb, self.cold_wh))
+			drain = frappe.get_doc(
+				{
+					"doctype": "Stock Entry",
+					"stock_entry_type": "Material Transfer",
+					"company": self.company,
+					"items": [
+						{
+							"item_code": self.fg_nb,
+							"qty": pool,
+							"basic_rate": 10,
+							"s_warehouse": self.cold_wh,
+							"t_warehouse": self.target_wh,
+							"use_serial_batch_fields": 0,
+						}
+					],
+				}
+			)
+			drain.insert()
+			drain.submit()
+			return template  # pre-check sudah lewat; submit native yang menolak
+
+		frappe.db.savepoint("t39_native")
+		try:
+			with patch.object(handover, "make_mr_stock_entry", side_effect=drain_then_build):
+				with self.assertRaises(frappe.ValidationError):
+					self._send(mr)
+			# upaya native sempat insert SE sebelum submit gagal (pre-rollback)
+			self.assertTrue(
+				frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})
+			)
+		finally:
+			frappe.db.rollback(save_point="t39_native")
+
+		# batas transaksi: NOL dokumen parsial
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})),
+			0,
+		)
+		mr.reload()
+		self.assertEqual(mr.docstatus, 1)
+		self.assertTrue(mr.custom_postpacking_confirmed)
+
+	# ------ T39-fix1 (I1): gerbang keputusan memakai locking/current read
+
+	def _stale_snapshot_mr(self, mr_name, **overrides):
+		"""Simulasi snapshot REPEATABLE-READ: salinan in-memory MR dengan nilai
+		LAMA (keadaan yang dilihat transaksi sebelum kompetitor commit) — sama
+		sekali tidak menulis DB. Memalsukan apa yang plain read kembalikan."""
+		doc = frappe.get_doc("Material Request", mr_name)
+		for field, value in overrides.items():
+			setattr(doc, field, value)
+		return doc
+
+	def test_t39_fix1_decision_gates_read_current_not_pinned_snapshot(self):
+		"""I1: di REPEATABLE-READ, plain read mengembalikan snapshot basi yang
+		dipin sebelum lock wait. Gerbang docstatus/confirmed/status wajib
+		membaca current data (locking read): MR yang nyatanya sudah
+		diverifikasi + Stopped, atau sudah batal, tetap ditolak walau snapshot
+		mengaku sebaliknya — nol tulis."""
+		wo, _ = self._lot_ready(50)
+		mr = frappe.get_doc("Material Request", self._request(wo)["material_request"])
+		self._postpack(mr, box_1=1)  # DB nyata: confirmed=1
+		frappe.db.set_value("Material Request", mr.name, "status", "Stopped")
+		stale = self._stale_snapshot_mr(
+			mr.name, custom_postpacking_confirmed=0, status="Pending", docstatus=1
+		)
+		real_get_doc = frappe.get_doc
+
+		def pinned(*args, **kwargs):
+			if len(args) >= 2 and args[0] == "Material Request" and args[1] == mr.name:
+				return stale
+			return real_get_doc(*args, **kwargs)
+
+		with patch.object(frappe, "get_doc", side_effect=pinned):
+			frappe.set_user(self.gudang)
+			try:
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					cancel_request(mr.name)
+				self.assertIn("sudah diverifikasi", str(ctx.exception))
+			finally:
+				frappe.set_user("Administrator")
+			frappe.set_user(self.prod)
+			try:
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					save_post_packing(mr.name, box_1=1, box_2=1)
+				self.assertIn("sudah dikonfirmasi", str(ctx.exception))
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					send_handover(mr.name)
+				self.assertIn("Stopped", str(ctx.exception))
+			finally:
+				frappe.set_user("Administrator")
+
+		self.assertEqual(frappe.db.get_value("Material Request", mr.name, "docstatus"), 1)
+		self.assertTrue(
+			frappe.db.get_value("Material Request", mr.name, "custom_postpacking_confirmed")
+		)
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name})),
+			0,
+		)
+
+		# docstatus juga current: MR yang nyatanya sudah batal (docstatus 2)
+		# tetap ditolak walau snapshot mengaku masih aktif (docstatus 1)
+		wo2, _ = self._lot_ready(30)
+		mr2 = frappe.get_doc("Material Request", self._request(wo2)["material_request"])
+		frappe.get_doc("Material Request", mr2.name).cancel()  # batal via desk
+		stale2 = self._stale_snapshot_mr(
+			mr2.name, docstatus=1, custom_postpacking_confirmed=0
+		)
+
+		def pinned_cancelled(*args, **kwargs):
+			if len(args) >= 2 and args[0] == "Material Request" and args[1] == mr2.name:
+				return stale2
+			return real_get_doc(*args, **kwargs)
+
+		with patch.object(frappe, "get_doc", side_effect=pinned_cancelled):
+			frappe.set_user(self.gudang)
+			try:
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					cancel_request(mr2.name)
+				self.assertIn("tidak aktif", str(ctx.exception))
+			finally:
+				frappe.set_user("Administrator")
+			frappe.set_user(self.prod)
+			try:
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					save_post_packing(mr2.name, box_1=1, box_2=1)
+				self.assertIn("tidak aktif", str(ctx.exception))
+				with self.assertRaises(frappe.ValidationError) as ctx:
+					send_handover(mr2.name)
+				self.assertIn("tidak aktif", str(ctx.exception))
+			finally:
+				frappe.set_user("Administrator")
+		self.assertEqual(frappe.db.get_value("Material Request", mr2.name, "docstatus"), 2)
+
+	def test_t39_fix1_duplicate_send_check_is_locking_current_read(self):
+		"""I1: gerbang duplikat kirim wajib current read — _sent_se_by_mr
+		(plain, di-patch {} mensimulasikan snapshot yang tak melihat SE yang
+		di-commit kompetitor) tidak boleh dipakai memutuskan; kirim kedua
+		tetap ditolak dan tepat satu SE yang bertahan."""
+		wo, _ = self._lot_ready(50)
+		mr = frappe.get_doc("Material Request", self._request(wo)["material_request"])
+		self._postpack(mr, box_1=1)
+		self._send(mr)
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name, "docstatus": 1})),
+			1,
+		)
+		with patch.object(handover, "_sent_se_by_mr", return_value={}):
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				self._send(mr)
+			self.assertIn("Pengiriman duplikat", str(ctx.exception))
+		self.assertEqual(
+			len(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name, "docstatus": 1})),
+			1,
+		)
+
+	def test_t39_fix1_create_duplicate_check_is_locking_current_read(self):
+		"""I1: recheck duplikat create wajib current read — _requests (plain
+		lane builder, di-patch [] mensimulasikan snapshot pra-commit
+		kompetitor) tidak boleh dipakai memutuskan; create kedua tetap ditolak
+		dengan nol tulis tambahan."""
+		wo, _ = self._lot_ready(50)
+		self._request(wo)
+		with patch.object(handover, "_requests", return_value=[]):
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				self._request(wo)
+			self.assertIn("sudah punya permintaan aktif", str(ctx.exception))
+		self.assertEqual(self._bound_mr_count(wo.name), 1)
