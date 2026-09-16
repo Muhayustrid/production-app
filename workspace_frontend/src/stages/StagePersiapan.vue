@@ -26,9 +26,7 @@ const tried = ref(false)
 function validate() {
   errors.adonanKe = !(Number(form.adonanKe) >= 1) ? 'Isi nomor adonan (min. 1).' : ''
   errors.suhuAdonan = form.suhuAdonan === '' || form.suhuAdonan == null ? 'Isi suhu adonan.' : ''
-  errors.namaPenimbang = !String(form.namaPenimbang).trim() ? 'Isi nama penimbang.' : ''
-  errors.jumlahKru = !(Number(form.jumlahKru) >= 1) ? 'Isi jumlah kru (min. 1).' : ''
-  errors.leaderProduksi = !String(form.leaderProduksi).trim() ? 'Isi leader produksi.' : ''
+  // FU38: penimbang/jumlah kru/leader opsional — kosong = tidak dicatat
   return Object.values(errors).every((e) => !e)
 }
 
@@ -84,21 +82,18 @@ function submit() {
         <div class="grouptitle">Tim Produksi</div>
         <div class="form-grid cols3">
           <div class="field">
-            <label for="f-penimbang">Nama Penimbang <span class="req">*</span></label>
+            <label for="f-penimbang">Nama Penimbang</label>
             <input id="f-penimbang" v-model="form.namaPenimbang" class="input" type="text" :disabled="review" />
-            <div v-if="tried && errors.namaPenimbang" class="err">{{ errors.namaPenimbang }}</div>
           </div>
 
           <div class="field">
-            <label for="f-kru">Jumlah Kru <span class="req">*</span></label>
+            <label for="f-kru">Jumlah Kru</label>
             <input id="f-kru" v-model="form.jumlahKru" class="input" type="number" min="1" step="1" :disabled="review" />
-            <div v-if="tried && errors.jumlahKru" class="err">{{ errors.jumlahKru }}</div>
           </div>
 
           <div class="field">
-            <label for="f-leader">Leader Produksi <span class="req">*</span></label>
+            <label for="f-leader">Leader Produksi</label>
             <input id="f-leader" v-model="form.leaderProduksi" class="input" type="text" :disabled="review" />
-            <div v-if="tried && errors.leaderProduksi" class="err">{{ errors.leaderProduksi }}</div>
           </div>
         </div>
       </div>

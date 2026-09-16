@@ -3,8 +3,8 @@
 ## Current handoff
 
 - Project status: Work Order scope COMPLETE (T01–T20) + Scope Serah Terima COMPLETE (T21–T26). **Scope F: Post-Packing sebagai tahap Work Order — COMPLETE 14 Sep (sesi SDD subagent-driven, T27–T30 + fix wave + browser smoke)** per `POSTPACKING_PLAN.md`.
-- Last updated: 2026-09-16 (FU37 doc_events serah terima fail-safe)
-- Active task: none — **FU37 DONE**. Submit/cancel Stock Entry dan Material Request native tidak pernah lagi gagal karena mirror serah terima production_app: doc_events melewati sync saat metadata app belum termigrasi, dan kegagalan sync tak terduga dicatat ke Error Log tanpa dinaikkan.
+- Last updated: 2026-09-16 (FU38 penimbang/kru/leader/QC opsional)
+- Active task: none — **FU38 DONE**. Form tahap workspace tidak lagi mewajibkan Nama Penimbang, Jumlah Kru, Leader Produksi (Persiapan), QC Produksi (Pre-Packing), dan QC Packing (Post-Packing); metadata Custom Field di site memang sudah reqd=0.
 - Section F (pra-FU11): Tahap Post-Packing live di workspace (persiapan→material→operasi?→pre→**post**→finish→selesai); FG Manufacture = good postpacking (cap ≤ good pre, sisa server); satu-satunya writer postpacking WO = confirm_postpacking (mirror handover tinggal box); legacy in-flight jujur mendarat di post_packing (contoh nyata: MFG-WO-2026-03115 terlihat di lane Post-Packing). Bukti: 5 suite ×2 (45/10/5/9/12), HTTP loop T29+T30, browser smoke interaktif controller (panel→finish→Completed dgn SE FG 90/loss 10, kanban, mobile 390), residu 0. Bundle final `cf22df01…`.
 - Next task: STOP — pekerjaan lanjutan HANYA atas request baru. Kandidat bila diminta: redesign UI papan Serah Terima versi mockup 67fc9dd (dialog "Verifikasi Siap Kirim"); pesan Indonesia rapi utk jam invalid (observasi FU10). Catatan: operator perlu hard-refresh sekali (bundle `6b20fad7…`). Follow-up 9 DONE (chip Adonan ke kanban); Follow-up 10 DONE (Penimbang & QC Produksi jadi teks nama).
 - Process note (sesi F): SDD subagent-driven dengan reviewer independen per task; brief/report/review di `.superpowers/sdd/POSTPACKING_PLAN/`; TANPA git commit (aturan ZCODE_PROMPT.md) — diff per-task dilacak via snapshot tree di ledger; browser interaktif hanya oleh controller.
@@ -123,6 +123,15 @@ Server API (one module `production_app/api/work_order.py`, whitelist only, sessi
 - T05 field needs: add `custom_box_1/2` (Float kg, allow_on_submit), `custom_prepacking_confirmed` (Check, allow_on_submit); enable allow_on_submit for `custom_nama_penimbang`, `custom_jumlah_kru`, `custom_leader_produksi`, `custom_qc_produksi`; migrate `custom_leader_produksi` Int→Data preserving values as text.
 
 ## Work log
+
+### 2026-09-16 — FU38: penimbang/kru/leader/QC tidak wajib di form tahap — DONE
+
+- Diagnosis (screenshot user: asterisk merah di "Tim Produksi" form Work Order): validasi wajib KEEMPAT-lima field ini murni frontend SPA — metadata site sudah `reqd=0` untuk `custom_nama_penimbang/jumlah_kru/leader_produksi/qc_produksi/qc_packing` (queri `tabCustom Field` langsung; tidak ada Property Setter mandatory; 3 Client Script Work Order aktif tidak menyentuh reqd), dan validasi server `_validate_prep_values`/`_validate_prepacking`/`_validate_postpacking` melewatkan nilai kosong. Pengunci: `validate()` StagePersiapan (3 error) + `metaValid` gate `canSave` di StagePacking/StagePostPacking + marker `*` label.
+- Changes (frontend only, tanpa perubahan server/metadata): `StagePersiapan.vue` — 3 baris error + 3 div error mati + 3 marker `*` dihapus (komentar FU38); `StagePacking.vue` — `metaValid` keluar dari `canSave` + marker `*` QC Produksi dihapus; `StagePostPacking.vue` — sama utk QC Packing. Perilaku simpan tak berubah: kosong dikirim ''/0 dan server melewatkan nilainya (jam tetap diisi server).
+- Verification: Vite build sukses; frontend tests **7/7 pass**; `git diff --check` bersih; bundle host/backend/frontend/HTTP(8081) hash identik `cfb817dfaadc526da97de4a26e849c9872477ba449c76d78e63a17ffb0b6e67a`; marker lama ("Isi nama penimbang", "Isi jumlah kru", "Isi leader produksi", "QC tetap wajib") = 0 di bundle. Tanpa restart backend (tidak ada kode Python berubah).
+- Remaining issue: operator perlu hard-refresh sekali (bundle baru). Good Qty (pre/post) TETAP wajib >0 — keputusan bisnis existing, tidak disentuh.
+- Next action: STOP — menunggu request berikutnya.
+- Rollback notes: revert 3 file stage + rebuild/resync bundle. Tidak ada metadata/data yang berubah.
 
 ### 2026-09-16 — FU37: doc_events serah terima fail-safe — DONE
 
