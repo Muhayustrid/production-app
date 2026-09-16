@@ -527,6 +527,22 @@ HANDOVER_STATUS_LABEL = {
 	LANE_KIRIM: "Terkirim",
 }
 
+# FU37: judul Error Log untuk kegagalan mirror doc_events (tidak dinaikkan).
+SYNC_ERROR_TITLE = "Production App: sinkronisasi status serah terima gagal"
+
+
+def _handover_sync_ready():
+	"""FU37 (insiden MAT-STE-2026-06920): doc_events mirror butuh metadata
+	app — MRI.custom_work_order + WO.custom_handover_status. Saat kode sudah
+	terpasang tetapi migrate belum dijalankan, keduanya absen dari meta dan
+	query mirror meledak "Unknown column" yang membatalkan submit Stock
+	Entry native. Mirror adalah data TURUNAN: kalau meta belum siap, sync
+	dilewati, bukan menggagalkan transaksi dokumen lain."""
+	return (
+		frappe.get_meta("Material Request Item").has_field("custom_work_order")
+		and frappe.get_meta("Work Order").has_field(HANDOVER_STATUS_FIELD)
+	)
+
 
 def _handover_lanes(wo_names):
 	"""FU23: lane serah terima paling maju per Work Order — SATU sumber derivasi
@@ -594,24 +610,47 @@ def sync_handover_status(wo_names):
 
 
 def sync_from_material_request(doc, method=None):
-	"""doc_events Material Request (submit/cancel/update) → WO terikat item."""
-	sync_handover_status(
-		[i.custom_work_order for i in (doc.items or []) if i.get("custom_work_order")]
-	)
+	"""doc_events Material Request (submit/cancel/update) → WO terikat item.
+	FU37 fail-safe: mirror tidak boleh menggagalkan transaksi MR native —
+	skip saat metadata app belum termigrasi; error lain (termasuk dari
+	pemeriksaan metadata itu sendiri) dicatat ke Error Log, tidak dinaikkan."""
+	try:
+		if not _handover_sync_ready():
+			return
+		sync_handover_status(
+			[i.custom_work_order for i in (doc.items or []) if i.get("custom_work_order")]
+		)
+	except Exception:
+		frappe.log_error(
+			title=SYNC_ERROR_TITLE,
+			message=f"Material Request {doc.name}\n\n{frappe.get_traceback()}",
+		)
 
 
 def sync_from_stock_entry(doc, method=None):
-	"""doc_events Stock Entry (submit/cancel) → MR terikat → WO terikat."""
-	mrs = sorted({d.material_request for d in (doc.items or []) if d.get("material_request")})
-	if not mrs:
-		return
-	sync_handover_status(frappe.get_all(
-		"Material Request Item",
-		filters={"parent": ("in", mrs), "custom_work_order": ("is", "set")},
-		pluck="custom_work_order",
-		distinct=True,
-		limit=0,
-	))
+	"""doc_events Stock Entry (submit/cancel) → MR terikat → WO terikat.
+	FU37 fail-safe: Stock Entry manual/reguler tidak pernah gagal karena
+	mirror serah terima — skip saat metadata app belum termigrasi; error
+	lain (termasuk dari pemeriksaan metadata itu sendiri) dicatat ke Error
+	Log, tidak dinaikkan."""
+	try:
+		if not _handover_sync_ready():
+			return
+		mrs = sorted({d.material_request for d in (doc.items or []) if d.get("material_request")})
+		if not mrs:
+			return
+		sync_handover_status(frappe.get_all(
+			"Material Request Item",
+			filters={"parent": ("in", mrs), "custom_work_order": ("is", "set")},
+			pluck="custom_work_order",
+			distinct=True,
+			limit=0,
+		))
+	except Exception:
+		frappe.log_error(
+			title=SYNC_ERROR_TITLE,
+			message=f"Stock Entry {doc.name}\n\n{frappe.get_traceback()}",
+		)
 
 
 def backfill_handover_status():

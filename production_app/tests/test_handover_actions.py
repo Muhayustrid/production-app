@@ -26,9 +26,11 @@
 # Every record is test-only (T24/t24-prefixed); the Frappe test framework rolls
 # the run back. The two real warehouses are never touched.
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import frappe
+from MySQLdb import OperationalError as SQLOperationalError
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, flt, now, random_string, today
 
@@ -44,6 +46,8 @@ from production_app.api.handover import (
     handover_board,
     save_post_packing,
     send_handover,
+    sync_from_material_request,
+    sync_from_stock_entry,
 )
 from production_app.api.work_order import finish, warehouse_defaults_save
 
@@ -986,6 +990,109 @@ class TestHandoverActions(IntegrationTestCase):
 		# desk SE cancel menurunkan state (SE on_cancel)
 		frappe.get_doc("Stock Entry", result["stock_entry"]).cancel()
 		self.assertEqual(status(wo.name), "Siap Kirim")
+
+	# --------------- FU37. doc_events fail-safe untuk transaksi native
+
+	def test_fu37_se_sync_skips_when_app_metadata_missing(self):
+		"""FU37 (insiden nyata MAT-STE-2026-06920): kode app terpasang tapi
+		migrate belum dijalankan -> kolom MRI.custom_work_order tidak ada ->
+		submit Stock Entry Material Transfer reguler mati OperationalError
+		1054. doc_events wajib memeriksa kesiapan metadata lebih dulu dan
+		melewati mirror (data turunan), tanpa query tabel apa pun."""
+		# SimpleNamespace: frappe._dict tidak bisa dipakai karena atribut
+		# `items` tertutup method dict.items bawaan.
+		se_doc = SimpleNamespace(
+			name="T24-SE-FU37",
+			items=[frappe._dict(material_request="MAT-MR-2026-00325")],
+		)
+		meta = MagicMock()
+		meta.has_field.return_value = False
+		with (
+			patch.object(frappe, "get_meta", return_value=meta),
+			patch.object(
+				frappe, "get_all",
+				side_effect=SQLOperationalError(
+					1054, "Unknown column 'custom_work_order' in 'SELECT'"
+				),
+			) as get_all,
+		):
+			sync_from_stock_entry(se_doc)  # tidak boleh raise
+		get_all.assert_not_called()
+
+	def test_fu37_mr_sync_skips_when_app_metadata_missing(self):
+		"""FU37 pasangan MR: dokumen yang masih membawa nilai lama (meta
+		stale/half-migrated) pun tidak boleh membuat submit/cancel Material
+		Request native gagal karena mirror serah terima."""
+		mr_doc = SimpleNamespace(
+			name="T24-MR-FU37",
+			items=[frappe._dict(custom_work_order="MFG-WO-2026-03115")],
+		)
+		meta = MagicMock()
+		meta.has_field.return_value = False
+		with (
+			patch.object(frappe, "get_meta", return_value=meta),
+			patch.object(
+				frappe, "get_all",
+				side_effect=SQLOperationalError(
+					1054, "Unknown column 'custom_work_order' in 'SELECT'"
+				),
+			) as get_all,
+		):
+			sync_from_material_request(mr_doc)  # tidak boleh raise
+		get_all.assert_not_called()
+
+	def test_fu37_sync_failure_is_logged_never_raises(self):
+		"""FU37 jaring pengaman: kegagalan sync tak terduga (di luar kasus
+		metadata) dicatat ke Error Log dan TIDAK dinaikkan — transaksi
+		SE/MR native tidak pernah dibatalkan oleh mirror production_app."""
+		se_doc = SimpleNamespace(
+			name="T24-SE-FU37B",
+			items=[frappe._dict(material_request="MAT-MR-2026-00325")],
+		)
+		mr_doc = SimpleNamespace(
+			name="T24-MR-FU37B",
+			items=[frappe._dict(custom_work_order="MFG-WO-2026-03115")],
+		)
+		with patch(
+			"production_app.api.handover.sync_handover_status",
+			side_effect=RuntimeError("boom fu37"),
+		):
+			sync_from_stock_entry(se_doc)  # tidak boleh raise
+			sync_from_material_request(mr_doc)  # tidak boleh raise
+		self.assertTrue(frappe.db.exists(
+			"Error Log",
+			{"method": "Production App: sinkronisasi status serah terima gagal"},
+		))
+
+	def test_fu37_sync_guard_failure_is_contained(self):
+		"""FU37 (review advisor): pemeriksaan kesiapan metadata itu sendiri
+		gagal (mis. cache meta rusak) — handler tetap menelan error, mencatat
+		ke Error Log, dan tidak mengganggu transaksi native."""
+		se_doc = SimpleNamespace(
+			name="T24-SE-FU37C",
+			items=[frappe._dict(material_request="MAT-MR-2026-00325")],
+		)
+		mr_doc = SimpleNamespace(
+			name="T24-MR-FU37C",
+			items=[frappe._dict(custom_work_order="MFG-WO-2026-03115")],
+		)
+		# Patch selektif: hanya meta dua doctype guard yang meledak —
+		# frappe.log_error sendiri memanggil get_meta("Error Log") dan itu
+		# harus tetap jalan supai Error Log benar-benar tertulis.
+		real_get_meta = frappe.get_meta
+
+		def meta_boom(doctype=None, *args, **kwargs):
+			if doctype in ("Material Request Item", "Work Order"):
+				raise RuntimeError("meta boom fu37")
+			return real_get_meta(doctype, *args, **kwargs)
+
+		with patch.object(frappe, "get_meta", side_effect=meta_boom):
+			sync_from_stock_entry(se_doc)  # tidak boleh raise
+			sync_from_material_request(mr_doc)  # tidak boleh raise
+		self.assertTrue(frappe.db.exists(
+			"Error Log",
+			{"method": "Production App: sinkronisasi status serah terima gagal"},
+		))
 
 	# ------------------- FU29. pre-check gudang rute + route_available board
 
