@@ -15,57 +15,61 @@ import frappe
 
 DOCTYPE = "Work Order"
 
+def _field(fieldname, label, fieldtype, insert_after, **extra):
+	return {
+		"fieldname": fieldname,
+		"label": label,
+		"fieldtype": fieldtype,
+		"insert_after": insert_after,
+		**extra,
+	}
+
+
+# Complete field contract used by api/work_order.py. New sites get these on
+# install; existing sites converge without moving their current form layout.
 WORKSPACE_FIELDS = [
-	# fieldname, label, fieldtype, insert_after, allow_on_submit, extra
-	{
-		"fieldname": "custom_box_1",
-		"label": "Box 1",
-		"fieldtype": "Float",
-		"insert_after": "custom_sisa_qty_prepacking",
-		"allow_on_submit": 1,
-		"non_negative": 0,
-		"description": "Berat Box 1 (kg) saat serah terima",
-	},
-	{
-		"fieldname": "custom_box_2",
-		"label": "Box 2",
-		"fieldtype": "Float",
-		"insert_after": "custom_box_1",
-		"allow_on_submit": 1,
-		"non_negative": 0,
-		"description": "Berat Box 2 (kg) saat serah terima",
-	},
-	{
-		"fieldname": "custom_prepacking_confirmed",
-		"label": "Pre-Packing Confirmed",
-		"fieldtype": "Check",
-		"insert_after": "custom_box_2",
-		"allow_on_submit": 1,
-		"print_hide": 1,
-		"description": "Marker: prepacking block was deliberately saved/confirmed",
-	},
-	{
-		"fieldname": "custom_postpacking_confirmed",
-		"label": "Post-Packing Confirmed",
-		"fieldtype": "Check",
-		"insert_after": "custom_qc_packing",
-		"allow_on_submit": 1,
-		"print_hide": 1,
-		"description": "Marker: postpacking block was deliberately saved/confirmed",
-	},
-	{
-		"fieldname": "custom_handover_status",
-		"label": "Status Serah Terima",
-		"fieldtype": "Select",
-		"options": "\nDiminta Gudang\nSiap Kirim\nTerkirim",
-		"insert_after": "custom_postpacking_confirmed",
-		"allow_on_submit": 1,
-		"read_only": 1,
-		"print_hide": 1,
-		"in_list_view": 1,
-		"in_standard_filter": 1,
-		"description": "Penanda serah terima barang jadi ke gudang — terisi OTOMATIS dari Material Request/Stock Entry (doc_events); kosong = belum diserahkan. Jangan ubah manual.",
-	},
+	_field("custom_item_name_information", "Item Name Information", "Data", "production_item", read_only=1),
+	_field("custom_qty_in_uom", "Qty in Pack", "Float", "qty"),
+	_field("custom_uom", "UOM", "Link", "custom_qty_in_uom", options="UOM", hidden=1, allow_on_submit=1),
+	_field("custom_conversion_factor", "Conversion Factor", "Float", "custom_uom", read_only=1, hidden=1),
+	_field("custom_column_break_fdsxk", "", "Column Break", "custom_conversion_factor"),
+	_field("custom_adonan_ke", "Adonan ke", "Data", "custom_column_break_fdsxk", allow_on_submit=1),
+	_field("custom_adonan", "Adonan", "Int", "custom_adonan_ke", hidden=1, allow_on_submit=1),
+	_field("custom_jam_adonan", "Jam Adonan", "Time", "custom_adonan", allow_on_submit=1),
+	_field("custom_suhu_adonan", "Suhu Adonan", "Float", "custom_jam_adonan", allow_on_submit=1),
+	_field("custom_nama_penimbang", "Nama Penimbang", "Data", "custom_suhu_adonan", options="", allow_on_submit=1),
+	_field("custom_detail_produksi", "Detail Produksi", "Section Break", "disassembled_qty"),
+	_field("custom_sebelum", "Sebelum (PCS)", "Column Break", "custom_detail_produksi"),
+	_field("custom_good_qty_prepacking", "Good Qty (Pre-Packing)", "Float", "custom_sebelum", allow_on_submit=1),
+	_field("custom_reject_qty_prepacking", "Reject Qty (Pre-Packing)", "Float", "custom_good_qty_prepacking", allow_on_submit=1),
+	_field("custom_trial_qty_prepacking", "Trial Qty (Pre-Packing)", "Float", "custom_reject_qty_prepacking", allow_on_submit=1),
+	_field("custom_sisa_qty_prepacking", "Sisa Qty (Pre-Packing)", "Float", "custom_trial_qty_prepacking", allow_on_submit=1),
+	_field("custom_column_break_khnwb", "Sesudah (PCS)", "Column Break", "custom_sisa_qty_prepacking"),
+	_field("custom_good_qty_postpacking", "Good Qty (Post-Packing)", "Float", "custom_column_break_khnwb", allow_on_submit=1),
+	_field("custom_reject_qty_postpacking", "Reject Qty (Post-Packing)", "Float", "custom_good_qty_postpacking", allow_on_submit=1),
+	_field("custom_trial_qty_postpacking", "Trial Qty (Post-Packing)", "Float", "custom_reject_qty_postpacking", allow_on_submit=1),
+	_field("custom_sisa_qty_postpacking", "Sisa Qty (Post-Packing)", "Float", "custom_trial_qty_postpacking", allow_on_submit=1),
+	_field("custom_section_break_b0phj", "", "Section Break", "custom_sisa_qty_postpacking"),
+	_field("custom_jam_pembekuan", "Jam Pembekuan", "Time", "custom_section_break_b0phj", allow_on_submit=1),
+	_field("custom_qc_produksi", "QC Produksi", "Data", "custom_jam_pembekuan", options="", allow_on_submit=1),
+	_field("custom_column_break_8rt2c", "", "Column Break", "custom_qc_produksi"),
+	_field("custom_jam_packing", "Jam Packing", "Time", "custom_column_break_8rt2c", allow_on_submit=1),
+	_field("custom_qc_packing", "QC Packing", "Data", "custom_jam_packing", options="", allow_on_submit=1),
+	_field("custom_detail_produksi_lain", "Detail Produksi Lain", "Section Break", "custom_qc_packing"),
+	_field("custom_jumlah_kru", "Jumlah Kru", "Int", "custom_detail_produksi_lain", allow_on_submit=1),
+	_field("custom_leader_produksi", "Leader Produksi", "Data", "custom_jumlah_kru", allow_on_submit=1),
+	_field("custom_box_1", "Box 1", "Float", "custom_leader_produksi", allow_on_submit=1, non_negative=0, description="Berat Box 1 (kg) saat serah terima"),
+	_field("custom_box_2", "Box 2", "Float", "custom_box_1", allow_on_submit=1, non_negative=0, description="Berat Box 2 (kg) saat serah terima"),
+	_field("custom_prepacking_confirmed", "Pre-Packing Confirmed", "Check", "custom_box_2", allow_on_submit=1, print_hide=1, description="Marker: prepacking block was deliberately saved/confirmed"),
+	_field("custom_postpacking_confirmed", "Post-Packing Confirmed", "Check", "custom_prepacking_confirmed", allow_on_submit=1, print_hide=1, description="Marker: postpacking block was deliberately saved/confirmed"),
+	_field("custom_handover_status", "Status Serah Terima", "Select", "custom_postpacking_confirmed", options="\nDiminta Gudang\nSiap Kirim\nTerkirim", allow_on_submit=1, read_only=1, print_hide=1, in_list_view=1, in_standard_filter=1, description="Penanda serah terima barang jadi ke gudang — terisi OTOMATIS dari Material Request/Stock Entry (doc_events); kosong = belum diserahkan. Jangan ubah manual."),
+]
+
+ITEM_FIELDS = [
+	_field("custom_default_uom_warehouse", "Default UOM", "Link", "stock_uom", options="UOM"),
+	_field("custom_default_source_warehouse", "Default Source Warehouse", "Link", "custom_default_uom_warehouse", options="Warehouse"),
+	_field("custom_default_wip_warehouse", "Default WIP Warehouse", "Link", "custom_default_source_warehouse", options="Warehouse"),
+	_field("custom_default_fg_warehouse", "Default FG Warehouse", "Link", "custom_default_wip_warehouse", options="Warehouse"),
 ]
 
 # FU30: the manual "Gudang Confirmed" checkbox is retired — Status Serah Terima
@@ -85,6 +89,10 @@ ALLOW_ON_SUBMIT_FIELDS = [
 LEADER_FIELDNAME = "custom_leader_produksi"
 
 SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "..", "snapshots")
+
+
+def _runtime_snapshot_path(filename):
+	return frappe.get_site_path("private", "files", "production_app_snapshots", filename)
 
 # Box 1/2 on Work Order AND Material Request: Float kg weights written at the
 # "Verifikasi Siap Kirim" step (T31 ruling R8). The FU7 text-identifier era
@@ -153,6 +161,8 @@ def _upsert_field(dt, spec):
 		changed = False
 		cf = frappe.get_doc("Custom Field", existing)
 		for key, value in spec.items():
+			if key == "insert_after":
+				continue
 			if cf.get(key) != value:
 				cf.db_set(key, value)
 				changed = True
@@ -161,6 +171,22 @@ def _upsert_field(dt, spec):
 	doc = frappe.get_doc({"doctype": "Custom Field", "dt": dt, **spec})
 	doc.insert()
 	return ("created", doc.name)
+
+
+def ensure_app_fields(create_only=False):
+	out = []
+	for doctype, specs in ((DOCTYPE, WORKSPACE_FIELDS), ("Item", ITEM_FIELDS)):
+		for spec in specs:
+			existing = frappe.db.get_value(
+				"Custom Field", {"dt": doctype, "fieldname": spec["fieldname"]}, "name"
+			)
+			if create_only and existing:
+				out.append(f"{doctype}.{spec['fieldname']}: existing")
+				continue
+			action, _name = _upsert_field(doctype, spec)
+			out.append(f"{doctype}.{spec['fieldname']}: {action}")
+		frappe.clear_cache(doctype=doctype)
+	return out
 
 
 # Production App warehouse defaults live on the native Manufacturing Settings
@@ -262,9 +288,9 @@ def ensure_batch_permission():
 	native Work Order submission creates the FG batch for batch-tracked items,
 	and the doctype's stock DocPerm only grants Item Manager — without this the
 	Persiapan submit fails for every operator. Minimal grant: read + create."""
-	snap_path = os.path.join(SNAPSHOT_DIR, "T18-batch-perms-pre.json")
+	snap_path = _runtime_snapshot_path("T18-batch-perms-pre.json")
 	if not os.path.exists(snap_path):
-		os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+		os.makedirs(os.path.dirname(snap_path), exist_ok=True)
 		with open(snap_path, "w") as f:
 			json.dump(
 				{
@@ -303,9 +329,9 @@ def ensure_stock_user_batch_read():
 	the board derivation and create_request read the FG Batch (get_batch_qty +
 	batch gate in _wo_lot_rows); native Batch DocPerms grant only Item/Stock
 	Manager. Minimal additive grant: read. Snapshot-first, idempotent."""
-	snap_path = os.path.join(SNAPSHOT_DIR, "stockuser-batch-read-pre.json")
+	snap_path = _runtime_snapshot_path("stockuser-batch-read-pre.json")
 	if not os.path.exists(snap_path):
-		os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+		os.makedirs(os.path.dirname(snap_path), exist_ok=True)
 		with open(snap_path, "w") as f:
 			json.dump(
 				{
@@ -793,36 +819,33 @@ def apply():
 		snapshot_t22()  # never change handover metadata without a pre-state
 	if not os.path.exists(POSTPACKING_SNAPSHOT):
 		snapshot_t27()  # never change postpacking metadata without a pre-state
+	result = {"fields": ensure_app_fields(create_only=True), "leader": "unchanged"}
 	if not os.path.exists(NAME_TEXT_SNAPSHOT):
-		snapshot_fu10()  # never change penimbang/qc metadata without a pre-state
+		snapshot_fu10()  # fields now exist; preserve any legacy values before conversion
 	if not os.path.exists(QC_PACKING_TEXT_SNAPSHOT):
 		snapshot_qc_packing_text()
-	result = {"fields": [], "leader": "unchanged"}
 
 	result["box_kg_fields"] = ensure_box_kg_fields()
 	result["name_text_fields"] = ensure_name_text_fields()
 	result["qc_packing_text"] = ensure_qc_packing_text_field()
 	result["gudang_confirmed"] = retire_gudang_confirmed_field()
-	for spec in WORKSPACE_FIELDS:
-		action, name = _upsert_field(DOCTYPE, spec)
-		result["fields"].append(f"{spec['fieldname']}: {action}")
+
+	leader = frappe.db.get_value(
+		"Custom Field", {"dt": DOCTYPE, "fieldname": LEADER_FIELDNAME}, ["name", "fieldtype"], as_dict=True
+	)
+	if leader and leader.fieldtype != "Data":
+		# Int -> Data: numbers stay numbers as text; nothing is invented.
+		frappe.db.set_value("Custom Field", leader.name, "fieldtype", "Data")
+		frappe.db.change_column_type(DOCTYPE, LEADER_FIELDNAME, "varchar(140)", nullable=True)
+		result["leader"] = f"migrated {leader.fieldtype} -> Data"
+
+	result["fields"] = ensure_app_fields()
 
 	for fieldname in ALLOW_ON_SUBMIT_FIELDS:
 		name = frappe.db.get_value("Custom Field", {"dt": DOCTYPE, "fieldname": fieldname}, "name")
 		if name and not frappe.db.get_value("Custom Field", name, "allow_on_submit"):
 			frappe.db.set_value("Custom Field", name, "allow_on_submit", 1)
 			result["fields"].append(f"{fieldname}: allow_on_submit enabled")
-
-	leader = frappe.db.get_value(
-		"Custom Field", {"dt": DOCTYPE, "fieldname": LEADER_FIELDNAME}, ["name", "fieldtype"], as_dict=True
-	)
-	if leader and leader.fieldtype == "Data":
-		pass  # already migrated
-	elif leader:
-		# Int -> Data: numbers stay numbers as text; nothing is invented.
-		frappe.db.set_value("Custom Field", leader.name, "fieldtype", "Data")
-		frappe.db.change_column_type(DOCTYPE, LEADER_FIELDNAME, "varchar(140)", nullable=True)
-		result["leader"] = "migrated Int -> Data"
 
 	ws = ensure_workspace()
 	result["workspace"] = ws["workspace"]
@@ -877,8 +900,6 @@ def ensure_workspace():
 		"content": content,
 		"shortcuts": shortcuts,
 	})
-	if not doc.parent_page:
-		doc.parent_page = "Modules"
 	doc.flags.ignore_permissions = 1
 	doc.insert()
 	frappe.db.commit()

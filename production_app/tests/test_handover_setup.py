@@ -16,12 +16,21 @@
 # Every record created here is test-only (users t22.* prefixed, warehouses/items
 # "T22 ..." prefixed); the Frappe test framework rolls each run back.
 
+from unittest.mock import MagicMock, patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, now, random_string
 
-from production_app import upgrade
-from production_app.api.work_order import warehouse_defaults, warehouse_defaults_save
+from production_app import hooks, upgrade
+from production_app.api.work_order import (
+	LIST_FIELDS,
+	POSTPACKING_FIELD_MAP,
+	PREPACKING_FIELD_MAP,
+	PREP_FIELD_MAP,
+	warehouse_defaults,
+	warehouse_defaults_save,
+)
 
 PREFIX = "T22"
 HANDOVER_ROLE = "Gudang Barang Jadi"
@@ -161,6 +170,58 @@ class TestHandoverSetup(IntegrationTestCase):
 		return mr
 
 	# ------------------------------------------------------- idempotency
+
+	def test_cloud_fresh_install_contract_is_self_contained(self):
+		required_wo = {
+			fieldname
+			for fieldname in (
+				*LIST_FIELDS,
+				*PREP_FIELD_MAP.values(),
+				*PREPACKING_FIELD_MAP.values(),
+				*POSTPACKING_FIELD_MAP.values(),
+			)
+			if fieldname.startswith("custom_")
+		}
+		migrated_wo = {spec["fieldname"] for spec in upgrade.WORKSPACE_FIELDS}
+		self.assertEqual(required_wo - migrated_wo, set())
+		required_layout = {
+			"custom_item_name_information",
+			"custom_column_break_fdsxk",
+			"custom_detail_produksi",
+			"custom_sebelum",
+			"custom_column_break_khnwb",
+			"custom_section_break_b0phj",
+			"custom_column_break_8rt2c",
+			"custom_detail_produksi_lain",
+		}
+		self.assertEqual(required_layout - migrated_wo, set())
+
+		required_item = {
+			"custom_default_uom_warehouse",
+			"custom_default_source_warehouse",
+			"custom_default_wip_warehouse",
+			"custom_default_fg_warehouse",
+		}
+		migrated_item = {spec["fieldname"] for spec in upgrade.ITEM_FIELDS}
+		self.assertEqual(required_item - migrated_item, set())
+		self.assertEqual(hooks.required_apps, ["erpnext"])
+		self.assertEqual(hooks.after_install, "production_app.upgrade.apply")
+
+		upgrade.apply()
+		wo_meta = frappe.get_meta("Work Order", cached=False)
+		item_meta = frappe.get_meta("Item", cached=False)
+		self.assertTrue(all(wo_meta.has_field(fieldname) for fieldname in required_wo))
+		self.assertTrue(all(item_meta.has_field(fieldname) for fieldname in required_item))
+
+	def test_cloud_workspace_creation_has_no_missing_parent_link(self):
+		doc = MagicMock()
+		doc.parent_page = ""
+		with (
+			patch.object(frappe.db, "get_value", return_value=None),
+			patch.object(frappe, "get_doc", return_value=doc),
+		):
+			upgrade.ensure_workspace()
+		self.assertFalse(doc.parent_page)
 
 	def test_t22_apply_idempotent_and_drift_reconciled(self):
 		"""apply() twice: no error; the second run reports every handover step

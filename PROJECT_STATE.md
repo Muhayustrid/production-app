@@ -3,8 +3,8 @@
 ## Current handoff
 
 - Project status: Work Order scope COMPLETE (T01–T20) + Scope Serah Terima COMPLETE (T21–T26). **Scope F: Post-Packing sebagai tahap Work Order — COMPLETE 14 Sep (sesi SDD subagent-driven, T27–T30 + fix wave + browser smoke)** per `POSTPACKING_PLAN.md`.
-- Last updated: 2026-09-16 (FU35 sembunyikan lane Operasi kosong)
-- Active task: none — **FU35 DONE**. Lane Operasi pada Kanban Work Order disembunyikan saat daftar tidak memuat WO yang memakai operasi; bila WO operasi muncul, lane otomatis tampil kembali. Backend dan detail Work Order tidak berubah.
+- Last updated: 2026-09-16 (FU36 self-contained Frappe Cloud install)
+- Active task: none — **FU36 DONE**. Fresh install Frappe Cloud kini membuat seluruh Custom Field Work Order/Item, metadata handover/settings, permissions, workspace, dan desktop entry otomatis; site lama mempertahankan data serta layout.
 - Section F (pra-FU11): Tahap Post-Packing live di workspace (persiapan→material→operasi?→pre→**post**→finish→selesai); FG Manufacture = good postpacking (cap ≤ good pre, sisa server); satu-satunya writer postpacking WO = confirm_postpacking (mirror handover tinggal box); legacy in-flight jujur mendarat di post_packing (contoh nyata: MFG-WO-2026-03115 terlihat di lane Post-Packing). Bukti: 5 suite ×2 (45/10/5/9/12), HTTP loop T29+T30, browser smoke interaktif controller (panel→finish→Completed dgn SE FG 90/loss 10, kanban, mobile 390), residu 0. Bundle final `cf22df01…`.
 - Next task: STOP — pekerjaan lanjutan HANYA atas request baru. Kandidat bila diminta: redesign UI papan Serah Terima versi mockup 67fc9dd (dialog "Verifikasi Siap Kirim"); pesan Indonesia rapi utk jam invalid (observasi FU10). Catatan: operator perlu hard-refresh sekali (bundle `6b20fad7…`). Follow-up 9 DONE (chip Adonan ke kanban); Follow-up 10 DONE (Penimbang & QC Produksi jadi teks nama).
 - Process note (sesi F): SDD subagent-driven dengan reviewer independen per task; brief/report/review di `.superpowers/sdd/POSTPACKING_PLAN/`; TANPA git commit (aturan ZCODE_PROMPT.md) — diff per-task dilacak via snapshot tree di ledger; browser interaktif hanya oleh controller.
@@ -123,6 +123,15 @@ Server API (one module `production_app/api/work_order.py`, whitelist only, sessi
 - T05 field needs: add `custom_box_1/2` (Float kg, allow_on_submit), `custom_prepacking_confirmed` (Check, allow_on_submit); enable allow_on_submit for `custom_nama_penimbang`, `custom_jumlah_kru`, `custom_leader_produksi`, `custom_qc_produksi`; migrate `custom_leader_produksi` Int→Data preserving values as text.
 
 ## Work log
+
+### 2026-09-16 — FU36: self-contained Frappe Cloud install — DONE
+
+- Diagnosis: site lokal sudah memiliki 35 Custom Field Work Order dari Customize Form, tetapi `upgrade.py` hanya membuat 5 field tambahan. `wo_list` langsung memilih field seperti `custom_uom`, `custom_conversion_factor`, `custom_qty_in_uom`, dan `custom_adonan_ke`, sehingga site Cloud baru gagal dengan unknown-column yang disamarkan frontend menjadi `Validasi ERPNext gagal`. Fresh install juga belum menjalankan upgrade (`after_migrate` saja), mendeklarasikan dependency ERPNext, dan create Workspace memakai parent `Modules` yang tidak ada pada stock v16.
+- Changes: `upgrade.py` kini memaketkan kontrak lengkap 35 field Work Order (24 field API + layout Desk), 4 default field Item, tetap memakai metadata MR/Manufacturing Settings/permission yang sudah ada; create-only pass mendahului migrasi tipe legacy, lalu full upsert tanpa mengubah `insert_after` field existing. `hooks.py` menambah `required_apps = ["erpnext"]` dan `after_install = production_app.upgrade.apply`. Workspace fresh dibuat tanpa parent link invalid. Snapshot permission runtime pindah ke site-private writable storage; snapshot yang membaca kolom custom dijalankan setelah field missing dibuat.
+- Verification: TDD RED membuktikan 22 field API WO hilang; RED berikutnya menangkap `required_apps` absent dan fallback `parent_page="Modules"`. GREEN final: 5 suite **47+10+7+13+18 = 95/95 OK**. Simulasi transactional menghapus tiga field contoh (WO Data, WO Float, Item Link), `apply()` membuat field+kolom kembali, lalu rollback. Existing-site apply ×2: 35/35 field contract, layout_changed `{}`, second run semua `unchanged`, `wo_list` mengembalikan data. Syntax compile host bersih; review independen menutup semua Critical/Important termasuk Desk layout parity.
+- Remaining issue: Cloud site yang sudah terlanjur install versi lama perlu deploy commit ini lalu menjalankan migrate/redeploy sekali; field akan dibuat otomatis. Tidak perlu Customize Form manual.
+- Next action: STOP — pekerjaan berikutnya hanya atas request baru.
+- Rollback notes: kode dapat direvert, tetapi Custom Field yang sudah dibuat bersifat additif dan jangan dihapus otomatis karena mungkin sudah berisi data.
 
 ### 2026-09-16 — FU35: sembunyikan lane Operasi kosong — DONE
 
