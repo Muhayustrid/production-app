@@ -1,0 +1,43 @@
+{
+  "name": "Production App",
+  "short_name": "Production",
+  "description": "Membantu proses produksi ERPNext agar input lebih mudah dan minim kesalahan.",
+  "lang": "id",
+  "dir": "ltr",
+  "id": "/production_workspace",
+  "start_url": "/production_workspace",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#1a56db",
+  "theme_color": "#1a56db",
+  "icons": [
+    {
+      "src": "/assets/production_app/images/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/production_app/images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/production_app/images/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Papan Serah Terima",
+      "url": "/production_workspace#/handover"
+    },
+    {
+      "name": "Work Order",
+      "url": "/production_workspace#/"
+    }
+  ]
+}
