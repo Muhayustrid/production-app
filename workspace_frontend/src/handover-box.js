@@ -1,18 +1,27 @@
-// Pure box-allocation helpers (T37). UX checks only — server validation
-// (production_app.api.handover.create_request, T35) remains authoritative.
+// Pure box-allocation helpers (T37; T39 universal unit). UX checks only —
+// server validation (production_app.api.handover.create_request, T35/T39)
+// remains authoritative.
 import { fmtNum } from './format.js'
 
-// Server default for the whole-Pack integral tolerance: handover._expected_pack_count
-// uses wo.precision('produced_qty') or 3 -> tolerance = 0.5 * 10^-precision.
+// Server default for the whole-count integral tolerance:
+// handover._expected_unit_count uses wo.precision('produced_qty') or 3
+// -> tolerance = 0.5 * 10^-precision.
 const DEFAULT_PRECISION = 3
 
-// Why the Pack count is unavailable: 'conversion' = missing/invalid Pack
-// conversion (displayUom/factor), 'fractional' = valid conversion but the
-// Work Order output does not form whole Packs, null = count available.
-export function packProblem(lot, precision = DEFAULT_PRECISION) {
-  if (!lot || lot.displayUom !== 'Pack') return 'conversion'
-  const factor = Number(lot.qtyInPack)
-  if (!Number.isFinite(factor) || factor <= 0) return 'conversion'
+// Why the count is unavailable: 'conversion' = the item's warehouse display
+// UOM is an alternate UOM without a valid conversion (qtyInPack), 'fractional'
+// = valid conversion but the Work Order output does not form whole units,
+// null = count available. The count unit itself is universal (T39): the
+// display UOM equals the stock UOM -> exact factor 1, no conversion needed.
+export function unitProblem(lot, precision = DEFAULT_PRECISION) {
+  if (!lot) return 'conversion'
+  const stock = lot.stockUom
+  const unit = lot.displayUom || stock
+  let factor = 1
+  if (unit !== stock) {
+    factor = Number(lot.qtyInPack)
+    if (!Number.isFinite(factor) || factor <= 0) return 'conversion'
+  }
   const raw = Number(lot.producedQty) / factor
   if (!Number.isFinite(raw) || raw < 0) return 'fractional'
   const tolerance = 0.5 * 10 ** -precision
@@ -20,19 +29,29 @@ export function packProblem(lot, precision = DEFAULT_PRECISION) {
   return null
 }
 
-// Whole Pack count the WO's full produced qty allocates into, or null when
-// packProblem says conversion/fractional — never a factor=1 fallback (mirrors
-// handover._expected_pack_count).
-export function expectedPacks(lot, precision = DEFAULT_PRECISION) {
-  if (packProblem(lot, precision)) return null
-  return Math.round(Number(lot.producedQty) / Number(lot.qtyInPack))
+// Whole count the WO's full produced qty allocates into, in the item's
+// warehouse display UOM, or null when unitProblem says conversion/fractional —
+// never a factor=1 fallback for a genuinely unconverted alternate UOM
+// (mirrors handover._expected_unit_count).
+export function expectedUnits(lot, precision = DEFAULT_PRECISION) {
+  if (unitProblem(lot, precision)) return null
+  const stock = lot.stockUom
+  const unit = lot.displayUom || stock
+  const factor = unit === stock ? 1 : Number(lot.qtyInPack)
+  return Math.round(Number(lot.producedQty) / factor)
 }
 
-// Mirror of handover._validate_box_allocation: Box 1 kg + Pack positive;
-// Box 2 exactly 0/0 or positive/positive; Pack sum must equal `expected`
+// The count unit label for the dialog inputs and card pills.
+export function unitLabel(lot) {
+  if (!lot) return ''
+  return lot.displayUom || lot.stockUom || ''
+}
+
+// Mirror of handover._validate_box_allocation: Box 1 kg + count positive;
+// Box 2 exactly 0/0 or positive/positive; the count sum must equal `expected`
 // exactly. Returns field-keyed error strings ('' -> untouched, invalid text
 // -> rejected); expected=null (invalid conversion) skips only the sum check.
-export function validateBoxAllocation(form, expected) {
+export function validateBoxAllocation(form, expected, unit = 'Pack') {
   const errors = {}
   const num = (v) => {
     const s = String(v ?? '').trim()
@@ -41,40 +60,43 @@ export function validateBoxAllocation(form, expected) {
     return Number.isFinite(n) ? n : NaN
   }
   const kg1 = num(form.box1)
-  const packs1 = num(form.box1Pack)
+  const qtys1 = num(form.box1Qty)
   const kg2 = num(form.box2)
-  const packs2 = num(form.box2Pack)
+  const qtys2 = num(form.box2Qty)
   if (kg1 == null || kg1 <= 0) errors.box1 = 'Box 1: berat kg wajib diisi dan positif.'
-  if (packs1 == null || packs1 <= 0 || !Number.isInteger(packs1))
-    errors.box1Pack = 'Box 1: jumlah Pack wajib bilangan bulat positif.'
+  if (qtys1 == null || qtys1 <= 0 || !Number.isInteger(qtys1))
+    errors.box1Qty = `Box 1: jumlah ${unit} wajib bilangan bulat positif.`
   const kg2Filled = kg2 != null && kg2 > 0
-  const packs2Filled = packs2 != null && packs2 > 0
+  const qtys2Filled = qtys2 != null && qtys2 > 0
   if (kg2 != null && kg2 < 0)
     errors.box2 = 'Box 2: berat kg harus angka non-negatif yang valid.'
-  else if (kg2Filled !== packs2Filled)
-    errors.box2 = 'Box 2 harus kosong (0 kg / 0 Pack) atau terisi keduanya.'
-  else if (packs2Filled && !Number.isInteger(packs2))
-    errors.box2Pack = 'Box 2: jumlah Pack wajib bilangan bulat.'
+  else if (kg2Filled !== qtys2Filled)
+    errors.box2 = 'Box 2 harus kosong (0 kg / 0 jumlah) atau terisi keduanya.'
+  else if (qtys2Filled && !Number.isInteger(qtys2))
+    errors.box2Qty = `Box 2: jumlah ${unit} wajib bilangan bulat.`
   if (
     expected != null &&
-    Number.isInteger(packs1) && packs1 > 0 &&
-    (packs2 == null || Number.isInteger(packs2)) &&
-    packs1 + (packs2 ?? 0) !== expected
-  ) errors.total = `Jumlah Pack Box 1 + Box 2 (${packs1 + (packs2 ?? 0)}) harus tepat ${expected} Pack.`
+    Number.isInteger(qtys1) && qtys1 > 0 &&
+    (qtys2 == null || Number.isInteger(qtys2)) &&
+    qtys1 + (qtys2 ?? 0) !== expected
+  )
+    errors.total = `Jumlah ${unit} Box 1 + Box 2 (${qtys1 + (qtys2 ?? 0)}) harus tepat ${expected} ${unit}.`
   return errors
 }
 
-// kg + Pack summary for Request/Terkirim cards and the send confirmation, e.g.
-// "Box 1: 12.5 kg · 20 Pack\nBox 2: 8 kg · 19 Pack" ('' = no allocation).
-// Pre-cutover rows carry kg without Pack — shown honestly, never invented.
+// kg + count summary for Request/Terkirim cards and the send confirmation,
+// e.g. "Box 1: 12.5 kg · 20 Pack\nBox 2: 8 kg · 19 Pack" ('' = no
+// allocation). The count unit comes from the row (T39); pre-cutover rows
+// carry kg without counts — shown honestly, never invented.
 export function boxAllocationText(row) {
   if (!row) return ''
   const lines = []
-  for (const [n, kg, packs] of [[1, row.box1, row.box1Pack], [2, row.box2, row.box2Pack]]) {
-    if (kg == null && packs == null) continue
+  const unit = row.unit ? ` ${row.unit}` : ''
+  for (const [n, kg, qtys] of [[1, row.box1, row.box1Qty], [2, row.box2, row.box2Qty]]) {
+    if (kg == null && qtys == null) continue
     const parts = [
       kg == null ? null : `${fmtNum(kg)} kg`,
-      packs == null ? null : `${fmtNum(packs)} Pack`
+      qtys == null ? null : `${fmtNum(qtys)}${unit}`
     ].filter(Boolean)
     lines.push(`Box ${n}: ${parts.join(' · ')}`)
   }

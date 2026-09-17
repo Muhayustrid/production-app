@@ -412,9 +412,11 @@ function mapRequest(r) {
     item: r.item_name, itemCode: r.item_code,
     requestedQtyPcs: r.qty, stockUom: r.stock_uom, qtyInPack: r.qty_in_pack,
     adonanKe: r.adonan_ke, batch: r.batch,
-    // T35: alokasi box (kg + Pack) dari ringkasan Work Order / MR legacy
-    box1: r.box_1, box1Pack: r.box_1_pack,
-    box2: r.box_2, box2Pack: r.box_2_pack,
+    // T35/T39: alokasi box (kg + jumlah) dari ringkasan Work Order / MR
+    // legacy; `unit` = satuan gudang item (Pack/Pcs/dll.) untuk label UI
+    box1: r.box_1, box1Qty: r.box_1_qty,
+    box2: r.box_2, box2Qty: r.box_2_qty,
+    unit: r.display_uom || r.stock_uom,
     lane: r.lane, flag: r.flag,
     fromWarehouse: r.from_warehouse, toWarehouse: r.to_warehouse,
     // FU29: stok live di gudang asal rute (batch/pool) — null = tak dapat dihitung
@@ -457,16 +459,16 @@ async function handoverAction(method, args) {
   }
 }
 
-// T35/T37: form Request Gudang memvalidasi alokasi box (kg + Pack);
-// validasi server tetap yang otoritatif — error dilempar apa adanya agar
-// dialog mempertahankan isian pengguna.
+// T35/T37/T39: form Request Gudang memvalidasi alokasi box (kg + jumlah
+// dalam satuan gudang item); validasi server tetap yang otoritatif — error
+// dilempar apa adanya agar dialog mempertahankan isian pengguna.
 export function createRequest(workOrder, v) {
   return handoverAction('create_request', {
     work_order: workOrder,
     box_1: Number(v.box1),
-    box_1_pack: Number(v.box1Pack),
+    box_1_qty: Number(v.box1Qty),
     box_2: Number(v.box2),
-    box_2_pack: Number(v.box2Pack)
+    box_2_qty: Number(v.box2Qty)
   })
 }
 export function cancelRequest(materialRequest) {

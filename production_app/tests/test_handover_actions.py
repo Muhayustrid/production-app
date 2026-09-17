@@ -2,7 +2,7 @@
 #
 # Proves, by execution (task-24-brief coverage as amended by T31 R1-R8 and the
 # T35 three-lane cutover):
-# 1. create_request(work_order, box_1, box_1_pack, box_2, box_2_pack): qty =
+# 1. create_request(work_order, box_1, box_1_qty, box_2, box_2_qty): qty =
 #    the Work Order's FULL produced_qty; the box allocation (kg + whole Packs,
 #    sum == the server-computed Pack count) is validated BEFORE any write and
 #    lands atomically on the Work Order summary (Link + 4 box fields);
@@ -218,14 +218,15 @@ class TestHandoverActions(IntegrationTestCase):
 		return se
 
 	@classmethod
-	def _make_wo(cls, qty, item=None):
+	def _make_wo(cls, qty, item=None, bom_no=None):
 		bom_by_item = {
 			cls.fg_nb: cls.bom_nb,
 			cls.fg_nb2: cls.bom_nb2,
 			cls.fg_nopack: cls.bom_nopack,
 		}
-		# unknown items (per-test local fixtures) follow the fu34 swap pattern
-		bom_no = cls.bom if item in (None, cls.fg) else bom_by_item.get(item, cls.bom_nb2)
+		# unknown items (per-test local fixtures) follow the fu34 swap pattern;
+		# a truly local item passes its OWN bom_no (WO validates BOM ↔ item)
+		bom_no = bom_no or (cls.bom if item in (None, cls.fg) else bom_by_item.get(item, cls.bom_nb2))
 		wo = frappe.get_doc(
 			{
 				"doctype": "Work Order",
@@ -285,27 +286,27 @@ class TestHandoverActions(IntegrationTestCase):
 		return frappe.get_all("Batch", filters={"reference_name": wo.name}, pluck="name")[0]
 
 	@classmethod
-	def _lot_ready(cls, qty, item=None):
+	def _lot_ready(cls, qty, item=None, bom_no=None):
 		"""WO + transfer + Manufacture -> a lot of `qty` pcs in Cold Storage."""
-		wo = cls._make_wo(qty, item=item)
+		wo = cls._make_wo(qty, item=item, bom_no=bom_no)
 		cls._transfer(wo)
 		cls._manufacture(wo, qty)
 		return wo, cls._lot_in_cold(wo)
 
-	def _request(self, wo, box_1=10, box_1_pack=None, box_2=0, box_2_pack=0):
+	def _request(self, wo, box_1=10, box_1_qty=None, box_2=0, box_2_qty=0):
 		"""create_request as the gudang actor (the matrix role), with a valid
 		one-box allocation by default (factor 5 fixtures)."""
 		if not flt(wo.produced_qty):
 			wo.reload()  # pick up produced_qty written by the Manufacture step
-		packs = box_1_pack if box_1_pack is not None else int(flt(wo.produced_qty) / 5)
+		packs = box_1_qty if box_1_qty is not None else int(flt(wo.produced_qty) / 5)
 		frappe.set_user(self.gudang)
 		try:
 			return create_request(
 				wo.name,
 				box_1=box_1,
-				box_1_pack=packs,
+				box_1_qty=packs,
 				box_2=box_2,
-				box_2_pack=box_2_pack,
+				box_2_qty=box_2_qty,
 			)
 		finally:
 			frappe.set_user("Administrator")
@@ -316,7 +317,7 @@ class TestHandoverActions(IntegrationTestCase):
 			"Work Order", wo_name,
 			[
 				"custom_handover_material_request", "custom_handover_status",
-				"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
+				"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
 			],
 			as_dict=True,
 		)
@@ -410,8 +411,8 @@ class TestHandoverActions(IntegrationTestCase):
 
 		result = self._request(wo)
 		self.assertEqual(flt(result["qty"]), 100)  # == WO produced_qty
-		self.assertEqual(result["expected_pack_count"], 20)  # 100 pcs / factor 5
-		self.assertEqual((result["box_1"], result["box_1_pack"]), (10, 20))
+		self.assertEqual(result["expected_unit_count"], 20)  # 100 pcs / factor 5
+		self.assertEqual((result["box_1"], result["box_1_qty"]), (10, 20))
 		mr = frappe.get_doc("Material Request", result["material_request"])
 		self.assertEqual(mr.docstatus, 1)
 		self.assertEqual(mr.material_request_type, "Material Transfer")
@@ -617,49 +618,95 @@ class TestHandoverActions(IntegrationTestCase):
 		self.assertEqual(flt(mr.custom_box_1), 0)
 		self.assertEqual(self._summary(wo.name), before)
 
-	def test_t35_expected_pack_count_guard_rejects_invalid_factors(self):
-		"""_expected_pack_count validates the RAW _enrich_units fields: display
-		UOM must be Pack with a finite positive factor; whole amounts divide
-		exactly into the expected Pack count."""
-		from production_app.api.handover import _expected_pack_count
+	def test_t39_expected_unit_count_guard_rejects_invalid_factors(self):
+		"""_expected_unit_count validates the RAW _enrich_units fields: the
+		count unit is the item's warehouse display UOM — the stock UOM itself
+		(EXACT factor 1, no conversion row needed) or any alternate UOM with a
+		finite positive factor; whole amounts divide exactly into the count."""
+		from production_app.api.handover import _expected_unit_count
 
 		wo, _ = self._lot_ready(100)
 		wo = frappe.get_doc("Work Order", wo.name)  # real doc for .precision()
 		self.assertEqual(
-			_expected_pack_count(
-				wo, frappe._dict(display_uom="Pack", display_conversion_factor=5), 100
+			_expected_unit_count(
+				wo, frappe._dict(display_uom="Pack", stock_uom="Pcs", display_conversion_factor=5), 100
 			),
 			20,
 		)
+		# T39 universal: display == stock UOM needs NO conversion row (factor 1
+		# is exact — this is the path a plain Pcs item like fg_nopack takes)
+		self.assertEqual(
+			_expected_unit_count(
+				wo, frappe._dict(display_uom="Pcs", stock_uom="Pcs", display_conversion_factor=None), 100
+			),
+			100,
+		)
 		for lot in (
-			frappe._dict(display_uom="Pcs", display_conversion_factor=5),  # not Pack
-			frappe._dict(display_uom="Pack", display_conversion_factor=0),
-			frappe._dict(display_uom="Pack", display_conversion_factor=-5),
-			frappe._dict(display_uom="Pack", display_conversion_factor=float("inf")),
-			frappe._dict(display_uom="Pack", display_conversion_factor=float("nan")),
-			frappe._dict(display_uom="Pack", display_conversion_factor=None),
+			frappe._dict(display_uom="Pack", stock_uom="Pcs", display_conversion_factor=0),
+			frappe._dict(display_uom="Pack", stock_uom="Pcs", display_conversion_factor=-5),
+			frappe._dict(display_uom="Pack", stock_uom="Pcs", display_conversion_factor=float("inf")),
+			frappe._dict(display_uom="Pack", stock_uom="Pcs", display_conversion_factor=float("nan")),
+			frappe._dict(display_uom="Pack", stock_uom="Pcs", display_conversion_factor=None),
+			frappe._dict(display_uom="Box", stock_uom="Pcs", display_conversion_factor=None),
 		):
 			with self.assertRaises(frappe.ValidationError) as ctx:
-				_expected_pack_count(wo, lot, 100)
-			self.assertIn("konversi Pack", str(ctx.exception))
+				_expected_unit_count(wo, lot, 100)
+			self.assertIn("konversi", str(ctx.exception))
 
-	def test_t35_missing_pack_conversion_rejected_zero_writes(self):
-		"""An FG item whose display UOM is not Pack (no conversion anywhere) is
-		rejected with zero writes."""
-		wo, _ = self._lot_ready(50, item=self.fg_nopack)
-		self._assert_zero_write_rejection(wo, dict(box_1=5, box_1_pack=10), "konversi Pack")
+	def test_t39_invalid_alternate_conversion_rejected_zero_writes(self):
+		"""An FG item whose warehouse display UOM is an ALTERNATE UOM without a
+		valid conversion row (e.g. Default UOM Gudang = Pack, no Pack factor)
+		is rejected with zero writes — the system never guesses a factor."""
+		code = self._make_item(f"{PREFIX}-FGWP-{random_string(4).lower()}")
+		item = frappe.get_cached_doc("Item", code)
+		item.custom_default_uom_warehouse = "Pack"  # no uoms row added
+		item.save()
+		wo, _ = self._lot_ready(50, item=code, bom_no=self._make_bom(code))
+		self._assert_zero_write_rejection(wo, dict(box_1=5, box_1_qty=10), "konversi Pack")
+
+	def test_t39_stock_uom_item_requests_in_pcs(self):
+		"""T39 universal path: an item with NO warehouse UOM setting counts in
+		its stock UOM (Pcs, factor 1) — requestable without any conversion
+		setup; the count sum must equal produced qty exactly, in Pcs."""
+		wo, _ = self._lot_ready(22, item=self.fg_nopack)
+		frappe.set_user(self.gudang)
+		try:
+			result = create_request(
+				wo.name, box_1=5, box_1_qty=15, box_2=3, box_2_qty=7
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(result["unit"], self.uom)
+		self.assertEqual(result["expected_unit_count"], 22)
+		self.assertEqual((result["box_1_qty"], result["box_2_qty"]), (15, 7))
+		self.assertEqual(
+			self._summary(wo.name),
+			{
+				"custom_handover_material_request": result["material_request"],
+				"custom_handover_status": "Diminta Gudang",
+				"custom_box_1": 5.0,
+				"custom_box_1_qty": 15,
+				"custom_box_2": 3.0,
+				"custom_box_2_qty": 7,
+			},
+		)
+		# a wrong Pcs sum is a zero-write rejection in the item's own unit
+		wo2, _ = self._lot_ready(30, item=self.fg_nopack)
+		self._assert_zero_write_rejection(
+			wo2, dict(box_1=5, box_1_qty=21, box_2=0, box_2_qty=0), f"tepat 30 {self.uom}"
+		)
 
 	def test_t35_fractional_pack_producing_qty_rejected_zero_writes(self):
 		"""produced 7 pcs at factor 5 = 1.4 Packs: no whole-Pack allocation can
 		match, so create refuses before any write."""
 		wo, _ = self._lot_ready(7)
-		self._assert_zero_write_rejection(wo, dict(box_1=2, box_1_pack=2), "Pack utuh")
+		self._assert_zero_write_rejection(wo, dict(box_1=2, box_1_qty=2), "Pack utuh")
 
 	def test_t35_box_validation_rejects_with_zero_writes(self):
 		"""Every box/Pack validation failure throws an Indonesian error and
 		writes NOTHING: no Material Request row, unchanged WO summary."""
 		wo, _ = self._lot_ready(100)  # expected 20 Pack (factor 5)
-		valid = dict(box_1=10, box_1_pack=20, box_2=0, box_2_pack=0)
+		valid = dict(box_1=10, box_1_qty=20, box_2=0, box_2_qty=0)
 
 		# old cached client: no box payload at all
 		before = self._summary(wo.name)
@@ -677,31 +724,31 @@ class TestHandoverActions(IntegrationTestCase):
 		self._assert_zero_write_rejection(wo, dict(valid, box_1=0), "Box 1")
 		self._assert_zero_write_rejection(wo, dict(valid, box_1=-2), "kg")
 		self._assert_zero_write_rejection(wo, dict(valid, box_1="bukan angka"), "kg")
-		self._assert_zero_write_rejection(wo, dict(valid, box_1_pack=0), "Box 1")
+		self._assert_zero_write_rejection(wo, dict(valid, box_1_qty=0), "Box 1")
 
 		# negative / fractional / NaN / infinite Pack input
-		self._assert_zero_write_rejection(wo, dict(valid, box_1_pack=-1), "Pack bulat")
-		self._assert_zero_write_rejection(wo, dict(valid, box_1_pack=2.5), "Pack bulat")
-		self._assert_zero_write_rejection(wo, dict(valid, box_1_pack=float("nan")), "Pack bulat")
-		self._assert_zero_write_rejection(wo, dict(valid, box_1_pack=float("inf")), "Pack bulat")
+		self._assert_zero_write_rejection(wo, dict(valid, box_1_qty=-1), "harus bilangan bulat")
+		self._assert_zero_write_rejection(wo, dict(valid, box_1_qty=2.5), "harus bilangan bulat")
+		self._assert_zero_write_rejection(wo, dict(valid, box_1_qty=float("nan")), "harus bilangan bulat")
+		self._assert_zero_write_rejection(wo, dict(valid, box_1_qty=float("inf")), "harus bilangan bulat")
 
 		# Pack sum below / above the expected count
-		self._assert_zero_write_rejection(wo, dict(valid, box_1_pack=19), "tepat")
-		self._assert_zero_write_rejection(wo, dict(valid, box_1_pack=21), "tepat")
+		self._assert_zero_write_rejection(wo, dict(valid, box_1_qty=19), "tepat")
+		self._assert_zero_write_rejection(wo, dict(valid, box_1_qty=21), "tepat")
 
 		# Box 2 must be exactly 0/0 or positive/positive
-		self._assert_zero_write_rejection(wo, dict(valid, box_2=5, box_2_pack=0), "Box 2")
-		self._assert_zero_write_rejection(wo, dict(valid, box_2=0, box_2_pack=5), "Box 2")
-		self._assert_zero_write_rejection(wo, dict(valid, box_2=-1, box_2_pack=-1), "kg")
+		self._assert_zero_write_rejection(wo, dict(valid, box_2=5, box_2_qty=0), "Box 2")
+		self._assert_zero_write_rejection(wo, dict(valid, box_2=0, box_2_qty=5), "Box 2")
+		self._assert_zero_write_rejection(wo, dict(valid, box_2=-1, box_2_qty=-1), "kg")
 
 	def test_t35_box_kg_beyond_db_capacity_rejected_zero_writes(self):
 		"""A FINITE kg beyond the decimal(18,6) column capacity (e.g. 1e308)
 		must die in _finite_kg with the Indonesian bound message — never at the
 		db write as a driver error — and write NOTHING (no MR, no summary)."""
 		wo, _ = self._lot_ready(100)  # expected 20 Pack (factor 5)
-		self._assert_zero_write_rejection(wo, dict(box_1=1e308, box_1_pack=20), "maksimal")
+		self._assert_zero_write_rejection(wo, dict(box_1=1e308, box_1_qty=20), "maksimal")
 		self._assert_zero_write_rejection(
-			wo, dict(box_1=10, box_1_pack=20, box_2=1e308, box_2_pack=1), "maksimal"
+			wo, dict(box_1=10, box_1_qty=20, box_2=1e308, box_2_qty=1), "maksimal"
 		)
 
 	def test_t35_create_request_writes_wo_summary_atomically(self):
@@ -709,29 +756,29 @@ class TestHandoverActions(IntegrationTestCase):
 		Order summary (Link + four box values, status Diminta Gudang); the MR
 		stays a pure request document (no box/postpacking fields)."""
 		wo, _ = self._lot_ready(100)
-		result = self._request(wo, box_1=12.5, box_1_pack=12, box_2=8.25, box_2_pack=8)
+		result = self._request(wo, box_1=12.5, box_1_qty=12, box_2=8.25, box_2_qty=8)
 		summary = self._summary(wo.name)
 		self.assertEqual(summary.custom_handover_material_request, result["material_request"])
-		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_pack), (12.5, 12))
-		self.assertEqual((flt(summary.custom_box_2), summary.custom_box_2_pack), (8.25, 8))
+		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_qty), (12.5, 12))
+		self.assertEqual((flt(summary.custom_box_2), summary.custom_box_2_qty), (8.25, 8))
 		self.assertEqual(summary.custom_handover_status, "Diminta Gudang")
-		self.assertEqual(result["expected_pack_count"], 20)
+		self.assertEqual(result["expected_unit_count"], 20)
 		mr = frappe.get_doc("Material Request", result["material_request"])
 		self.assertFalse(mr.custom_postpacking_confirmed)
 		self.assertEqual(flt(mr.custom_box_1), 0)
 		# the board mirrors the summary on the request row
 		row = self._req(result["board"], mr.name)
 		self.assertEqual(row["lane"], "request")
-		self.assertEqual((row["box_1"], row["box_1_pack"]), (12.5, 12))
-		self.assertEqual((row["box_2"], row["box_2_pack"]), (8.25, 8))
+		self.assertEqual((row["box_1"], row["box_1_qty"]), (12.5, 12))
+		self.assertEqual((row["box_2"], row["box_2_qty"]), (8.25, 8))
 
 		# valid ONE-box allocation on a fresh WO
 		wo2, _ = self._lot_ready(60)
 		result2 = self._request(wo2)  # default 10 kg / 12 Packs
 		summary2 = self._summary(wo2.name)
 		self.assertEqual(summary2.custom_handover_material_request, result2["material_request"])
-		self.assertEqual((flt(summary2.custom_box_1), summary2.custom_box_1_pack), (10, 12))
-		self.assertEqual((flt(summary2.custom_box_2), summary2.custom_box_2_pack), (0, 0))
+		self.assertEqual((flt(summary2.custom_box_1), summary2.custom_box_1_qty), (10, 12))
+		self.assertEqual((flt(summary2.custom_box_2), summary2.custom_box_2_qty), (0, 0))
 
 	def test_t35_second_request_owns_link_and_boxes_after_send(self):
 		"""Resolver precedence: after M1 is sent, a newer request M2 owns the
@@ -769,7 +816,7 @@ class TestHandoverActions(IntegrationTestCase):
 		restore.submit()
 
 		# distinct boxes on the second request (7 + 5 = 12 Pack)
-		result2 = self._request(wo, box_1=4.5, box_1_pack=7, box_2=3.5, box_2_pack=5)
+		result2 = self._request(wo, box_1=4.5, box_1_qty=7, box_2=3.5, box_2_qty=5)
 		mr2 = frappe.get_doc("Material Request", result2["material_request"])
 
 		# the newer request owns the resolver state: an older SE may not revert it
@@ -779,8 +826,8 @@ class TestHandoverActions(IntegrationTestCase):
 		)
 		summary = self._summary(wo.name)
 		self.assertEqual(summary.custom_handover_material_request, mr2.name)
-		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_pack), (4.5, 7))
-		self.assertEqual((flt(summary.custom_box_2), summary.custom_box_2_pack), (3.5, 5))
+		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_qty), (4.5, 7))
+		self.assertEqual((flt(summary.custom_box_2), summary.custom_box_2_qty), (3.5, 5))
 		# document-derived: M2 is the open request (M1's SE is history, not state)
 		self.assertEqual(summary.custom_handover_status, "Diminta Gudang")
 
@@ -792,12 +839,12 @@ class TestHandoverActions(IntegrationTestCase):
 		))
 		# the OLD sent card must not display M2's boxes (WO Link points at M2)
 		self.assertIsNone(row1["box_1"])
-		self.assertIsNone(row1["box_1_pack"])
+		self.assertIsNone(row1["box_1_qty"])
 		self.assertIsNone(row1["box_2"])
-		self.assertIsNone(row1["box_2_pack"])
+		self.assertIsNone(row1["box_2_qty"])
 		self.assertEqual(row2["lane"], "request")
-		self.assertEqual((row2["box_1"], row2["box_1_pack"]), (4.5, 7))
-		self.assertEqual((row2["box_2"], row2["box_2_pack"]), (3.5, 5))
+		self.assertEqual((row2["box_1"], row2["box_1_qty"]), (4.5, 7))
+		self.assertEqual((row2["box_2"], row2["box_2_qty"]), (3.5, 5))
 
 	def test_t36_cancelled_request_never_leaves_its_boxes_on_another_mr(self):
 		"""T36 controller ruling: create M1 -> send M1 -> create M2 -> cancel M2.
@@ -834,7 +881,7 @@ class TestHandoverActions(IntegrationTestCase):
 		restore.insert()
 		restore.submit()
 
-		result2 = self._request(wo, box_1=4.5, box_1_pack=7, box_2=3.5, box_2_pack=5)
+		result2 = self._request(wo, box_1=4.5, box_1_qty=7, box_2=3.5, box_2_qty=5)
 		mr2 = frappe.get_doc("Material Request", result2["material_request"])
 		self.assertEqual(self._summary(wo.name).custom_handover_material_request, mr2.name)
 
@@ -854,17 +901,17 @@ class TestHandoverActions(IntegrationTestCase):
 		self.assertEqual(summary.custom_handover_status, "Terkirim")
 		# the cancelled request's boxes died with it — nothing leaks onto M1
 		self.assertEqual(
-			(flt(summary.custom_box_1), summary.custom_box_1_pack,
-			 flt(summary.custom_box_2), summary.custom_box_2_pack),
+			(flt(summary.custom_box_1), summary.custom_box_1_qty,
+			 flt(summary.custom_box_2), summary.custom_box_2_qty),
 			(0, 0, 0, 0),
 		)
 		board = handover_board()
 		row1, row2 = self._req(board, mr1.name), self._req(board, mr2.name)
 		self.assertEqual(row1["lane"], "terkirim")
 		self.assertIsNone(row1["box_1"])
-		self.assertIsNone(row1["box_1_pack"])
+		self.assertIsNone(row1["box_1_qty"])
 		self.assertIsNone(row1["box_2"])
-		self.assertIsNone(row1["box_2_pack"])
+		self.assertIsNone(row1["box_2_qty"])
 		self.assertIsNone(row2["lane"])
 		self.assertEqual(row2["flag"], "cancelled")
 		self.assertIsNone(row2["box_1"])
@@ -882,7 +929,7 @@ class TestHandoverActions(IntegrationTestCase):
 		self.assertEqual(flt(get_batch_qty(batch, self.target_wh)), 50)  # stock moved
 		summary = self._summary(wo.name)
 		self.assertEqual(summary.custom_handover_material_request, mr.name)
-		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_pack), (10, 10))
+		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_qty), (10, 10))
 		self.assertEqual(summary.custom_handover_status, "Terkirim")
 
 	def test_t28_wo_postpacking_not_touched_by_handover(self):
@@ -1008,7 +1055,7 @@ class TestHandoverActions(IntegrationTestCase):
 		# the summary (kg + Pack) was written at create and survives the send
 		summary = self._summary(wo1.name)
 		self.assertEqual(summary.custom_handover_material_request, mr1.name)
-		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_pack), (10, 12))
+		self.assertEqual((flt(summary.custom_box_1), summary.custom_box_1_qty), (10, 12))
 		self.assertEqual(summary.custom_handover_status, "Terkirim")
 
 		# duplicate send still blocked; pool unchanged by the failed attempt
@@ -1044,8 +1091,8 @@ class TestHandoverActions(IntegrationTestCase):
 		summary = self._summary(wo.name)
 		self.assertIsNone(summary.custom_handover_material_request)
 		self.assertEqual(
-			(flt(summary.custom_box_1), summary.custom_box_1_pack,
-			 flt(summary.custom_box_2), summary.custom_box_2_pack),
+			(flt(summary.custom_box_1), summary.custom_box_1_qty,
+			 flt(summary.custom_box_2), summary.custom_box_2_qty),
 			(0, 0, 0, 0),
 		)
 		self.assertFalse(summary.custom_handover_status)
@@ -1141,8 +1188,8 @@ class TestHandoverActions(IntegrationTestCase):
 		summary = self._summary(wo.name)
 		self.assertIsNone(summary.custom_handover_material_request)
 		self.assertEqual(
-			(flt(summary.custom_box_1), summary.custom_box_1_pack,
-			 flt(summary.custom_box_2), summary.custom_box_2_pack),
+			(flt(summary.custom_box_1), summary.custom_box_1_qty,
+			 flt(summary.custom_box_2), summary.custom_box_2_qty),
 			(0, 0, 0, 0),
 		)
 		self.assertFalse(summary.custom_handover_status)
@@ -1213,7 +1260,7 @@ class TestHandoverActions(IntegrationTestCase):
 			board = handover_board()
 			self.assertTrue(board["roles"]["is_gudang"])
 			self.assertFalse(board["roles"]["is_produksi"])
-			result = create_request(wo.name, box_1=10, box_1_pack=24)
+			result = create_request(wo.name, box_1=10, box_1_qty=24)
 			self.assertEqual(flt(result["qty"]), 120)
 			stock_mr = frappe.get_doc("Material Request", result["material_request"])
 			self.assertEqual(stock_mr.docstatus, 1)
@@ -1234,7 +1281,7 @@ class TestHandoverActions(IntegrationTestCase):
 			self.assertTrue(board["roles"]["is_produksi"])
 			both_mr = frappe.get_doc(
 				"Material Request",
-				create_request(wo2.name, box_1=5, box_1_pack=8)["material_request"],
+				create_request(wo2.name, box_1=5, box_1_qty=8)["material_request"],
 			)
 			res = send_handover(both_mr.name)
 			self.assertTrue(res["ok"])

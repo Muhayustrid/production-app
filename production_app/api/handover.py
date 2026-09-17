@@ -20,11 +20,13 @@
 # - T35 three-lane cutover: TWO lanes derive from native documents only —
 #   request (submitted MR without SE evidence) and terkirim (submitted Stock
 #   Entry evidence, which outranks even an abnormally cancelled MR). The
-#   retired postpacking confirmation advances nothing. Box kg + whole Pack
+#   retired postpacking confirmation advances nothing. Box kg + whole count
 #   allocations live on the Work Order summary (Link + 4 fields), written
 #   atomically by create_request behind the WO lock; the MR stays a pure
-#   request document. Pack math uses the RAW _enrich_units factor — never the
-#   `or 1` display fallback.
+#   request document. T39: the count unit is UNIVERSAL — the item's warehouse
+#   display UOM (the stock UOM itself at exact factor 1, or any alternate
+#   display UOM with a valid conversion row). Count math uses the RAW
+#   _enrich_units factor — never the `or 1` display fallback.
 
 from collections import defaultdict
 
@@ -182,7 +184,7 @@ def _wo_lot_rows(wo_names=None):
 				"fg_warehouse", "creation",
 				# T35 summary block: bulk-loaded once, mapped onto request rows
 				"custom_handover_material_request",
-				"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
+				"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
 			],
 			order_by="creation desc",
 			limit_page_length=0,
@@ -295,9 +297,9 @@ def _wo_lot_rows(wo_names=None):
 				"has_older_lot_same_item": False,
 				"custom_handover_material_request": w.custom_handover_material_request,
 				"custom_box_1": w.custom_box_1,
-				"custom_box_1_pack": w.custom_box_1_pack,
+				"custom_box_1_qty": w.custom_box_1_qty,
 				"custom_box_2": w.custom_box_2,
-				"custom_box_2_pack": w.custom_box_2_pack,
+				"custom_box_2_qty": w.custom_box_2_qty,
 			}
 		)
 		unique = {b for b in cur["batches"] if b}
@@ -357,10 +359,10 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 	SE is a dead request (needs a manual desk unstop) parked in the request
 	lane with flag="stopped" — visible, but reserving nothing (§4.3).
 
-	Box summary (T35): kg + whole Pack come from the BULK Work Order lot rows
-	while the WO Link points at the MR; pre-cutover MRs (empty Link) fall back
-	to their own kg fields with BOTH Pack values empty. No per-card Work Order
-	lookup happens in this loop.
+	Box summary (T35): kg + whole count (item's warehouse display UOM, T39)
+	come from the BULK Work Order lot rows while the WO Link points at the MR;
+	pre-cutover MRs (empty Link) fall back to their own kg fields with BOTH
+	count values empty. No per-card Work Order lookup happens in this loop.
 	"""
 	item_filters = {"custom_work_order": ("is", "set")}
 	if wo_names is not None:
@@ -450,14 +452,17 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 			enriched = frappe._dict(production_item=first.item_code, custom_uom=None)
 			_enrich_units([enriched])
 			qty_in_pack = flt(enriched.display_conversion_factor or 1)
+			display_uom = enriched.display_uom or enriched.stock_uom
+		else:
+			display_uom = lot.display_uom or lot.stock_uom
 		if lot is not None and lot.custom_handover_material_request == m.name:
 			# the WO summary owns the boxes while its Link points here
-			box_1, box_1_pack = lot.custom_box_1 or None, lot.custom_box_1_pack or None
-			box_2, box_2_pack = lot.custom_box_2 or None, lot.custom_box_2_pack or None
+			box_1, box_1_qty = lot.custom_box_1 or None, lot.custom_box_1_qty or None
+			box_2, box_2_qty = lot.custom_box_2 or None, lot.custom_box_2_qty or None
 		else:
-			# pre-cutover MR: legacy MR kg, Pack values never invented
-			box_1, box_1_pack = m.custom_box_1 or None, None
-			box_2, box_2_pack = m.custom_box_2 or None, None
+			# pre-cutover MR: legacy MR kg, count values never invented
+			box_1, box_1_qty = m.custom_box_1 or None, None
+			box_2, box_2_qty = m.custom_box_2 or None, None
 		rows.append(
 			{
 				"mr": m.name,
@@ -472,11 +477,12 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 				"work_order": first.custom_work_order,
 				"batch": lot.batch if lot and not lot.unsupported else None,
 				"qty_in_pack": qty_in_pack,
+				"display_uom": display_uom,
 				"adonan_ke": adonan_ke,
 				"box_1": box_1,
-				"box_1_pack": box_1_pack,
+				"box_1_qty": box_1_qty,
 				"box_2": box_2,
-				"box_2_pack": box_2_pack,
+				"box_2_qty": box_2_qty,
 				"boxes": [b for b in (box_1, box_2) if b],
 				"from_warehouse": m.set_from_warehouse or None,
 				"to_warehouse": m.set_warehouse or None,
@@ -658,7 +664,7 @@ def _handover_lanes(wo_names):
 
 WO_SUMMARY_FIELDS = (
 	"custom_handover_material_request",
-	"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
+	"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
 )
 
 
@@ -669,7 +675,7 @@ def _sync_handover_summary(wo_names):
 	(the role-gated actions + this sync + the migration share it). Clearing
 	rules (T35): a WO whose only evidence vanished (unsent cancelled MR, no
 	replacement) loses the Link and all four box values; a live or sent
-	request keeps the kg and never gains invented Pack values. Returns the
+	request keeps the kg and never gains invented count values. Returns the
 	WO names actually written."""
 	wo_names = sorted({n for n in wo_names if n})
 	if not wo_names:
@@ -1073,54 +1079,64 @@ def _finite_kg(value, label, allow_blank=False):
     return amount
 
 
-def _expected_pack_count(wo, lot, amount):
-    """Whole Pack count the full `amount` must allocate into, computed from
+def _expected_unit_count(wo, lot, amount):
+    """Whole count of the full `amount` in the item's warehouse display UOM
+    (T39 universal: the stock UOM itself at EXACT factor 1 — not a fallback —
+    or any alternate display UOM with a valid conversion row), computed from
     the RAW _enrich_units fields (never qty_in_pack — its `or 1` display
     fallback would silently accept unconverted items)."""
-    factor = flt(lot.display_conversion_factor)
-    if lot.display_uom != "Pack" or not math.isfinite(factor) or factor <= 0:
-        frappe.throw(_("Item {0} belum memiliki konversi Pack yang valid.").format(wo.production_item))
+    unit = lot.display_uom or lot.stock_uom
+    if unit == lot.stock_uom:
+        factor = 1.0
+    else:
+        factor = flt(lot.display_conversion_factor)
+        if not math.isfinite(factor) or factor <= 0:
+            frappe.throw(
+                _("Item {0} belum memiliki konversi {1} yang valid.").format(
+                    wo.production_item, unit
+                )
+            )
     precision = wo.precision("produced_qty") or 3
     raw = amount / factor
     expected = round(raw)
     tolerance = 0.5 * (10 ** (-precision))
     if abs(raw - expected) >= tolerance:
-        frappe.throw(_("Hasil Work Order {0} tidak membentuk Pack utuh.").format(wo.name))
+        frappe.throw(_("Hasil Work Order {0} tidak membentuk {1} utuh.").format(wo.name, unit))
     return int(expected)
 
 
-def _whole_pack(value, label):
-    """A whole, non-negative Pack count (Int): no fractions, no NaN/inf."""
+def _whole_count(value, label):
+    """A whole, non-negative count (Int): no fractions, no NaN/inf."""
     try:
         number = float(value)
     except (TypeError, ValueError):
-        frappe.throw(_("{0} harus bilangan Pack bulat.").format(label))
+        frappe.throw(_("{0} harus bilangan bulat.").format(label))
     if not math.isfinite(number) or number < 0 or number != int(number):
-        frappe.throw(_("{0} harus bilangan Pack bulat non-negatif.").format(label))
+        frappe.throw(_("{0} harus bilangan bulat non-negatif.").format(label))
     return int(number)
 
 
-def _validate_box_allocation(box_1, pack_1, box_2, pack_2, expected_packs):
-    """Box 1 always positive; Box 2 exactly 0 kg/0 Pack or positive/positive;
-    the Pack sum must equal the server-computed count of the full amount."""
-    if box_1 <= 0 or pack_1 <= 0:
-        frappe.throw(_("Box 1 harus diisi: berat kg dan jumlah Pack harus positif."))
-    if box_2 <= 0 and pack_2 <= 0:
-        box_2 = pack_2 = 0  # Box 2 kosong sah (0 kg / 0 Pack)
-    elif box_2 <= 0 or pack_2 <= 0:
-        frappe.throw(_("Box 2 harus kosong (0 kg / 0 Pack) atau terisi keduanya."))
-    if pack_1 + pack_2 != expected_packs:
+def _validate_box_allocation(box_1, qty_1, box_2, qty_2, expected, unit):
+    """Box 1 always positive; Box 2 exactly 0 kg/0 count or positive/positive;
+    the count sum must equal the server-computed count of the full amount."""
+    if box_1 <= 0 or qty_1 <= 0:
+        frappe.throw(_("Box 1 harus diisi: berat kg dan jumlah {0} harus positif.").format(unit))
+    if box_2 <= 0 and qty_2 <= 0:
+        box_2 = qty_2 = 0  # Box 2 kosong sah (0 kg / 0 jumlah)
+    elif box_2 <= 0 or qty_2 <= 0:
+        frappe.throw(_("Box 2 harus kosong (0 kg / 0 jumlah) atau terisi keduanya."))
+    if qty_1 + qty_2 != expected:
         frappe.throw(
-            _("Jumlah Pack Box 1 + Box 2 ({0}) harus tepat {1} Pack.").format(
-                pack_1 + pack_2, expected_packs
+            _("Jumlah {0} Box 1 + Box 2 ({1}) harus tepat {2} {0}.").format(
+                unit, qty_1 + qty_2, expected
             )
         )
-    return box_1, pack_1, box_2, pack_2
+    return box_1, qty_1, box_2, qty_2
 
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_request(work_order, box_1=None, box_1_pack=None, box_2=0, box_2_pack=0):
+def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0):
     """Gudang side (Gudang Barang Jadi / Stock User): submit a Material Transfer
     request for the Work Order's FULL produced qty (R3 — no qty dialog, drag is
     the direct action) carrying the validated box allocation. The source
@@ -1128,7 +1144,7 @@ def create_request(work_order, box_1=None, box_1_pack=None, box_2=0, box_2_pack=
     warehouse (R2). One ACTIVE (unshipped, unstopped) request per Work Order;
     a duplicate throws.
 
-    T35: ALL box/Pack validation happens under the WO row lock BEFORE any
+    T35: ALL box/count validation happens under the WO row lock BEFORE any
     write; the native MR is inserted + submitted WITHOUT any box/postpacking
     custom field, then the Work Order summary (Link + four box values) is
     written atomically and the status synchronized — one transaction, zero
@@ -1175,13 +1191,14 @@ def create_request(work_order, box_1=None, box_1_pack=None, box_2=0, box_2_pack=
         )
 
     # T35 box form: compute + validate EVERYTHING before any write
-    expected_packs = _expected_pack_count(wo, lot, amount)
+    expected_units = _expected_unit_count(wo, lot, amount)
+    unit = lot.display_uom or lot.stock_uom
     kg_1 = _finite_kg(box_1, "Box 1")
-    packs_1 = _whole_pack(box_1_pack, "Box 1 (Pack)")
+    qtys_1 = _whole_count(box_1_qty, f"Box 1 ({unit})")
     kg_2 = _finite_kg(box_2, "Box 2", allow_blank=True)
-    packs_2 = _whole_pack(box_2_pack, "Box 2 (Pack)")
-    kg_1, packs_1, kg_2, packs_2 = _validate_box_allocation(
-        kg_1, packs_1, kg_2, packs_2, expected_packs
+    qtys_2 = _whole_count(box_2_qty, f"Box 2 ({unit})")
+    kg_1, qtys_1, kg_2, qtys_2 = _validate_box_allocation(
+        kg_1, qtys_1, kg_2, qtys_2, expected_units, unit
     )
 
     stock_uom = lot.stock_uom or frappe.db.get_value("Item", wo.production_item, "stock_uom")
@@ -1230,9 +1247,9 @@ def create_request(work_order, box_1=None, box_1_pack=None, box_2=0, box_2_pack=
         {
             "custom_handover_material_request": mr.name,
             "custom_box_1": kg_1,
-            "custom_box_1_pack": packs_1,
+            "custom_box_1_qty": qtys_1,
             "custom_box_2": kg_2,
-            "custom_box_2_pack": packs_2,
+            "custom_box_2_qty": qtys_2,
         },
         update_modified=False,
     )
@@ -1241,11 +1258,12 @@ def create_request(work_order, box_1=None, box_1_pack=None, box_2=0, box_2_pack=
         "ok": True,
         "material_request": mr.name,
         "qty": amount,
-        "expected_pack_count": expected_packs,
+        "unit": unit,
+        "expected_unit_count": expected_units,
         "box_1": kg_1,
-        "box_1_pack": packs_1,
+        "box_1_qty": qtys_1,
         "box_2": kg_2,
-        "box_2_pack": packs_2,
+        "box_2_qty": qtys_2,
         "board": _build_board(),
     }
 

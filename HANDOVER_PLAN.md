@@ -177,3 +177,32 @@ Supersedes every remaining four-lane row above (Section F/G history retained for
 3. **Rollback metadata:** restore the six affected Work Order Custom Field definitions from `snapshots/three-lane-handover-pre.json` ONLY after deliberately converting live `Diminta Gudang`/`Terkirim` summaries (the snapshot's old options include `Siap Kirim`); keep the additive Work Order fields (Link/Pack columns) unless a deliberate data migration exports their values first — never blindly drop Link/Pack columns.
 4. **Never rewrite history:** do not modify or delete historical operational MRs/SEs; the summary fields are re-derivable document state and the idempotent resolver reconciles them. Deleting test documents follows SE → MR → WO order (as in the T38 cleanup).
 5. Rollback of the two Manufacturing Settings overrides is a plain settings edit (six warehouse values snapshotted in the T38 fixture manifest; operator values restored exactly).
+
+## ADDENDUM 2026-09-17 — Section I (T39): universal count unit (Pack ATAU Pcs)
+
+Atas request user ("harusnya bisa universal inputannya, bisa pack atau pcs… perlu hapus pack atau pcs di label, di field juga"; pilihan desain: label dialog **dinamis per item**). Menggantikan kalimat "Pack-only" pada Section H; selebihnya Section H tetap berlaku.
+
+### Kontrak satuan universal
+
+- Satuan hitung box = **UOM gudang item** (field `custom_default_uom_warehouse`, fallback stock UOM — sumber tetap `_enrich_units`):
+  - display == stock UOM → faktor **1 eksak** (BUKAN fallback; item Pcs polos seperti PJ260008 langsung requestable tanpa setting apa pun);
+  - display = UOM alternatif (mis. `Pack`) → wajib baris konversi valid (faktor finite > 0); tanpa itu tetap DITOLAK (pesan konversi) — sistem tidak pernah menebak faktor;
+  - guard pecahan tetap: hasil WO ÷ faktor harus bulat (toleransi `0.5*10^-precision`) — mis. 22 Pcs ÷ 12 Pack = 1,83 ditolak "tidak membentuk Pack utuh".
+- Semua validasi lama tetap: Box 1 kg+jumlah positif; Box 2 tepat 0/0 atau positif/positif; jumlah bulat non-negatif; **Box1 + Box2 = jumlah yang diharapkan tepat**; zero-write rejection di bawah lock WO; pesan Indonesia menyebut satuan item.
+
+### Rename field Work Order (label & fieldname bebas satuan)
+
+- `custom_box_1_pack`/`custom_box_2_pack` → **`custom_box_1_qty`/`custom_box_2_qty`**, label **"Box 1 (Jumlah)"/"Box 2 (Jumlah)"** (Int, read_only, allow_on_submit, non_negative; description menyebut satuan mengikuti UOM gudang item). Field kg tidak berubah.
+- Migrasi terurut `migrate_box_qty_rename()` di `upgrade.apply()` SETELAH `create_only` dan SEBELUM `ensure_three_lane_handover`: snapshot sekali (`snapshots/box-qty-rename-pre.json`: definisi lama + semua baris WO bernilai) → salin nilai lama→baru HANYA bila baru masih NULL (re-run tidak pernah menimpa; 0 live tetap 0) → hapus Custom Field lama + DROP kolom (on_trash frappe tidak drop kolom — ALTER eksplisit). Idempoten: run ke-2 "old columns already absent: unchanged".
+- API/payload ikut rename: `create_request(work_order, box_1, box_1_qty, box_2, box_2_qty)`; response `unit` + `expected_unit_count` + `box_1_qty`/`box_2_qty`; baris request membawa `display_uom` untuk label UI. Snapshot three-lane lama (nama field lama) tetap sah sebagai bukti historis (kontrak kunci di test menerima kedua bentuk).
+
+### Frontend
+
+- Helper universal: `unitProblem`/`expectedUnits`/`unitLabel`/`validateBoxAllocation(form, expected, unit)`/`boxAllocationText(row)` — `row.unit` dari payload; pre-cutover rows kg-only tetap jujur tanpa jumlah.
+- Dialog "Buat Request Gudang": label input dinamis `Box 1 ({{ unit }})` (Pack/Pcs/dll. sesuai item), hint "harus tepat N <unit>", pesan konversi/pecahan menyebut satuan item. Kartu request/terkirim menampilkan satuan asli.
+
+### Rollback T39
+
+1. Revert kode + rebuild/resync SPA (prosedur sama dengan Section H langkah 2) + hard-refresh (bundle berubah).
+2. Metadata: definisi field lama ada di `snapshots/box-qty-rename-pre.json` (label "Box 1 (Pack)"); nilai lama tersalin di snapshot itu — restore hanya setelah mengekspor nilai `_qty` yang hidup; jangan drop kolom `_qty` secara buta.
+3. Data historis MR/SE tidak pernah menyimpan jumlah (murni di ringkasan WO) — tidak ada yang perlu ditulis ulang.

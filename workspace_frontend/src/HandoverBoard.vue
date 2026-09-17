@@ -3,9 +3,10 @@
 // strip and fail-injection removed; roles, lots, lanes and warehouses come from
 // the server board payload (T23/T24) — the UI never writes lane state.
 // T35/T37 three-lane cutover: Cold Storage -> Request Gudang -> Terkirim. The
-// box allocation (kg + Pack) is requested in the Cold Storage -> Request form;
-// verification is gone (server create_request validates; the old postpacking
-// call has no supported caller). Request cards: gudang cancels, produksi sends direct.
+// box allocation (kg + count in the item's warehouse UOM, T39 universal) is
+// requested in the Cold Storage -> Request form; verification is gone (server
+// create_request validates; the old postpacking call has no supported
+// caller). Request cards: gudang cancels, produksi sends direct.
 import { computed, nextTick, reactive, onMounted, ref, watch } from 'vue'
 import {
   cancelRequest, createRequest, handoverBoard, handoverLots, handoverRequests, handoverState,
@@ -13,7 +14,7 @@ import {
 } from './store.js'
 import { fmtInt, qtyMain } from './format.js'
 import { handoverCard } from './handover-card.js'
-import { boxAllocationText, expectedPacks, packProblem, validateBoxAllocation } from './handover-box.js'
+import { boxAllocationText, expectedUnits, unitLabel, unitProblem, validateBoxAllocation } from './handover-box.js'
 import {
   CheckCircle2, ClipboardList, Filter, GripVertical, Inbox,
   Snowflake, Truck, Undo2
@@ -230,18 +231,21 @@ function clickCard(c) {
   }
 }
 
-// ---- dialog (Gudang): Buat Request Gudang — alokasi box kg + Pack (T35) ----
+// ---- dialog (Gudang): Buat Request Gudang — alokasi box kg + jumlah (T35,
+// T39 universal: satuan mengikuti UOM gudang item — Pack, Pcs, dll.) ----
 const dlgRequest = ref(null)
 const reqLot = ref(null)
 const reqError = ref('')
-const reqForm = reactive({ box1: '', box1Pack: '', box2: '0', box2Pack: '0' })
+const reqForm = reactive({ box1: '', box1Qty: '', box2: '0', box2Qty: '0' })
 
-// UX check murni; kontrak & validasi tetap di server (create_request T35).
-// packProblem: 'conversion' (konversi Pack hilang/tidak valid) vs 'fractional'
-// (hasil Work Order tidak membentuk Pack utuh) — dua pesan berbeda.
-const reqProblem = computed(() => (reqLot.value ? packProblem(reqLot.value) : 'conversion'))
-const reqExpected = computed(() => (reqLot.value && !reqProblem.value ? expectedPacks(reqLot.value) : null))
-const reqFieldErrors = computed(() => validateBoxAllocation(reqForm, reqExpected.value))
+// UX check murni; kontrak & validasi tetap di server (create_request T35/T39).
+// unitProblem: 'conversion' (UOM gudang = UOM alternatif tanpa konversi
+// valid) vs 'fractional' (hasil Work Order tidak membentuk satuan utuh) —
+// dua pesan berbeda.
+const reqProblem = computed(() => (reqLot.value ? unitProblem(reqLot.value) : 'conversion'))
+const reqUnit = computed(() => unitLabel(reqLot.value))
+const reqExpected = computed(() => (reqLot.value && !reqProblem.value ? expectedUnits(reqLot.value) : null))
+const reqFieldErrors = computed(() => validateBoxAllocation(reqForm, reqExpected.value, reqUnit.value))
 const reqQtyText = computed(() =>
   reqLot.value ? qtyMain(reqLot.value.producedQty, reqLot.value) : ''
 )
@@ -254,7 +258,7 @@ function openRequestDialog(woId) {
   if (!isGudang.value || !lot || lot.unsupported || lotAvailablePcs(lot) <= 0) return
   reqLot.value = lot
   reqError.value = ''
-  Object.assign(reqForm, { box1: '', box1Pack: '', box2: '0', box2Pack: '0' })
+  Object.assign(reqForm, { box1: '', box1Qty: '', box2: '0', box2Qty: '0' })
   nextTick(() => dlgRequest.value.showModal())
 }
 function closeRequest() {
@@ -546,8 +550,8 @@ onMounted(() => {
             <input id="req-box-1" v-model="reqForm.box1" class="input" type="number" step="any" min="0" />
           </div>
           <div class="field">
-            <label for="req-box-1-pack">Box 1 (Pack) <span class="req">*</span></label>
-            <input id="req-box-1-pack" v-model="reqForm.box1Pack" class="input" type="number" step="1" min="1" />
+            <label for="req-box-1-qty">Box 1 ({{ reqUnit }}) <span class="req">*</span></label>
+            <input id="req-box-1-qty" v-model="reqForm.box1Qty" class="input" type="number" step="1" min="1" />
           </div>
         </div>
         <div class="boxrow">
@@ -556,18 +560,18 @@ onMounted(() => {
             <input id="req-box-2" v-model="reqForm.box2" class="input" type="number" step="any" min="0" />
           </div>
           <div class="field">
-            <label for="req-box-2-pack">Box 2 (Pack)</label>
-            <input id="req-box-2-pack" v-model="reqForm.box2Pack" class="input" type="number" step="1" min="0" />
+            <label for="req-box-2-qty">Box 2 ({{ reqUnit }})</label>
+            <input id="req-box-2-qty" v-model="reqForm.box2Qty" class="input" type="number" step="1" min="0" />
           </div>
         </div>
       </div>
-      <p class="hint" style="margin-top: 8px">Box 2 boleh kosong (0 kg / 0 Pack). Jumlah Pack Box 1 + Box 2 harus tepat {{ reqExpected ?? '—' }} Pack. Material Request dibuat setelah disimpan; Stock Entry saat dikirim.</p>
+      <p class="hint" style="margin-top: 8px">Box 2 boleh kosong (0 kg / 0 jumlah). Jumlah {{ reqUnit }} Box 1 + Box 2 harus tepat {{ reqExpected ?? '—' }} {{ reqUnit }}. Material Request dibuat setelah disimpan; Stock Entry saat dikirim.</p>
 
       <p v-if="reqProblem === 'conversion'" class="err" style="margin-top: 8px" role="alert">
-        Konversi Pack item belum valid — lengkapi konversi satuan item di Desk sebelum membuat request.
+        Konversi {{ reqUnit }} item belum valid — lengkapi konversi satuan item di Desk sebelum membuat request.
       </p>
       <p v-else-if="reqProblem === 'fractional'" class="err" style="margin-top: 8px" role="alert">
-        Hasil Work Order tidak membentuk Pack utuh — sesuaikan hasil produksi atau konversi Pack item di Desk.
+        Hasil Work Order tidak membentuk {{ reqUnit }} utuh — sesuaikan hasil produksi atau konversi {{ reqUnit }} item di Desk.
       </p>
       <p v-else-if="Object.keys(reqFieldErrors).length" class="err" style="margin-top: 8px" role="alert">
         {{ Object.values(reqFieldErrors).join(' ') }}

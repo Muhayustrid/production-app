@@ -271,12 +271,12 @@ class TestHandoverSetup(IntegrationTestCase):
 		self.assertEqual(
 			frappe.get_meta("Material Request").get_field("custom_box_1").allow_on_submit, 1
 		)
-		# T35: three-lane handover metadata — Link + whole-Pack summary fields
+		# T35/T39: three-lane handover metadata — Link + unit-free count fields
 		wo_meta = frappe.get_meta("Work Order", cached=False)
 		expected = {
 			"custom_handover_material_request": ("Link", "Material Request"),
-			"custom_box_1_pack": ("Int", None),
-			"custom_box_2_pack": ("Int", None),
+			"custom_box_1_qty": ("Int", None),
+			"custom_box_2_qty": ("Int", None),
 		}
 		for fieldname, (fieldtype, options) in expected.items():
 			df = wo_meta.get_field(fieldname)
@@ -285,6 +285,21 @@ class TestHandoverSetup(IntegrationTestCase):
 			self.assertEqual(df.options or None, options)
 			self.assertTrue(df.allow_on_submit)
 			self.assertTrue(df.read_only)
+		# T39 rename: the unit-carrying _pack fields are retired for good
+		for fieldname in upgrade.BOX_QTY_OLD_FIELDS:
+			self.assertIsNone(wo_meta.get_field(fieldname))
+		self.assertEqual(wo_meta.get_field("custom_box_1_qty").label, "Box 1 (Jumlah)")
+		self.assertEqual(wo_meta.get_field("custom_box_2_qty").label, "Box 2 (Jumlah)")
+		# and the rename migration itself converges on the second apply
+		entries = (
+			r2["box_qty_rename"].values()
+			if isinstance(r2["box_qty_rename"], dict)
+			else [r2["box_qty_rename"]]
+		)
+		self.assertTrue(
+			all(str(entry).endswith(": unchanged") for entry in entries),
+			f"box_qty_rename not idempotent: {r2['box_qty_rename']}",
+		)
 
 		for fieldname in ("custom_box_1", "custom_box_2"):
 			self.assertTrue(wo_meta.get_field(fieldname).read_only)
@@ -310,10 +325,22 @@ class TestHandoverSetup(IntegrationTestCase):
 		# narrowed options/contract instead (it never saw the old option).
 		with open(upgrade.THREE_LANE_SNAPSHOT) as f:
 			snap = json.load(f)
-		self.assertEqual(
-			set(snap["stored_values"]),
-			{"custom_handover_status", upgrade.THREE_LANE_LINK_FIELD, *upgrade.THREE_LANE_BOX_FIELDS},
+		# T39: a pre-rename capture still keys its counts as the OLD _pack
+		# fieldnames (historical evidence); a post-T39/fresh capture keys the
+		# current _qty fieldnames. Both are valid point-in-time contracts.
+		allowed_key_sets = (
+			{
+				"custom_handover_status",
+				upgrade.THREE_LANE_LINK_FIELD,
+				"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
+			},
+			{
+				"custom_handover_status",
+				upgrade.THREE_LANE_LINK_FIELD,
+				*upgrade.THREE_LANE_BOX_FIELDS,
+			},
 		)
+		self.assertIn(set(snap["stored_values"]), allowed_key_sets)
 		status_fields = [
 			cf for cf in snap["custom_fields"] if cf["fieldname"] == "custom_handover_status"
 		]

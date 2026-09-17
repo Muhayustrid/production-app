@@ -1,0 +1,60 @@
+{
+  "captured_at": "2026-09-17 10:15:40.976060",
+  "custom_fields": [
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_box_1_pack",
+      "fieldtype": "Int",
+      "insert_after": "custom_box_1",
+      "label": "Box 1 (Pack)",
+      "non_negative": 1,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "fieldname": "custom_box_2_pack",
+      "fieldtype": "Int",
+      "insert_after": "custom_box_2",
+      "label": "Box 2 (Pack)",
+      "non_negative": 1,
+      "read_only": 1
+    }
+  ],
+  "work_orders": [
+    {
+      "custom_box_1": 999.0,
+      "custom_box_1_pack": 0,
+      "custom_box_2": 0.0,
+      "custom_box_2_pack": 0,
+      "name": "MFG-WO-2026-00056"
+    },
+    {
+      "custom_box_1": 1.0,
+      "custom_box_1_pack": 0,
+      "custom_box_2": 1.0,
+      "custom_box_2_pack": 0,
+      "name": "MFG-WO-2026-02043"
+    },
+    {
+      "custom_box_1": 11.0,
+      "custom_box_1_pack": 0,
+      "custom_box_2": 11.0,
+      "custom_box_2_pack": 0,
+      "name": "MFG-WO-2026-02487"
+    },
+    {
+      "custom_box_1": 12.0,
+      "custom_box_1_pack": 0,
+      "custom_box_2": 12.0,
+      "custom_box_2_pack": 0,
+      "name": "MFG-WO-2026-03126"
+    },
+    {
+      "custom_box_1": 12.0,
+      "custom_box_1_pack": 0,
+      "custom_box_2": 12.0,
+      "custom_box_2_pack": 0,
+      "name": "MFG-WO-2026-03134"
+    }
+  ]
+}

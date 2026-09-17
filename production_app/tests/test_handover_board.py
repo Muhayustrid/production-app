@@ -692,7 +692,7 @@ class TestHandoverBoard(IntegrationTestCase):
 		# the (still empty) WO summary — legacy MR kg only shows pre-cutover
 		self.assertEqual(self._lot(board, wo.name)["custom_handover_material_request"], mr.name)
 		self.assertIsNone(req["box_1"])
-		self.assertIsNone(req["box_1_pack"])  # Pack never invented from MR data
+		self.assertIsNone(req["box_1_qty"])  # Pack never invented from MR data
 		self.assertIsNone(req["box_2"])
 		self.assertEqual(req["boxes"], [])
 		self.assertEqual(req["from_warehouse"], self.cold_wh)
@@ -774,12 +774,14 @@ class TestHandoverBoard(IntegrationTestCase):
 
 		wo1.db_set("custom_handover_material_request", mr1.name)
 		wo1.db_set("custom_box_1", 12.5)
-		wo1.db_set("custom_box_1_pack", 20)
+		wo1.db_set("custom_box_1_qty", 20)
 		wo1.db_set("custom_box_2", 8.0)
-		wo1.db_set("custom_box_2_pack", 19)
+		wo1.db_set("custom_box_2_qty", 19)
 		row = self._req(handover_board(), mr1.name)
-		self.assertEqual((row["box_1"], row["box_1_pack"]), (12.5, 20))
-		self.assertEqual((row["box_2"], row["box_2_pack"]), (8.0, 19))
+		self.assertEqual((row["box_1"], row["box_1_qty"]), (12.5, 20))
+		self.assertEqual((row["box_2"], row["box_2_qty"]), (8.0, 19))
+		# T39: every request row carries its item's count unit for the UI
+		self.assertEqual(row["display_uom"], "Pack")
 		# kg precedence proof: the WO value outranks the MR's legacy kg (12.5)
 		wo1.db_set("custom_box_1", 21.5)
 		self.assertEqual(self._req(handover_board(), mr1.name)["box_1"], 21.5)
@@ -788,8 +790,8 @@ class TestHandoverBoard(IntegrationTestCase):
 		mr2.db_set("custom_box_1", 6.5)
 		mr2.db_set("custom_box_2", 2.25)
 		row2 = self._req(handover_board(), mr2.name)
-		self.assertEqual((row2["box_1"], row2["box_1_pack"]), (6.5, None))
-		self.assertEqual((row2["box_2"], row2["box_2_pack"]), (2.25, None))
+		self.assertEqual((row2["box_1"], row2["box_1_qty"]), (6.5, None))
+		self.assertEqual((row2["box_2"], row2["box_2_qty"]), (2.25, None))
 
 		# the mapping is bulk: no per-card Work Order lookup inside _requests
 		real_get_value = frappe.db.get_value
@@ -803,9 +805,9 @@ class TestHandoverBoard(IntegrationTestCase):
 		with patch.object(frappe.db, "get_value", side_effect=no_wo_lookups):
 			rows = handover_api._requests(wo_rows, wo_names=[wo1.name, wo2.name])
 		by_mr = {r["mr"]: r for r in rows}
-		self.assertEqual((by_mr[mr1.name]["box_1"], by_mr[mr1.name]["box_1_pack"]), (21.5, 20))
-		self.assertEqual((by_mr[mr2.name]["box_1"], by_mr[mr2.name]["box_1_pack"]), (6.5, None))
-		self.assertIsNone(by_mr[mr2.name]["box_2_pack"])
+		self.assertEqual((by_mr[mr1.name]["box_1"], by_mr[mr1.name]["box_1_qty"]), (21.5, 20))
+		self.assertEqual((by_mr[mr2.name]["box_1"], by_mr[mr2.name]["box_1_qty"]), (6.5, None))
+		self.assertIsNone(by_mr[mr2.name]["box_2_qty"])
 
 	def test_t36_board_single_bulk_seams_no_fan_out(self):
 		"""T36: ONE full board build for MULTIPLE Work Orders hits each bulk
@@ -835,9 +837,9 @@ class TestHandoverBoard(IntegrationTestCase):
 		# A's summary: distinct kg proves the BULK WO row wins over the MR's 12.5
 		wo_a.db_set("custom_handover_material_request", mr_a.name)
 		wo_a.db_set("custom_box_1", 21.5)
-		wo_a.db_set("custom_box_1_pack", 9)
+		wo_a.db_set("custom_box_1_qty", 9)
 		wo_a.db_set("custom_box_2", 7.0)
-		wo_a.db_set("custom_box_2_pack", 2)
+		wo_a.db_set("custom_box_2_qty", 2)
 
 		from production_app.api import handover
 
@@ -883,11 +885,11 @@ class TestHandoverBoard(IntegrationTestCase):
 		row_a = self._req(board, mr_a.name)
 		row_b = self._req(board, mr_b.name)
 		# Link/kg/Pack read from the single bulk Work Order result set
-		self.assertEqual((row_a["box_1"], row_a["box_1_pack"]), (21.5, 9))
-		self.assertEqual((row_a["box_2"], row_a["box_2_pack"]), (7.0, 2))
+		self.assertEqual((row_a["box_1"], row_a["box_1_qty"]), (21.5, 9))
+		self.assertEqual((row_a["box_2"], row_a["box_2_qty"]), (7.0, 2))
 		self.assertEqual(self._lot(board, wo_a.name)["custom_handover_material_request"], mr_a.name)
 		# pre-cutover fallback: legacy MR kg, Pack never invented
-		self.assertEqual((row_b["box_1"], row_b["box_1_pack"]), (12.5, None))
+		self.assertEqual((row_b["box_1"], row_b["box_1_qty"]), (12.5, None))
 
 	# ------------------------- 4. legacy unsupported + empty-lot drop rule
 

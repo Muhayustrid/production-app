@@ -1319,9 +1319,9 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		expected = {
 			"custom_handover_material_request": ("Link", "Material Request"),
 			"custom_box_1": ("Float", None),
-			"custom_box_1_pack": ("Int", None),
+			"custom_box_1_qty": ("Int", None),
 			"custom_box_2": ("Float", None),
-			"custom_box_2_pack": ("Int", None),
+			"custom_box_2_qty": ("Int", None),
 		}
 		for fieldname, (fieldtype, options) in expected.items():
 			df = meta.get_field(fieldname)
@@ -1335,14 +1335,14 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self._receipt(self.rm2, 1000)
 		wo = self._make_wo(100)
 		wo.db_set("custom_box_1", 3.5)
-		wo.db_set("custom_box_1_pack", 12)
+		wo.db_set("custom_box_1_qty", 12)
 		wo.db_set("custom_box_2", 1.25)
-		wo.db_set("custom_box_2_pack", 2)
+		wo.db_set("custom_box_2_qty", 2)
 		wo.reload()
 		self.assertEqual(flt(wo.custom_box_1), 3.5)
-		self.assertEqual(wo.custom_box_1_pack, 12)
+		self.assertEqual(wo.custom_box_1_qty, 12)
 		self.assertEqual(flt(wo.custom_box_2), 1.25)
-		self.assertEqual(wo.custom_box_2_pack, 2)
+		self.assertEqual(wo.custom_box_2_qty, 2)
 
 	def test_t05_box_identifier_and_leader_name_persist_after_submit(self):
 		self._receipt(self.rm1, 1000)
