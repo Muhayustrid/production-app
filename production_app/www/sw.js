@@ -19,7 +19,13 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(SHELL_CACHE)
-      .then((cache) => cache.addAll(SHELL_URLS))
+      .then((cache) =>
+        // Hosts may serve assets with long-lived immutable cache headers;
+        // precache must revalidate or a new install could copy a stale file.
+        cache.addAll(
+          SHELL_URLS.map((url) => new Request(url, { cache: 'no-cache' }))
+        )
+      )
       .then(() => self.skipWaiting())
   );
 });
@@ -68,7 +74,11 @@ self.addEventListener('fetch', (event) => {
 async function networkFirst(request, cacheName, isNavigation) {
   const cache = await caches.open(cacheName);
   try {
-    const response = await fetch(request);
+    // Navigations already come back no-cache from the www page; the fixed-name
+    // bundle/css may sit behind immutable HTTP caches, so revalidate them.
+    const response = await fetch(
+      isNavigation ? request : new Request(request, { cache: 'no-cache' })
+    );
     if (response && response.ok) {
       cache.put(request, response.clone());
     }
