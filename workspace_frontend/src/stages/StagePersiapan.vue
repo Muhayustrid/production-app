@@ -25,8 +25,8 @@ const tried = ref(false)
 
 function validate() {
   errors.adonanKe = !(Number(form.adonanKe) >= 1) ? 'Isi nomor adonan (min. 1).' : ''
-  errors.suhuAdonan = form.suhuAdonan === '' || form.suhuAdonan == null ? 'Isi suhu adonan.' : ''
   // FU38: penimbang/jumlah kru/leader opsional — kosong = tidak dicatat
+  // FU39: suhu adonan opsional juga — kosong dikirim '' agar server melewatkan nilainya
   return Object.values(errors).every((e) => !e)
 }
 
@@ -36,7 +36,8 @@ function submit() {
   startProduction(props.wo, {
     adonanKe: Number(form.adonanKe),
     jamAdonan: form.jamAdonan,
-    suhuAdonan: Number(form.suhuAdonan),
+    // FU39: kosong → '' (server melewatkan), 0 eksplisit tetap tercatat 0.0
+    suhuAdonan: form.suhuAdonan === '' || form.suhuAdonan == null ? '' : Number(form.suhuAdonan),
     namaPenimbang: String(form.namaPenimbang).trim(),
     jumlahKru: Number(form.jumlahKru),
     leaderProduksi: String(form.leaderProduksi).trim()
@@ -68,12 +69,11 @@ function submit() {
           </div>
 
           <div class="field">
-            <label for="f-suhu">Suhu Adonan <span class="req">*</span></label>
+            <label for="f-suhu">Suhu Adonan</label>
             <div class="inputwrap">
               <input id="f-suhu" v-model="form.suhuAdonan" class="input" type="number" step="0.1" min="0" :disabled="review" />
               <span class="unitmark">°C</span>
             </div>
-            <div v-if="tried && errors.suhuAdonan" class="err">{{ errors.suhuAdonan }}</div>
           </div>
         </div>
       </div>
