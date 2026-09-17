@@ -42,7 +42,7 @@ const byLane = computed(() => {
   const g = { persiapan: [], material: [], operasi: [], prepacking: [], postpacking: [], finish: [], completed: [] }
   for (const w of props.list) {
     // FU21: lane Selesai (Cold Storage) = antrean barang jadi yang BELUM masuk
-    // alur serah terima; WO yang sudah diminta/siap/terkirim ke gudang sudah
+    // alur serah terima; WO yang sudah diminta/terkirim ke gudang sudah
     // dilacak di papan Stock Entry dan disembunyikan dari sini.
     if (w.stage === 'completed' && w.handover) continue
     g[w.stage]?.push(w)

@@ -4,13 +4,17 @@ import { Warehouse } from 'lucide-vue-next'
 import { call, loadSuggestionPreferences, saveSuggestionPreferences, suggestionPreferences, uiTopLoading } from './store.js'
 import LinkInput from './LinkInput.vue'
 
-const fields = [
-  { key: 'source_warehouse', label: 'Source Warehouse', desc: 'Lokasi bahan baku tersedia.' },
-  { key: 'wip_warehouse', label: 'Work-in-Progress Warehouse', desc: 'Lokasi operasi produksi dijalankan.' },
-  { key: 'fg_warehouse', label: 'Target Warehouse', desc: 'Lokasi barang jadi disimpan.' },
-  { key: 'scrap_warehouse', label: 'Scrap Warehouse', desc: 'Lokasi material scrap disimpan.' },
-  { key: 'handover_warehouse', label: 'Gudang serah terima / barang jadi', desc: 'Tujuan pengiriman serah terima (halaman Stock Entry).' },
-  { key: 'handover_source_warehouse', label: 'Source Warehouse (Stock Entry)', desc: 'Asal pengiriman serah terima (Cold Storage) — halaman Stock Entry.' }
+// FU40: label konsisten Indonesia (istilah ERPNext dipertahankan di keterangan),
+// grid dipecah dua blok: default Work Order vs default serah terima.
+const woFields = [
+  { key: 'source_warehouse', label: 'Gudang Sumber', desc: 'Source Warehouse — lokasi bahan baku tersedia.' },
+  { key: 'wip_warehouse', label: 'Gudang Work in Progress', desc: 'WIP Warehouse — lokasi operasi produksi dijalankan.' },
+  { key: 'fg_warehouse', label: 'Gudang Target', desc: 'Target Warehouse — lokasi barang jadi disimpan.' },
+  { key: 'scrap_warehouse', label: 'Gudang Scrap', desc: 'Scrap Warehouse — lokasi material scrap disimpan.' }
+]
+const handoverFields = [
+  { key: 'handover_warehouse', label: 'Gudang Tujuan Serah Terima', desc: 'Tujuan pengiriman barang jadi (halaman Stock Entry).' },
+  { key: 'handover_source_warehouse', label: 'Gudang Asal Serah Terima', desc: 'Asal pengiriman — biasanya Cold Storage (halaman Stock Entry).' }
 ]
 
 const form = reactive({
@@ -75,15 +79,10 @@ async function save() {
     <div class="panel-head">
       <span class="p-ico"><Warehouse :size="15" :stroke-width="1.9" /></span>
       <h2>Pengaturan Gudang</h2>
-      <span class="lead">Gudang default untuk setiap Work Order di workspace ini.</span>
+      <span class="lead">Gudang default untuk Work Order dan serah terima di workspace ini.</span>
     </div>
 
     <div class="panel-body">
-      <div class="callout ok" style="margin-bottom: 14px">
-        Nilai di bawah dipakai Work Order yang kolom gudangnya masih kosong saat
-        Persiapan disimpan — nilai yang sudah terisi di Work Order tidak pernah ditimpa.
-      </div>
-
       <!-- FU20: loading ditandai spinner global di tepi atas (App.vue) -->
       <div v-if="loading" aria-hidden="true"></div>
       <template v-else>
@@ -100,11 +99,38 @@ async function save() {
           </div>
         </div>
 
-        <div class="form-grid cols2">
-          <div v-for="f in fields" :key="f.key" class="field">
-            <label :for="`wh-${f.key}`">{{ f.label }}</label>
-            <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
-            <div class="hint">{{ f.desc }}</div>
+        <div class="settings-block">
+          <div class="settings-block-head">
+            <div>
+              <h3>Default Work Order</h3>
+            </div>
+          </div>
+          <div class="callout ok" style="margin-bottom: 14px">
+            Dipakai Work Order yang kolom gudangnya masih kosong saat Persiapan
+            disimpan — nilai yang sudah terisi di Work Order tidak pernah ditimpa.
+          </div>
+          <div class="form-grid cols2">
+            <div v-for="f in woFields" :key="f.key" class="field">
+              <label :for="`wh-${f.key}`">{{ f.label }}</label>
+              <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
+              <div class="hint">{{ f.desc }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-head">
+            <div>
+              <h3>Serah Terima (Stock Entry)</h3>
+              <p class="hint">Asal dan tujuan default pengiriman di papan Serah Terima.</p>
+            </div>
+          </div>
+          <div class="form-grid cols2" style="margin-top: 12px">
+            <div v-for="f in handoverFields" :key="f.key" class="field">
+              <label :for="`wh-${f.key}`">{{ f.label }}</label>
+              <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
+              <div class="hint">{{ f.desc }}</div>
+            </div>
           </div>
         </div>
 

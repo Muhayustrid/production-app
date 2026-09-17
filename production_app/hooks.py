@@ -8,9 +8,10 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["erpnext"]
 
-# Idempotent Work Order custom-field upgrade (T05); safe on every migrate.
+# Idempotent metadata install/upgrade; required on a fresh Frappe Cloud site.
+after_install = "production_app.upgrade.apply"
 after_migrate = ["production_app.upgrade.apply"]
 
 # Ikon app di app switcher desk (/apps): klik langsung masuk Production Workspace.

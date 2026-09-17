@@ -1311,6 +1311,39 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		finally:
 			suggestion_preferences_save(1)
 
+	def test_t35_wo_handover_summary_field_contract(self):
+		"""T35: the five handover summary fields exist on the Work Order as
+		read-only + allow-on-submit with exact types — written only through
+		controlled db_set by the server gate, round-trippable on submitted WOs."""
+		meta = frappe.get_meta("Work Order")
+		expected = {
+			"custom_handover_material_request": ("Link", "Material Request"),
+			"custom_box_1": ("Float", None),
+			"custom_box_1_qty": ("Int", None),
+			"custom_box_2": ("Float", None),
+			"custom_box_2_qty": ("Int", None),
+		}
+		for fieldname, (fieldtype, options) in expected.items():
+			df = meta.get_field(fieldname)
+			self.assertIsNotNone(df, fieldname)
+			self.assertEqual(df.fieldtype, fieldtype, fieldname)
+			self.assertEqual(df.options or None, options, fieldname)
+			self.assertTrue(df.read_only, fieldname)
+			self.assertTrue(df.allow_on_submit, fieldname)
+
+		self._receipt(self.rm1, 1000)
+		self._receipt(self.rm2, 1000)
+		wo = self._make_wo(100)
+		wo.db_set("custom_box_1", 3.5)
+		wo.db_set("custom_box_1_qty", 12)
+		wo.db_set("custom_box_2", 1.25)
+		wo.db_set("custom_box_2_qty", 2)
+		wo.reload()
+		self.assertEqual(flt(wo.custom_box_1), 3.5)
+		self.assertEqual(wo.custom_box_1_qty, 12)
+		self.assertEqual(flt(wo.custom_box_2), 1.25)
+		self.assertEqual(wo.custom_box_2_qty, 2)
+
 	def test_t05_box_identifier_and_leader_name_persist_after_submit(self):
 		self._receipt(self.rm1, 1000)
 		self._receipt(self.rm2, 1000)

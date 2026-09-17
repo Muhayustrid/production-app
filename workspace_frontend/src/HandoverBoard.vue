@@ -2,36 +2,36 @@
 // Adapted from the mockup HandoverBoard.vue (read-only source): role simulation
 // strip and fail-injection removed; roles, lots, lanes and warehouses come from
 // the server board payload (T23/T24) — the UI never writes lane state.
+// T35/T37 three-lane cutover: Cold Storage -> Request Gudang -> Terkirim. The
+// box allocation (kg + count in the item's warehouse UOM, T39 universal) is
+// requested in the Cold Storage -> Request form; verification is gone (server
+// create_request validates; the old postpacking call has no supported
+// caller). Request cards: gudang cancels, produksi sends direct.
 import { computed, nextTick, reactive, onMounted, ref, watch } from 'vue'
 import {
   cancelRequest, createRequest, handoverBoard, handoverLots, handoverRequests, handoverState,
-  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, savePostPacking, sendHandover, setActionError
+  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, sendHandover, setActionError
 } from './store.js'
 import { fmtInt, qtyMain } from './format.js'
 import { handoverCard } from './handover-card.js'
+import { boxAllocationText, expectedUnits, unitLabel, unitProblem, validateBoxAllocation } from './handover-box.js'
 import {
   CheckCircle2, ClipboardList, Filter, GripVertical, Inbox,
-  PackageCheck, Snowflake, Truck, Undo2
+  Snowflake, Truck, Undo2
 } from 'lucide-vue-next'
 
 const isGudang = computed(() => !!handoverBoard.roles.is_gudang)
 const isProduksi = computed(() => !!handoverBoard.roles.is_produksi)
-// multi-role (Gudang + Produksi sekaligus): kedua sisi aksi tersedia — klik kartu
-// request memilih aksi; drag boleh ke dua lane (cold = batalkan, siap = post-packing)
+// multi-role (Gudang + Produksi sekaligus): klik kartu request memilih aksi;
+// drag boleh ke dua lane (cold = batalkan, kirim = kirim langsung)
 const isMultiRole = computed(() => isGudang.value && isProduksi.value)
 
-// ---- papan: 4 lane, lot Cold Storage FIFO (urutan dari server) ----
+// ---- papan: 3 lane (T35), lot Cold Storage FIFO (urutan dari server) ----
 const lanes = [
-  { key: 'cold', title: 'Cold Storage', sub: 'Lot barang jadi · FIFO', icon: Snowflake, tone: '', empty: 'Belum ada lot' },
-  { key: 'request', title: 'Request Gudang', sub: 'Menunggu verifikasi', icon: ClipboardList, tone: '', empty: 'Belum ada request' },
-  { key: 'siap', title: 'Siap Kirim', sub: 'Sudah diverifikasi', icon: PackageCheck, tone: '', empty: 'Belum ada siap kirim' },
-  { key: 'kirim', title: 'Terkirim', sub: 'Diterima gudang', icon: CheckCircle2, tone: 'ok', empty: 'Belum ada terkirim' }
+  { key: 'cold', title: 'Cold Storage', icon: Snowflake, empty: 'Belum ada lot' },
+  { key: 'request', title: 'Request Gudang', icon: ClipboardList, empty: 'Belum ada request' },
+  { key: 'kirim', title: 'Terkirim', icon: CheckCircle2, tone: 'ok', empty: 'Belum ada terkirim' }
 ]
-
-// T32 (R4): box = berat kg pada MR (float) — teks "Box a / b kg" bila ada isian
-const boxText = (r) => (r.box1 != null || r.box2 != null)
-  ? `${r.box1 ?? '-'} / ${r.box2 ?? '-'} kg`
-  : ''
 
 // FU29: peringatan dini — stok batch/pool di GUDANG ASAL RUTE kurang dari qty
 const routeWarn = (r) => (r.routeAvailable != null && r.requestedQtyPcs > r.routeAvailable)
@@ -101,33 +101,10 @@ function reqCard(r) {
       timestampLabel: 'Waktu',
       timestamp: r.createdAt,
       units: lot0 || r,
-      box: boxText(r) || undefined
+      box: boxAllocationText(r) || undefined
     }),
     note: [stopped ? 'Dihentikan di Desk. Aktifkan kembali sebelum dilanjutkan.' : '', routeWarn(r)]
       .filter(Boolean).join(' · ')
-  }
-}
-
-function siapCard(r) {
-  const lot0 = lotForWo(r.workOrder)
-  const p = r.postPacking
-  return {
-    kind: 'siap', ref: r.id, key: r.id,
-    live: isProduksi.value, draggable: isProduksi.value,
-    name: r.item,
-    ...handoverCard({
-      workOrder: r.workOrder,
-      document: r.materialRequest,
-      batch: r.batch,
-      adonan: r.adonanKe ?? lot0?.adonanKe,
-      quantity: r.requestedQtyPcs,
-      quantityLabel: 'Qty kirim',
-      timestampLabel: p?.jam ? 'Jam packing' : '',
-      timestamp: p?.jam,
-      units: lot0 || r,
-      box: boxText(r) || undefined
-    }),
-    note: [p?.qc ? `QC ${p.qcLabel || p.qc}` : '', routeWarn(r)].filter(Boolean).join(' · ')
   }
 }
 
@@ -147,7 +124,7 @@ function doneCard(r) {
       timestampLabel: 'Dikirim',
       timestamp: r.sentAt,
       units: lot0 || r,
-      box: boxText(r) || undefined
+      box: boxAllocationText(r) || undefined
     }),
     note: ''
   }
@@ -183,7 +160,7 @@ const filteredLots = computed(() => handoverLots.filter((l) => {
   if (!day) return false
   return (!lotFrom.value || day >= lotFrom.value) && (!lotTo.value || day <= lotTo.value)
 }))
-const coldLots = computed(() => filteredLots.value.filter((l) => (l.unsupported || lotAvailablePcs(l) > 0) && !pendingRequests.has(l.workOrder)))
+const coldLots = computed(() => filteredLots.value.filter((l) => l.unsupported || lotAvailablePcs(l) > 0))
 const coldTotalPages = computed(() => Math.max(1, Math.ceil(coldLots.value.length / coldPageSize.value)))
 const pagedColdLots = computed(() => coldLots.value.slice((coldPage.value - 1) * coldPageSize.value, coldPage.value * coldPageSize.value))
 watch([lotFrom, lotTo], () => { coldPage.value = 1; saveHandoverPreferences() })
@@ -195,14 +172,9 @@ function lotReset() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value 
 
 const byLane = computed(() => ({
   cold: pagedColdLots.value.map(lotCard),
-  request: [
-    // optimistic (FU19): kartu pindah duluan selagi create_request berjalan
-    ...[...pendingRequests].map(optimisticReqCard).filter(Boolean),
-    ...handoverRequests
-      .filter((r) => r.lane === 'request' && r.flag !== 'cancelled' && r.flag !== 'draft')
-      .map(reqCard),
-  ],
-  siap: handoverRequests.filter((r) => r.lane === 'siap_kirim').map(siapCard),
+  request: handoverRequests
+    .filter((r) => r.lane === 'request' && r.flag !== 'cancelled' && r.flag !== 'draft')
+    .map(reqCard),
   kirim: handoverRequests
     .filter((r) => r.lane === 'terkirim')
     .sort((a, b) => (a.sentAt || '').localeCompare(b.sentAt || ''))
@@ -215,8 +187,8 @@ const overLane = ref(null)
 
 function targetLanes(d) {
   if (d.kind === 'lot') return ['request']
-  if (d.kind === 'siap') return ['kirim']
-  return isMultiRole.value ? ['cold', 'siap'] : (isGudang.value ? ['cold'] : ['siap'])
+  // request: cold = batalkan (gudang), kirim = kirim langsung (produksi)
+  return isMultiRole.value ? ['cold', 'kirim'] : (isGudang.value ? ['cold'] : ['kirim'])
 }
 function laneDroppable(laneKey) {
   return !!drag.value && targetLanes(drag.value).includes(laneKey)
@@ -243,101 +215,73 @@ function onDrop(e, laneKey) {
   drag.value = null
   overLane.value = null
   if (!d || !targetLanes(d).includes(laneKey)) return
-  // drop TIDAK mengubah state: lot = request langsung (R3), lainnya buka dialog
-  if (d.kind === 'lot') requestLot(d.ref)
+  // drop TIDAK mengubah state: semua aksi lewat dialog (server truth tetap)
+  if (d.kind === 'lot') openRequestDialog(d.ref)
   else if (d.kind === 'request') {
-    // lane tujuan menentukan aksi: cold = batalkan (gudang), siap = verifikasi (produksi)
-    laneKey === 'cold' ? openCancelDialog(d.ref) : openVerifyDialog(d.ref)
-  } else if (d.kind === 'siap') openSendDialog(d.ref)
+    laneKey === 'cold' ? openCancelDialog(d.ref) : openSendDialog(d.ref)
+  }
 }
 
 function clickCard(c) {
   if (!c.live) return
-  if (c.kind === 'lot') requestLot(c.ref)
+  if (c.kind === 'lot') openRequestDialog(c.ref)
   else if (c.kind === 'request') {
     isMultiRole.value ? openChooseDialog(c.ref)
-      : isGudang.value ? openCancelDialog(c.ref) : openVerifyDialog(c.ref)
-  } else if (c.kind === 'siap') openSendDialog(c.ref)
+      : isGudang.value ? openCancelDialog(c.ref) : openSendDialog(c.ref)
+  }
 }
 
-// ---- request langsung (R3): drop/klik kartu Cold Storage = request qty penuh WO ----
-// Tanpa dialog; qty & guard ketersediaan disimpulkan server (FIFO tetap server-side).
-// Optimistic (FU19): kartu langsung pindah ke lane Request Gudang selagi server
-// membuat MR; sukses -> board diganti server truth (applyBoard), gagal -> kartu
-// kembali ke Cold Storage + modal error (board lokal memang tak pernah berubah).
-const pendingRequests = reactive(new Set()) // woId yang create_request-nya masih berjalan
+// ---- dialog (Gudang): Buat Request Gudang — alokasi box kg + jumlah (T35,
+// T39 universal: satuan mengikuti UOM gudang item — Pack, Pcs, dll.) ----
+const dlgRequest = ref(null)
+const reqLot = ref(null)
+const reqError = ref('')
+const reqForm = reactive({ box1: '', box1Qty: '', box2: '0', box2Qty: '0' })
 
-async function requestLot(woId) {
-  if (handoverState.pending) return
-  pendingRequests.add(woId)
-  try { await createRequest(woId) }
-  catch (e) { setActionError(e, 'create_request') } // modal error global (FU14)
-  finally { pendingRequests.delete(woId) }
-}
+// UX check murni; kontrak & validasi tetap di server (create_request T35/T39).
+// unitProblem: 'conversion' (UOM gudang = UOM alternatif tanpa konversi
+// valid) vs 'fractional' (hasil Work Order tidak membentuk satuan utuh) —
+// dua pesan berbeda.
+const reqProblem = computed(() => (reqLot.value ? unitProblem(reqLot.value) : 'conversion'))
+const reqUnit = computed(() => unitLabel(reqLot.value))
+const reqExpected = computed(() => (reqLot.value && !reqProblem.value ? expectedUnits(reqLot.value) : null))
+const reqFieldErrors = computed(() => validateBoxAllocation(reqForm, reqExpected.value, reqUnit.value))
+const reqQtyText = computed(() =>
+  reqLot.value ? qtyMain(reqLot.value.producedQty, reqLot.value) : ''
+)
+const reqCanSave = computed(() =>
+  reqExpected.value != null && !Object.keys(reqFieldErrors.value).length && !handoverState.pending
+)
 
-function optimisticReqCard(woId) {
+function openRequestDialog(woId) {
   const lot = lotForWo(woId)
-  if (!lot) return null
-  return {
-    kind: 'request', ref: `pending:${woId}`, key: `pending:${woId}`,
-    live: false, draggable: false, pending: true,
-    name: lot.item,
-    ...handoverCard({
-      workOrder: lot.workOrder,
-      batch: lot.batch,
-      adonan: lot.adonanKe,
-      quantity: lot.producedQty,
-      quantityLabel: 'Diminta',
-      timestampLabel: '',
-      units: lot
-    }),
-    note: 'Menyimpan…'
-  }
+  if (!isGudang.value || !lot || lot.unsupported || lotAvailablePcs(lot) <= 0) return
+  reqLot.value = lot
+  reqError.value = ''
+  Object.assign(reqForm, { box1: '', box1Qty: '', box2: '0', box2Qty: '0' })
+  nextTick(() => dlgRequest.value.showModal())
 }
-
-// ---- dialog (Produksi): Verifikasi Siap Kirim — box-only kg (R4) ----
-const dlgVerify = ref(null)
-const verReq = ref(null)
-const verLot = ref(null)
-const verError = ref('')
-const verForm = reactive({ box1: '', box2: '' })
-
-// required, numerik, >= 0 — '' -> null (belum diisi), non-numerik/negatif -> NaN
-function boxNum(v) {
-  const s = String(v ?? '').trim()
-  if (s === '') return null
-  const n = Number(s)
-  return Number.isFinite(n) && n >= 0 ? n : NaN
+function closeRequest() {
+  if (handoverState.pending) return // simpanan berjalan: Batal/backdrop terkunci
+  dlgRequest.value.close()
+  reqLot.value = null
 }
-const boxOk = (v) => { const n = boxNum(v); return n != null && !Number.isNaN(n) }
-const verCanSave = computed(() => boxOk(verForm.box1) && boxOk(verForm.box2))
-
-function openVerifyDialog(reqId) {
-  const r = handoverRequests.find((x) => x.id === reqId)
-  if (!r || r.lane !== 'request' || r.flag) return
-  verReq.value = r
-  verLot.value = lotForWo(r.workOrder)
-  verError.value = ''
-  verForm.box1 = ''
-  verForm.box2 = ''
-  nextTick(() => dlgVerify.value.showModal())
+function guardRequestCancel(e) {
+  if (handoverState.pending) e.preventDefault() // Escape tidak menutup saat simpan
 }
-function closeVerify() {
-  dlgVerify.value.close()
-  verReq.value = null
-  verLot.value = null
-}
-async function confirmVerify() {
-  verError.value = ''
+async function confirmRequest() {
+  if (!reqCanSave.value) return
+  reqError.value = ''
   try {
-    await savePostPacking(verReq.value.id, { box1: verForm.box1, box2: verForm.box2 })
-    closeVerify()
+    // sukses: applyBoard sudah mengganti papan dgn server truth — baru tutup
+    await createRequest(reqLot.value.workOrder, { ...reqForm })
+    closeRequest()
   } catch (e) {
-    verError.value = e.message // input dipertahankan
+    reqError.value = e.message // dialog + seluruh isian dipertahankan
   }
 }
 
-// ---- dialog 3 (Produksi): Kirim Barang ----
+// ---- dialog (Produksi): Kirim ke Gudang — request langsung jadi Terkirim ----
 const dlgKirim = ref(null)
 const kirimReq = ref(null)
 const kirimError = ref('')
@@ -351,7 +295,7 @@ const kirimRoute = computed(() =>
 
 function openSendDialog(reqId) {
   const r = handoverRequests.find((x) => x.id === reqId)
-  if (!r || r.lane !== 'siap_kirim') return
+  if (!r || r.lane !== 'request' || r.flag) return
   kirimReq.value = r
   kirimError.value = ''
   kirimDone.value = false
@@ -374,7 +318,7 @@ async function confirmKirim() {
   }
 }
 
-// ---- dialog 4 (Gudang): batalkan request salah input ----
+// ---- dialog (Gudang): batalkan request salah input ----
 const dlgCancel = ref(null)
 const cancelReq = ref(null)
 const cancelError = ref('')
@@ -403,7 +347,7 @@ async function confirmCancel() {
   }
 }
 
-// ---- dialog pilih aksi (khusus user multi-role: Gudang + Produksi) ----
+// ---- dialog pilih aksi request (khusus user multi-role: Gudang + Produksi) ----
 const dlgChoose = ref(null)
 const chooseRef = ref(null)
 const chooseReq = computed(() =>
@@ -421,10 +365,10 @@ function closeChoose() {
   chooseRef.value = null
 }
 // id harus ditangkap SEBELUM closeChoose meng-null-kan chooseRef (computed jadi null)
-function chooseVerify() {
+function chooseSend() {
   const id = chooseRef.value
   closeChoose()
-  openVerifyDialog(id)
+  openSendDialog(id)
 }
 function chooseCancel() {
   const id = chooseRef.value
@@ -513,7 +457,6 @@ onMounted(() => {
         </span>
         <div class="kb-hgroup">
           <span class="kb-title">{{ l.title }}</span>
-          <span class="kb-sub">{{ l.sub }}</span>
         </div>
         <span class="kb-count">{{ byLane[l.key].length }}</span>
       </header>
@@ -576,61 +519,80 @@ onMounted(() => {
     </label>
   </div>
 
-  <!-- ============ dialog: Verifikasi Siap Kirim (Produksi) ============ -->
-  <dialog ref="dlgVerify" class="dialog" @click.self="closeVerify">
-    <template v-if="verReq">
+  <!-- ============ dialog: Buat Request Gudang (Gudang, dari Cold Storage) ============ -->
+  <dialog ref="dlgRequest" class="dialog" @click.self="closeRequest" @cancel="guardRequestCancel">
+    <template v-if="reqLot">
       <header class="dlg-head">
-        <span class="dlg-ico" aria-hidden="true"><PackageCheck :size="16" :stroke-width="1.9" /></span>
+        <span class="dlg-ico" aria-hidden="true"><ClipboardList :size="16" :stroke-width="1.9" /></span>
         <div class="dlg-hgroup">
-          <h3>Verifikasi Siap Kirim</h3>
+          <h3>Buat Request Gudang</h3>
           <p class="dlg-sub">
-            <strong>{{ verReq.workOrder }}</strong> · {{ verReq.item }} · {{ verReq.materialRequest
-            }}<template v-if="verReq.batch"> · Batch {{ verReq.batch }}</template>
+            <strong>{{ reqLot.workOrder }}</strong> · {{ reqLot.item
+            }}<template v-if="reqLot.batch"> · Batch {{ reqLot.batch }}</template>
           </p>
         </div>
       </header>
       <div class="dlg-context">
         <div class="sum-row">
-          <span class="k">Diminta</span>
-          <span class="v">{{ qtyMain(verReq.requestedQtyPcs, verLot || verReq) }}</span>
+          <span class="k">Hasil Work Order</span>
+          <span class="v">{{ reqQtyText }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Hasil akhir Work Order</span>
-          <span class="v">{{ qtyMain(verLot?.producedQty ?? verReq.requestedQtyPcs, verLot || verReq) }}</span>
+          <span class="k">Material Request</span>
+          <span class="v dim">dibuat setelah disimpan</span>
         </div>
       </div>
       <div class="boxgroup" style="margin-top: 14px">
         <div class="grouptitle">Box Work Order</div>
         <div class="boxrow">
           <div class="field">
-            <label for="ver-box-1">Box 1 (kg) <span class="req">*</span></label>
-            <input id="ver-box-1" v-model="verForm.box1" class="input" type="number" step="any" min="0" />
+            <label for="req-box-1">Box 1 (kg) <span class="req">*</span></label>
+            <input id="req-box-1" v-model="reqForm.box1" class="input" type="number" step="any" min="0" />
           </div>
           <div class="field">
-            <label for="ver-box-2">Box 2 (kg) <span class="req">*</span></label>
-            <input id="ver-box-2" v-model="verForm.box2" class="input" type="number" step="any" min="0" />
+            <label for="req-box-1-qty">Box 1 ({{ reqUnit }}) <span class="req">*</span></label>
+            <input id="req-box-1-qty" v-model="reqForm.box1Qty" class="input" type="number" step="1" min="1" />
+          </div>
+        </div>
+        <div class="boxrow">
+          <div class="field">
+            <label for="req-box-2">Box 2 (kg)</label>
+            <input id="req-box-2" v-model="reqForm.box2" class="input" type="number" step="any" min="0" />
+          </div>
+          <div class="field">
+            <label for="req-box-2-qty">Box 2 ({{ reqUnit }})</label>
+            <input id="req-box-2-qty" v-model="reqForm.box2Qty" class="input" type="number" step="1" min="0" />
           </div>
         </div>
       </div>
-      <p class="hint" style="margin-top: 8px">Box disimpan pada Work Order. Stock Entry baru dibuat saat request dipindahkan ke Terkirim.</p>
+      <p class="hint" style="margin-top: 8px">Box 2 boleh kosong (0 kg / 0 jumlah). Jumlah {{ reqUnit }} Box 1 + Box 2 harus tepat {{ reqExpected ?? '—' }} {{ reqUnit }}. Material Request dibuat setelah disimpan; Stock Entry saat dikirim.</p>
 
-      <p v-if="verError" class="err" style="margin-top: 8px" role="alert">{{ verError }}</p>
+      <p v-if="reqProblem === 'conversion'" class="err" style="margin-top: 8px" role="alert">
+        Konversi {{ reqUnit }} item belum valid — lengkapi konversi satuan item di Desk sebelum membuat request.
+      </p>
+      <p v-else-if="reqProblem === 'fractional'" class="err" style="margin-top: 8px" role="alert">
+        Hasil Work Order tidak membentuk {{ reqUnit }} utuh — sesuaikan hasil produksi atau konversi {{ reqUnit }} item di Desk.
+      </p>
+      <p v-else-if="Object.keys(reqFieldErrors).length" class="err" style="margin-top: 8px" role="alert">
+        {{ Object.values(reqFieldErrors).join(' ') }}
+      </p>
+      <p v-if="reqError" class="err" style="margin-top: 8px" role="alert">{{ reqError }}</p>
       <p v-if="handoverState.pending" role="status">Menyimpan…</p>
       <div class="dlg-actions">
-        <button class="btn" :disabled="!!handoverState.pending" @click="closeVerify">Batal</button>
-        <button class="btn btn-primary" :disabled="!verCanSave || !!handoverState.pending" @click="confirmVerify">Siapkan Kirim</button>
+        <button class="btn" :disabled="!!handoverState.pending" @click="closeRequest">Batal</button>
+        <button class="btn btn-primary" :disabled="!reqCanSave" @click="confirmRequest">Buat Request Gudang</button>
       </div>
     </template>
   </dialog>
 
-  <!-- ============ dialog: Kirim Barang (Produksi) ============ -->
+  <!-- ============ dialog: Kirim ke Gudang (Produksi, dari Request) ============ -->
   <dialog ref="dlgKirim" class="dialog" @click.self="closeKirim">
     <template v-if="kirimReq">
       <template v-if="!kirimDone">
         <header class="dlg-head">
           <span class="dlg-ico" aria-hidden="true"><Truck :size="16" :stroke-width="1.9" /></span>
           <div class="dlg-hgroup">
-            <h3>Kirim Barang</h3>
+            <h3>Kirim ke Gudang</h3>
             <p class="dlg-sub"><strong>{{ kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
           </div>
         </header>
@@ -648,7 +610,7 @@ onMounted(() => {
         </div>
         <div class="sum-row">
           <span class="k">Box</span>
-          <span class="v">{{ boxText(kirimReq) || '-' }}</span>
+          <span class="v" style="white-space: pre-line">{{ boxAllocationText(kirimReq) || '-' }}</span>
         </div>
         <div class="fgbox" style="margin-top: 10px">
           <span>Qty Transfer</span>
@@ -729,8 +691,8 @@ onMounted(() => {
         Akun Anda punya peran Gudang <em>dan</em> Produksi — pilih sisi untuk request ini.
       </p>
       <div class="dlg-actions">
-        <button class="btn" @click="chooseCancel">Batalkan (Gudang)</button>
-        <button class="btn btn-primary" @click="chooseVerify">Verifikasi Siap Kirim (Produksi)</button>
+        <button class="btn" @click="chooseCancel">Batalkan Request</button>
+        <button class="btn btn-primary" @click="chooseSend">Kirim ke Gudang</button>
       </div>
     </template>
   </dialog>

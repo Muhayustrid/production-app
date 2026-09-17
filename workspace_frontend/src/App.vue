@@ -56,7 +56,7 @@ const currentUser = window.workspace_user || 'Pengguna ERPNext'
 const initials = currentUser.split(' ').slice(0, 2).map(s => s[0]).join('')
 const activeCount = computed(() => workOrders.filter((w) => w.stage !== 'completed').length)
 const handoverCount = computed(() =>
-  handoverRequests.filter((r) => r.lane === 'request' || r.lane === 'siap_kirim').length
+  handoverRequests.filter((r) => r.lane === 'request').length
 )
 // FU20: spinner global di tepi atas untuk semua pemuatan halaman
 const busyLoading = computed(() =>

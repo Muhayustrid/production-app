@@ -1409,6 +1409,8 @@ textarea.input { height: auto; padding: 8px 10px; }
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
+/* T37: alokasi box dua baris (Box 1/Box 2) — pill nowrap akan overflow di 390px */
+.se-card-foot .kb-pill { white-space: pre-line; text-align: right; }
 
 /* FU20: penanda serah terima — WO sudah dikasih ke gudang (MR/SE) */
 .chip-gudang {
@@ -1423,7 +1425,6 @@ textarea.input { height: auto; padding: 8px 10px; }
   background: var(--info-bg);
   color: var(--info-ink);
 }
-.chip-gudang.siap_kirim { background: var(--warn-bg); color: var(--warn-ink); }
 .chip-gudang.terkirim { background: var(--ok-soft); color: var(--ok-strong); }
 .kb-qty { display: block; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
 .kb-qty .ql {

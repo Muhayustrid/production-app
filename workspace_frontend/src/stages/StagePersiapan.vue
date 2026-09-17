@@ -25,10 +25,8 @@ const tried = ref(false)
 
 function validate() {
   errors.adonanKe = !(Number(form.adonanKe) >= 1) ? 'Isi nomor adonan (min. 1).' : ''
-  errors.suhuAdonan = form.suhuAdonan === '' || form.suhuAdonan == null ? 'Isi suhu adonan.' : ''
-  errors.namaPenimbang = !String(form.namaPenimbang).trim() ? 'Isi nama penimbang.' : ''
-  errors.jumlahKru = !(Number(form.jumlahKru) >= 1) ? 'Isi jumlah kru (min. 1).' : ''
-  errors.leaderProduksi = !String(form.leaderProduksi).trim() ? 'Isi leader produksi.' : ''
+  // FU38: penimbang/jumlah kru/leader opsional — kosong = tidak dicatat
+  // FU39: suhu adonan opsional juga — kosong dikirim '' agar server melewatkan nilainya
   return Object.values(errors).every((e) => !e)
 }
 
@@ -38,7 +36,8 @@ function submit() {
   startProduction(props.wo, {
     adonanKe: Number(form.adonanKe),
     jamAdonan: form.jamAdonan,
-    suhuAdonan: Number(form.suhuAdonan),
+    // FU39: kosong → '' (server melewatkan), 0 eksplisit tetap tercatat 0.0
+    suhuAdonan: form.suhuAdonan === '' || form.suhuAdonan == null ? '' : Number(form.suhuAdonan),
     namaPenimbang: String(form.namaPenimbang).trim(),
     jumlahKru: Number(form.jumlahKru),
     leaderProduksi: String(form.leaderProduksi).trim()
@@ -70,12 +69,11 @@ function submit() {
           </div>
 
           <div class="field">
-            <label for="f-suhu">Suhu Adonan <span class="req">*</span></label>
+            <label for="f-suhu">Suhu Adonan</label>
             <div class="inputwrap">
               <input id="f-suhu" v-model="form.suhuAdonan" class="input" type="number" step="0.1" min="0" :disabled="review" />
               <span class="unitmark">°C</span>
             </div>
-            <div v-if="tried && errors.suhuAdonan" class="err">{{ errors.suhuAdonan }}</div>
           </div>
         </div>
       </div>
@@ -84,21 +82,18 @@ function submit() {
         <div class="grouptitle">Tim Produksi</div>
         <div class="form-grid cols3">
           <div class="field">
-            <label for="f-penimbang">Nama Penimbang <span class="req">*</span></label>
+            <label for="f-penimbang">Nama Penimbang</label>
             <input id="f-penimbang" v-model="form.namaPenimbang" class="input" type="text" :disabled="review" />
-            <div v-if="tried && errors.namaPenimbang" class="err">{{ errors.namaPenimbang }}</div>
           </div>
 
           <div class="field">
-            <label for="f-kru">Jumlah Kru <span class="req">*</span></label>
+            <label for="f-kru">Jumlah Kru</label>
             <input id="f-kru" v-model="form.jumlahKru" class="input" type="number" min="1" step="1" :disabled="review" />
-            <div v-if="tried && errors.jumlahKru" class="err">{{ errors.jumlahKru }}</div>
           </div>
 
           <div class="field">
-            <label for="f-leader">Leader Produksi <span class="req">*</span></label>
+            <label for="f-leader">Leader Produksi</label>
             <input id="f-leader" v-model="form.leaderProduksi" class="input" type="text" :disabled="review" />
-            <div v-if="tried && errors.leaderProduksi" class="err">{{ errors.leaderProduksi }}</div>
           </div>
         </div>
       </div>

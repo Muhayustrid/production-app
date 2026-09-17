@@ -33,10 +33,9 @@ const STAGE_UI = {
   cancelled: 'cancelled', review: 'review'
 }
 
-// FU20: penanda serah terima per WO (lane paling maju dari MR pengikat)
+// FU20/T35: penanda serah terima per WO — server hanya mengirim dua lane
 export const HANDOVER_LABELS = {
   request: 'Diminta Gudang',
-  siap_kirim: 'Siap Kirim',
   terkirim: 'Terkirim'
 }
 
@@ -413,17 +412,15 @@ function mapRequest(r) {
     item: r.item_name, itemCode: r.item_code,
     requestedQtyPcs: r.qty, stockUom: r.stock_uom, qtyInPack: r.qty_in_pack,
     adonanKe: r.adonan_ke, batch: r.batch,
-    box1: r.box_1, box2: r.box_2, boxes: r.boxes || [],
+    // T35/T39: alokasi box (kg + jumlah) dari ringkasan Work Order / MR
+    // legacy; `unit` = satuan gudang item (Pack/Pcs/dll.) untuk label UI
+    box1: r.box_1, box1Qty: r.box_1_qty,
+    box2: r.box_2, box2Qty: r.box_2_qty,
+    unit: r.display_uom || r.stock_uom,
     lane: r.lane, flag: r.flag,
     fromWarehouse: r.from_warehouse, toWarehouse: r.to_warehouse,
     // FU29: stok live di gudang asal rute (batch/pool) — null = tak dapat dihitung
     routeAvailable: r.route_available ?? null,
-    postPacking: r.postpacking ? {
-      goodQty: r.postpacking.good, rejectQty: r.postpacking.reject,
-      trialQty: r.postpacking.trial, sisaQty: r.postpacking.sisa,
-      jam: hhmm(r.postpacking.jam_packing), qc: r.postpacking.qc_packing,
-      qcLabel: r.postpacking.qc_packing_name, confirmed: !!r.postpacking.confirmed
-    } : null,
     stockEntry: r.stock_entry, sentAt: r.sent_at, ownerName: r.owner_name,
     createdAt: r.creation
   }
@@ -462,20 +459,20 @@ async function handoverAction(method, args) {
   }
 }
 
-// T32 (R3): request = qty penuh WO dari server — tidak ada argumen qty
-export function createRequest(workOrder) {
-  return handoverAction('create_request', { work_order: workOrder })
+// T35/T37/T39: form Request Gudang memvalidasi alokasi box (kg + jumlah
+// dalam satuan gudang item); validasi server tetap yang otoritatif — error
+// dilempar apa adanya agar dialog mempertahankan isian pengguna.
+export function createRequest(workOrder, v) {
+  return handoverAction('create_request', {
+    work_order: workOrder,
+    box_1: Number(v.box1),
+    box_1_qty: Number(v.box1Qty),
+    box_2: Number(v.box2),
+    box_2_qty: Number(v.box2Qty)
+  })
 }
 export function cancelRequest(materialRequest) {
   return handoverAction('cancel_request', { material_request: materialRequest })
-}
-// T32 (R5): box-only (kg float) — good/jam/qc/reject/trial tidak lagi dikirim
-export function savePostPacking(materialRequest, v) {
-  return handoverAction('save_post_packing', {
-    material_request: materialRequest,
-    box_1: v.box1 === '' || v.box1 == null ? null : Number(v.box1),
-    box_2: v.box2 === '' || v.box2 == null ? null : Number(v.box2)
-  })
 }
 export function sendHandover(materialRequest) {
   return handoverAction('send_handover', { material_request: materialRequest })

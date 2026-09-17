@@ -37,9 +37,8 @@ const qtyFields = computed(() => [
 ])
 
 const qtyValid = computed(() => ok.goodQty)
-// jam kosong = jam saat disimpan (diisi server); QC tetap wajib
-const metaValid = computed(() => String(form.qc).trim() !== '')
-const canSave = computed(() => qtyValid.value && metaValid.value && form.goodQty > 0)
+// jam kosong = jam saat disimpan (diisi server); FU38: QC Produksi opsional
+const canSave = computed(() => qtyValid.value && form.goodQty > 0)
 
 const total = computed(() => {
   const v = [form.goodQty, form.rejectQty, form.trialQty, form.sisaQty]
@@ -107,7 +106,7 @@ function save() {
         </div>
 
         <div class="field">
-          <label :for="`f-qc-${stageKey}`">QC Produksi <span class="req">*</span></label>
+          <label :for="`f-qc-${stageKey}`">QC Produksi</label>
           <input :id="`f-qc-${stageKey}`" v-model="form.qc" class="input" type="text" :disabled="review" />
         </div>
       </div>

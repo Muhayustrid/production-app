@@ -16,12 +16,23 @@
 # Every record created here is test-only (users t22.* prefixed, warehouses/items
 # "T22 ..." prefixed); the Frappe test framework rolls each run back.
 
+from unittest.mock import MagicMock, patch
+
+import json
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, now, random_string
 
-from production_app import upgrade
-from production_app.api.work_order import warehouse_defaults, warehouse_defaults_save
+from production_app import hooks, upgrade
+from production_app.api.work_order import (
+	LIST_FIELDS,
+	POSTPACKING_FIELD_MAP,
+	PREPACKING_FIELD_MAP,
+	PREP_FIELD_MAP,
+	warehouse_defaults,
+	warehouse_defaults_save,
+)
 
 PREFIX = "T22"
 HANDOVER_ROLE = "Gudang Barang Jadi"
@@ -162,6 +173,58 @@ class TestHandoverSetup(IntegrationTestCase):
 
 	# ------------------------------------------------------- idempotency
 
+	def test_cloud_fresh_install_contract_is_self_contained(self):
+		required_wo = {
+			fieldname
+			for fieldname in (
+				*LIST_FIELDS,
+				*PREP_FIELD_MAP.values(),
+				*PREPACKING_FIELD_MAP.values(),
+				*POSTPACKING_FIELD_MAP.values(),
+			)
+			if fieldname.startswith("custom_")
+		}
+		migrated_wo = {spec["fieldname"] for spec in upgrade.WORKSPACE_FIELDS}
+		self.assertEqual(required_wo - migrated_wo, set())
+		required_layout = {
+			"custom_item_name_information",
+			"custom_column_break_fdsxk",
+			"custom_detail_produksi",
+			"custom_sebelum",
+			"custom_column_break_khnwb",
+			"custom_section_break_b0phj",
+			"custom_column_break_8rt2c",
+			"custom_detail_produksi_lain",
+		}
+		self.assertEqual(required_layout - migrated_wo, set())
+
+		required_item = {
+			"custom_default_uom_warehouse",
+			"custom_default_source_warehouse",
+			"custom_default_wip_warehouse",
+			"custom_default_fg_warehouse",
+		}
+		migrated_item = {spec["fieldname"] for spec in upgrade.ITEM_FIELDS}
+		self.assertEqual(required_item - migrated_item, set())
+		self.assertEqual(hooks.required_apps, ["erpnext"])
+		self.assertEqual(hooks.after_install, "production_app.upgrade.apply")
+
+		upgrade.apply()
+		wo_meta = frappe.get_meta("Work Order", cached=False)
+		item_meta = frappe.get_meta("Item", cached=False)
+		self.assertTrue(all(wo_meta.has_field(fieldname) for fieldname in required_wo))
+		self.assertTrue(all(item_meta.has_field(fieldname) for fieldname in required_item))
+
+	def test_cloud_workspace_creation_has_no_missing_parent_link(self):
+		doc = MagicMock()
+		doc.parent_page = ""
+		with (
+			patch.object(frappe.db, "get_value", return_value=None),
+			patch.object(frappe, "get_doc", return_value=doc),
+		):
+			upgrade.ensure_workspace()
+		self.assertFalse(doc.parent_page)
+
 	def test_t22_apply_idempotent_and_drift_reconciled(self):
 		"""apply() twice: no error; the second run reports every handover step
 		'unchanged' (incl. box_kg_fields); the Manufacturing User MR row is
@@ -208,6 +271,99 @@ class TestHandoverSetup(IntegrationTestCase):
 		self.assertEqual(
 			frappe.get_meta("Material Request").get_field("custom_box_1").allow_on_submit, 1
 		)
+		# T35/T39: three-lane handover metadata — Link + unit-free count fields
+		wo_meta = frappe.get_meta("Work Order", cached=False)
+		expected = {
+			"custom_handover_material_request": ("Link", "Material Request"),
+			"custom_box_1_qty": ("Int", None),
+			"custom_box_2_qty": ("Int", None),
+		}
+		for fieldname, (fieldtype, options) in expected.items():
+			df = wo_meta.get_field(fieldname)
+			self.assertIsNotNone(df)
+			self.assertEqual(df.fieldtype, fieldtype)
+			self.assertEqual(df.options or None, options)
+			self.assertTrue(df.allow_on_submit)
+			self.assertTrue(df.read_only)
+		# T39 rename: the unit-carrying _pack fields are retired for good
+		for fieldname in upgrade.BOX_QTY_OLD_FIELDS:
+			self.assertIsNone(wo_meta.get_field(fieldname))
+		self.assertEqual(wo_meta.get_field("custom_box_1_qty").label, "Box 1 (Jumlah)")
+		self.assertEqual(wo_meta.get_field("custom_box_2_qty").label, "Box 2 (Jumlah)")
+		# and the rename migration itself converges on the second apply
+		entries = (
+			r2["box_qty_rename"].values()
+			if isinstance(r2["box_qty_rename"], dict)
+			else [r2["box_qty_rename"]]
+		)
+		self.assertTrue(
+			all(str(entry).endswith(": unchanged") for entry in entries),
+			f"box_qty_rename not idempotent: {r2['box_qty_rename']}",
+		)
+
+		for fieldname in ("custom_box_1", "custom_box_2"):
+			self.assertTrue(wo_meta.get_field(fieldname).read_only)
+
+		self.assertEqual(
+			wo_meta.get_field("custom_handover_status").options,
+			"\nDiminta Gudang\nTerkirim",
+		)
+		# the migration converges: the second apply reports every three-lane
+		# step unchanged and never rewrites correct Links/values
+		entries = (
+			r2["three_lane_handover"].values()
+			if isinstance(r2["three_lane_handover"], dict)
+			else [r2["three_lane_handover"]]
+		)
+		self.assertTrue(
+			all(str(entry).endswith(": unchanged") for entry in entries),
+			f"three_lane_handover not idempotent: {r2['three_lane_handover']}",
+		)
+		# snapshot-first: the evidence must agree with its own data — the OLD
+		# "Siap Kirim" option is required ONLY while the stored status values
+		# prove pre-cutover data; a fresh-install capture holds the current
+		# narrowed options/contract instead (it never saw the old option).
+		with open(upgrade.THREE_LANE_SNAPSHOT) as f:
+			snap = json.load(f)
+		# T39: a pre-rename capture still keys its counts as the OLD _pack
+		# fieldnames (historical evidence); a post-T39/fresh capture keys the
+		# current _qty fieldnames. Both are valid point-in-time contracts.
+		allowed_key_sets = (
+			{
+				"custom_handover_status",
+				upgrade.THREE_LANE_LINK_FIELD,
+				"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
+			},
+			{
+				"custom_handover_status",
+				upgrade.THREE_LANE_LINK_FIELD,
+				*upgrade.THREE_LANE_BOX_FIELDS,
+			},
+		)
+		self.assertIn(set(snap["stored_values"]), allowed_key_sets)
+		status_fields = [
+			cf for cf in snap["custom_fields"] if cf["fieldname"] == "custom_handover_status"
+		]
+		stored_status = snap["stored_values"]["custom_handover_status"]
+		if upgrade.RETIRED_STATUS_VALUE in stored_status:
+			# live-site pre-cutover evidence: old options present, and ONLY
+			# values the old options allowed
+			self.assertTrue(status_fields, "snapshot missed custom_handover_status")
+			self.assertIn(upgrade.RETIRED_STATUS_VALUE, status_fields[0].get("options") or "")
+			self.assertLessEqual(
+				set(stored_status),
+				{"Diminta Gudang", upgrade.RETIRED_STATUS_VALUE, "Terkirim"},
+			)
+		else:
+			# fresh-install evidence: no retired value anywhere; a captured
+			# definition already carries the narrowed options
+			self.assertNotIn(upgrade.RETIRED_STATUS_VALUE, stored_status)
+			if status_fields:
+				self.assertEqual(
+					status_fields[0].get("options"), "\nDiminta Gudang\nTerkirim"
+				)
+		for fieldname in ("custom_handover_status", "custom_box_1", "custom_box_2"):
+			self.assertIsInstance(snap["stored_values"][fieldname], dict)
 
 	# ------------------------------------------------ permission: gudang
 

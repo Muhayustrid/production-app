@@ -44,10 +44,9 @@ const total = computed(() => {
 const over = computed(() =>
   total.value != null && preAvailable.value && total.value > preQty.value)
 const overGood = computed(() => preAvailable.value && form.goodQty != null && form.goodQty > preQty.value)
-// jam kosong = jam saat disimpan (diisi server); QC tetap wajib
-const metaValid = computed(() => String(form.qc).trim() !== '')
+// jam kosong = jam saat disimpan (diisi server); FU38: QC Packing opsional
 const canSave = computed(() =>
-  Object.values(ok).every(Boolean) && metaValid.value && form.goodQty > 0 && !over.value && !overGood.value
+  Object.values(ok).every(Boolean) && form.goodQty > 0 && !over.value && !overGood.value
 )
 
 // FU12: panel dibuka ulang dari bar tahap saat sudah di finish — mode perbaikan
@@ -134,7 +133,7 @@ function save() {
         </div>
 
         <div class="field">
-          <label :for="`f-post-qc-${stageKey}`">QC Packing <span class="req">*</span></label>
+          <label :for="`f-post-qc-${stageKey}`">QC Packing</label>
           <input :id="`f-post-qc-${stageKey}`" v-model="form.qc" class="input" type="text" :disabled="review" />
         </div>
       </div>
