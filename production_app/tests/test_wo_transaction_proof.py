@@ -812,22 +812,29 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 			"Stock Entry", filters={"work_order": wo.name, "purpose": "Manufacture"}
 		))
 
-	def test_t27_quantity_limits_rejected_then_valid(self):
+	def test_t27_quantity_above_prepacking_accepted_fu41(self):
+		"""FU41: cap pre-packing dilepas — good (dan total) di atas good_pre
+		diterima; batas akhir tetap overproduksi native saat finish."""
 		from production_app.api.work_order import confirm_postpacking
 
 		wo = self._postpacking_ready_wo(100)
 
-		# good above pre_good
-		with self.assertRaises(frappe.ValidationError):
-			confirm_postpacking(wo.name, values={"good": 101})
-		# good + reject + trial above pre_good
-		with self.assertRaises(frappe.ValidationError):
-			confirm_postpacking(wo.name, values={"good": 90, "reject": 8, "trial": 3})
+		# good di atas good_pre: diterima
+		confirm_postpacking(wo.name, values={"good": 101})
 		wo.reload()
-		self.assertEqual(flt(wo.custom_good_qty_postpacking), 0)
-		self.assertFalse(wo.custom_postpacking_confirmed)
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 101)
+		self.assertEqual(wo.custom_postpacking_confirmed, 1)
 
-		# the boundary good + reject + trial == pre_good is valid (sisa manual 0)
+		# total good + reject + trial + sisa di atas good_pre: diterima
+		confirm_postpacking(wo.name, values={"good": 90, "reject": 8, "trial": 3, "sisa": 2})
+		wo.reload()
+		self.assertEqual(flt(wo.custom_good_qty_postpacking), 90)
+		self.assertEqual(flt(wo.custom_reject_qty_postpacking), 8)
+		self.assertEqual(flt(wo.custom_trial_qty_postpacking), 3)
+		self.assertEqual(flt(wo.custom_sisa_qty_postpacking), 2)
+		self.assertEqual(wo.custom_postpacking_confirmed, 1)
+
+		# boundary lama yang tetap valid
 		confirm_postpacking(wo.name, values={"good": 90, "reject": 5, "trial": 5, "sisa": 0})
 		wo.reload()
 		self.assertEqual(flt(wo.custom_good_qty_postpacking), 90)
