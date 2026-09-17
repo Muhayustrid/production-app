@@ -876,7 +876,10 @@ def _validate_postpacking(values, pre_good):
 	"""Validate the ENTIRE payload before any mutation. Returns cleaned dict.
 	`pre_good` is the confirmed prepacking good quantity, read from the WO row
 	the caller locked for update. FU11: sisa is a MANUAL input (finite >= 0),
-	not computed; jam kosong default ke jam saat penyimpanan."""
+	not computed; jam kosong default ke jam saat penyimpanan.
+	FU41: total Good+Reject+Trial+Sisa (dan Good sendiri) TIDAK lagi dibatasi
+	oleh Good Qty pre-packing — batas akhirnya tetap berupa overproduksi
+	native ERPNext yang divalidasi `finish()`."""
 	if pre_good <= 0:
 		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
 	cleaned = {}
@@ -890,8 +893,6 @@ def _validate_postpacking(values, pre_good):
 			good = float(value)
 			if good != good or good in (float("inf"), float("-inf")) or good <= 0:
 				frappe.throw(_("Good Qty post-packing harus angka lebih besar dari 0"))
-			if good > pre_good:
-				frappe.throw(_("Good Qty post-packing melebihi Good Qty pre-packing"))
 			cleaned[fieldname] = good
 		elif key in ("reject", "trial", "sisa"):
 			amount = float(value)
@@ -908,11 +909,6 @@ def _validate_postpacking(values, pre_good):
 
 	if POSTPACKING_FIELD_MAP["good"] not in cleaned:
 		frappe.throw(_("Good Qty post-packing wajib diisi (> 0)"))
-	good = cleaned[POSTPACKING_FIELD_MAP["good"]]
-	reject = flt(cleaned.get("custom_reject_qty_postpacking"))
-	trial = flt(cleaned.get("custom_trial_qty_postpacking"))
-	if good + reject + trial > pre_good:
-		frappe.throw(_("Total Good + Reject + Trial melebihi Good Qty pre-packing"))
 	# FU11: jam kosong -> jam saat penyimpanan
 	if POSTPACKING_FIELD_MAP["jam_packing"] not in cleaned:
 		cleaned[POSTPACKING_FIELD_MAP["jam_packing"]] = frappe.utils.nowtime()
@@ -921,10 +917,11 @@ def _validate_postpacking(values, pre_good):
 
 @frappe.whitelist()
 def confirm_postpacking(name, values):
-	"""Save/confirm the postpacking block. good must be finite, > 0 and
-	<= confirmed prepacking good — the validation completes BEFORE anything is
-	written. FU11: sisa is a manual input (finite >= 0), jam kosong default ke
-	jam saat penyimpanan. Re-edit at the finish stage is allowed; prepacking
+	"""Save/confirm the postpacking block. good must be finite and > 0 —
+	FU41: kuantitas tidak lagi dibatasi Good Qty pre-packing (batas akhir =
+	overproduksi native saat finish). The validation completes BEFORE anything
+	is written. FU11: sisa is a manual input (finite >= 0), jam kosong default
+	ke jam saat penyimpanan. Re-edit at the finish stage is allowed; prepacking
 	fields are never touched here."""
 	frappe.has_permission(DOCTYPE, "write", doc=name, throw=True)
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)

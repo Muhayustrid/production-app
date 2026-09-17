@@ -34,19 +34,15 @@ const form = reactive({
 
 const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false, sisaQty: false })
 
-const preQty = computed(() => pre.goodQty)
-const preAvailable = computed(() => preQty.value != null)
-
+// FU41: total hasil (good+reject+trial+sisa) tidak lagi dibatasi Good Qty
+// pre-packing — batas akhirnya tetap overproduksi native saat finish.
 const total = computed(() => {
-  const v = [form.goodQty, form.rejectQty, form.trialQty]
+  const v = [form.goodQty, form.rejectQty, form.trialQty, form.sisaQty]
   return v.some((x) => x == null) ? null : v.reduce((a, b) => a + b, 0)
 })
-const over = computed(() =>
-  total.value != null && preAvailable.value && total.value > preQty.value)
-const overGood = computed(() => preAvailable.value && form.goodQty != null && form.goodQty > preQty.value)
 // jam kosong = jam saat disimpan (diisi server); FU38: QC Packing opsional
 const canSave = computed(() =>
-  Object.values(ok).every(Boolean) && form.goodQty > 0 && !over.value && !overGood.value
+  Object.values(ok).every(Boolean) && form.goodQty > 0
 )
 
 // FU12: panel dibuka ulang dari bar tahap saat sudah di finish — mode perbaikan
@@ -117,9 +113,6 @@ function save() {
         />
       </div>
 
-      <p v-if="overGood" class="hint warn">Good Qty melebihi batas Pre-Packing.</p>
-      <p v-else-if="over" class="hint warn">Total hasil melebihi batas Pre-Packing.</p>
-
       <div class="form-grid" style="margin-top: 14px">
         <div class="field">
           <label :for="`f-post-jam-${stageKey}`">Jam Packing</label>
@@ -141,11 +134,7 @@ function save() {
       <div style="margin-top: 14px">
         <div class="sum-row">
           <span class="k">Total hasil</span>
-          <span class="v" :class="{ neg: over }">{{ total != null ? qtyMain(total, qip) : '-' }}</span>
-        </div>
-        <div class="sum-row">
-          <span class="k">Batas</span>
-          <span class="v">{{ preAvailable ? qtyMain(preQty, qip) : 'Belum tersedia' }}</span>
+          <span class="v">{{ total != null ? qtyMain(total, qip) : '-' }}</span>
         </div>
 
         <div v-if="form.goodQty != null" class="fgbox">

@@ -10,7 +10,7 @@ Dokumen ini MENGUBAH `IMPLEMENTATION_PLAN.md` untuk poin-poin yang eksplisit ber
 1. Urutan tahap manufaktur menjadi: **Persiapan → Material → Operasi (bila ada) → Pre-Packing → Post-Packing → Finish → Selesai.** Stage key server baru: `post_packing` (UI: `postpacking`), konstanta `STAGE_POST_PACKING`.
 2. **Finished Goods Manufacture Stock Entry = `custom_good_qty_postpacking`** (hasil akhir Work Order setelah packing), menggantikan `custom_good_qty_prepacking`. Bahan baku tetap dari planned qty (tidak berubah). One-shot finish, process loss, overproduction allowance, batch handling — semua aturan T03/T04/T11 tidak berubah, hanya sumber angka good yang berpindah.
 3. Form Post-Packing (mockup `StagePostPacking.vue`): Good/Reject/Trial (wajib), **Sisa otomatis** = good_pre − good − reject − trial, Jam Packing (Time, wajib), QC Packing (Link User, wajib). Tombol "Simpan & Lanjut ke Finish".
-4. Batas atas Post-Packing adalah **Good Qty Pre-Packing** yang sudah dikonfirmasi: `good_post ≤ good_pre` dan `good + reject + trial ≤ good_pre`. Sisa tidak pernah negatif.
+4. ~~Batas atas Post-Packing adalah Good Qty Pre-Packing~~ **FU41 (2026-09-17): cap pre-packing DIHAPUS** — Good/Reject/Trial/Sisa post-packing tidak lagi dibatasi Good Qty Pre-Packing (request user: total boleh melebihi prepacking). Sisa tidak pernah negatif. Batas akhir kuantitas tetap overproduksi allowance native ERPNext yang divalidasi `finish()`.
 5. Pre-Packing tetap memakai aturan lama (good > 0 wajib saat konfirmasi; zero reject/trial/sisa valid). Setelah Pre-Packing dikonfirmasi, stage menjadi `post_packing` (bukan langsung `finish`).
 
 ## 2. Aturan server (`production_app/api/work_order.py`)
@@ -19,7 +19,7 @@ Dokumen ini MENGUBAH `IMPLEMENTATION_PLAN.md` untuk poin-poin yang eksplisit ber
 2. Aksi baru `confirm_postpacking(name, values)` — pola persis `confirm_prepacking`:
    - Permission gate write WO + row lock `for_update` + re-read, guard docstatus/status.
    - Stage guard: hanya `post_packing` atau `finish` (re-edit sebelum manufacture boleh).
-   - Validasi SELURUH payload sebelum tulis apa pun: good finite > 0 (**aturan zero-good diperluas: tidak ada manufacture zero-yield**); reject/trial finite ≥ 0; good ≤ good_pre; good+reject+trial ≤ good_pre; sisa dihitung server; jam packing valid `get_time`; QC Packing User aktif. Validasi kuantitas setara `confirm_prepacking` (paritas, tidak menambah/mengurangi).
+   - Validasi SELURUH payload sebelum tulis apa pun: good finite > 0 (**aturan zero-good diperluas: tidak ada manufacture zero-yield**); reject/trial finite ≥ 0; jam packing valid `get_time`; QC Packing User aktif. ~~good ≤ good_pre; good+reject+trial ≤ good_pre~~ (FU41: dihapus — lihat §1.4); sisa dihitung server; Validasi kuantitas setara `confirm_prepacking` (paritas, tidak menambah/mengurangi).
    - Tulis 4 qty postpacking + `custom_jam_packing` + `custom_qc_packing` + `custom_postpacking_confirmed=1` dalam satu `wo.save()` (jalur update-after-submit native).
    - Pre-Packing field tidak pernah disentuh di sini.
 3. `confirm_prepacking` stage guard berubah menjadi `(pre_packing, post_packing)` — setelah postpacking confirmed, edit pre-packing DITOLAK (angka post menjadi tidak konsisten); jalur perbaikan = edit postpacking.
