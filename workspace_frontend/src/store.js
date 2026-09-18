@@ -488,3 +488,75 @@ export function lotForWo(woId) {
 export const lotRemainingPcs = (lot) => lot?.physicalQty
 export const lotReservedPcs = (lot) => lot?.reservedQty ?? 0
 export const lotAvailablePcs = (lot) => lot?.availableQty
+
+// ============================================================================
+// FORM ORDER (FO 2026-09-18, TASKS.md section I) — produksi meminta barang
+// dari gudang via MR native. Status selalu dari server (menunggu/terkirim/
+// batal/draf); setelah tiap aksi, daftar diganti dari respons server.
+// ============================================================================
+
+export const formOrderState = reactive({ loading: false, error: null, loaded: false, pending: null })
+export const formOrders = reactive([])
+
+function mapFormOrder(o) {
+  return {
+    id: o.mr,
+    materialRequest: o.mr,
+    status: o.status,
+    docstatus: o.docstatus,
+    items: (o.items || []).map((i) => ({ code: i.item_code, name: i.item_name, qty: i.qty, uom: i.uom })),
+    note: o.note || null,
+    scheduleDate: o.schedule_date || null,
+    fromWarehouse: o.from_warehouse || null,
+    toWarehouse: o.to_warehouse || null,
+    stockEntry: o.stock_entry || null,
+    sentAt: o.sent_at || null,
+    owner: o.owner,
+    ownerName: o.owner_name || o.owner,
+    createdAt: o.creation
+  }
+}
+
+function applyFormOrders(orders) {
+  formOrders.splice(0, formOrders.length, ...(orders || []).map(mapFormOrder))
+}
+
+export async function loadFormOrders() {
+  formOrderState.loading = true
+  formOrderState.error = null
+  try {
+    applyFormOrders((await call('production_app.api.form_order.form_order_list')).orders)
+    formOrderState.loaded = true
+  } catch (e) {
+    formOrderState.error = e.message
+  } finally {
+    formOrderState.loading = false
+  }
+}
+
+async function formOrderAction(method, args) {
+  if (formOrderState.pending) return null
+  formOrderState.pending = method
+  try {
+    const res = await call(`production_app.api.form_order.${method}`, args)
+    applyFormOrders(res.orders) // server truth menggantikan seluruh daftar
+    return res
+  } finally {
+    formOrderState.pending = null
+  }
+}
+
+// error dilempar apa adanya — form/aksi mempertahankan isian pengguna (FU14)
+export function createFormOrder(rows, scheduleDate, note) {
+  return formOrderAction('create_form_order', {
+    items: rows.map((r) => ({ item_code: r.code, qty: Number(r.qty) })),
+    schedule_date: scheduleDate || null,
+    note: note || null
+  })
+}
+export function cancelFormOrder(materialRequest) {
+  return formOrderAction('cancel_form_order', { material_request: materialRequest })
+}
+export function fulfillFormOrder(materialRequest) {
+  return formOrderAction('fulfill_form_order', { material_request: materialRequest })
+}

@@ -264,6 +264,20 @@ WAREHOUSE_DEFAULT_FIELDS = [
 		"options": "Warehouse",
 		"description": "Production App: gudang asal serah terima (Cold Storage) untuk halaman Stock Entry",
 	},
+	{
+		"fieldname": "custom_default_form_order_source_warehouse",
+		"label": "Default Form Order Source Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang asal Form Order (produksi meminta barang dari gudang ini)",
+	},
+	{
+		"fieldname": "custom_default_form_order_target_warehouse",
+		"label": "Default Form Order Target Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang tujuan Form Order (mis. WIP produksi)",
+	},
 ]
 
 
@@ -493,18 +507,22 @@ MR_CUSTOM_FIELDS = [
 # Manufacturing User: read/write on MR only (drift fix — the pre-existing
 # custom row granted create/submit; snapshot T22-pre-migration.json holds the
 # before-state for rollback).
+# FO 2026-09-18 (Form Order, TASKS.md section I): alur baru "produksi minta
+# barang dari gudang" menaikkan Manufacturing User ke create/submit/cancel MR
+# (+create MR Item) dan Gudang Barang Jadi ke SE penuh untuk memproses — hak
+# lama read/write dipertahankan; before-state ada di form-order-pre.json.
 DOCPERM_MATRIX = {
 	"Material Request": {
 		HANDOVER_ROLE: {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1},
-		"Manufacturing User": {"read": 1, "write": 1, "create": 0, "submit": 0, "cancel": 0, "amend": 0},
+		"Manufacturing User": {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
 	},
 	"Material Request Item": {
 		HANDOVER_ROLE: {"read": 1, "create": 1},
-		"Manufacturing User": {"read": 1},
+		"Manufacturing User": {"read": 1, "create": 1},
 	},
 	"Work Order": {HANDOVER_ROLE: {"read": 1}},
 	"Batch": {HANDOVER_ROLE: {"read": 1}},
-	"Stock Entry": {HANDOVER_ROLE: {"read": 1}},
+	"Stock Entry": {HANDOVER_ROLE: {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0}},
 	"Item": {HANDOVER_ROLE: {"read": 1}},
 	# Ruling 6 check: no standard DocPerm grants Warehouse read to the new role
 	# (role is new — zero rows anywhere); without it the MR warehouse links and
@@ -1066,6 +1084,90 @@ def retire_gudang_confirmed_field():
 	return result
 
 
+# ---------------------------------------------------------------------------
+# FO (2026-09-18) — Form Order: produksi meminta barang dari gudang (TASKS.md
+# section I). Marker Check di Material Request membedakan MR Form Order dari
+# MR Desk/serah terima TANPA menyentuh custom_work_order (binding key papan
+# tiga lajur). Hak role yang berubah dinaikkan di DOCPERM_MATRIX di atas;
+# di sini hanya baris baru: Manufacturing Manager (sebelumnya tanpa perm MR).
+# ---------------------------------------------------------------------------
+
+FO_MR_FIELDS = [
+	{
+		"fieldname": "custom_is_form_order",
+		"label": "Form Order",
+		"fieldtype": "Check",
+		"insert_after": "custom_postpacking_confirmed",
+		"hidden": 1,
+		"read_only": 1,
+	},
+]
+
+FO_DOCPERMS = {
+	"Material Request": {
+		"Manufacturing Manager": {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
+	},
+	"Material Request Item": {
+		"Manufacturing Manager": {"read": 1, "create": 1},
+	},
+}
+
+FO_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "form-order-pre.json")
+
+
+def snapshot_form_order():
+	"""Pre-change snapshot of everything the FO upgrade may touch: MR marker +
+	2 field settings Form Order, dan DocPerm (standard + custom) MR/MR Item/SE
+	utk semua role yang dinaikkan (DOCPERM_MATRIX + FO_DOCPERMS). Runs BEFORE
+	any change; apply() calls it only when the file is absent."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"custom_fields": frappe.get_all(
+			"Custom Field",
+			filters={"dt": ("in", ["Material Request", "Manufacturing Settings"])},
+			fields=["dt", "fieldname", "label", "fieldtype", "options", "insert_after"],
+			order_by="dt, idx",
+		),
+	}
+	for dt in ("Material Request", "Material Request Item", "Stock Entry"):
+		for kind, doctype in (("docperm", "DocPerm"), ("custom_docperm", "Custom DocPerm")):
+			data.setdefault(kind, {})[dt] = frappe.get_all(
+				doctype,
+				filters={"parent": dt},
+				fields=["role", "permlevel", "read", "write", "create", "submit", "cancel", "amend"],
+				order_by="role",
+			)
+	with open(FO_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return FO_SNAPSHOT
+
+
+def ensure_form_order_fields():
+	"""Marker Form Order di Material Request. Idempoten (converge 'unchanged')."""
+	out = []
+	for spec in FO_MR_FIELDS:
+		action, _name = _upsert_field("Material Request", spec)
+		out.append(f"Material Request.{spec['fieldname']}: {action}")
+	frappe.clear_cache(doctype="Material Request")
+	return out
+
+
+def ensure_form_order_permissions():
+	"""Custom DocPerms Form Order (Manufacturing Manager). Idempoten; hak role
+	lain dikelola DOCPERM_MATRIX agar satu sumber kebenaran (tanpa flip-flop
+	antar apply)."""
+	out = []
+	touched = set()
+	for doctype, roles in FO_DOCPERMS.items():
+		for role, flags in roles.items():
+			out.append(f"{doctype}/{role}: {_ensure_docperm(doctype, role, flags)}")
+			touched.add(doctype)
+	for doctype in touched:
+		frappe.clear_cache(doctype=doctype)
+	return out
+
+
 def apply():
 	"""Create/upgrade the workspace fields; migrate leader to Data. Idempotent."""
 	if not os.path.exists(T22_SNAPSHOT):
@@ -1077,6 +1179,8 @@ def apply():
 		snapshot_fu10()  # fields now exist; preserve any legacy values before conversion
 	if not os.path.exists(QC_PACKING_TEXT_SNAPSHOT):
 		snapshot_qc_packing_text()
+	if not os.path.exists(FO_SNAPSHOT):
+		snapshot_form_order()  # never change Form Order metadata without a pre-state
 
 	# T39: rename the count columns BEFORE the three-lane resync reads them
 	# (create_only above already created the new _qty fields)
@@ -1118,6 +1222,8 @@ def apply():
 	result["warehouse_default_fields"] = ensure_warehouse_default_fields()
 	result["handover_mr_fields"] = ensure_handover_mr_fields()
 	result["handover_permissions"] = ensure_handover_permissions()
+	result["form_order_fields"] = ensure_form_order_fields()
+	result["form_order_permissions"] = ensure_form_order_permissions()
 	frappe.clear_cache(doctype=DOCTYPE)
 	frappe.db.commit()
 	return result

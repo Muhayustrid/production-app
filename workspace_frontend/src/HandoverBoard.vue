@@ -9,16 +9,18 @@
 // caller). Request cards: gudang cancels, produksi sends direct.
 import { computed, nextTick, reactive, onMounted, ref, watch } from 'vue'
 import {
-  cancelRequest, createRequest, handoverBoard, handoverLots, handoverRequests, handoverState,
-  listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, sendHandover, setActionError
+  cancelFormOrder, cancelRequest, createRequest, fulfillFormOrder, formOrders, formOrderState,
+  handoverBoard, handoverLots, handoverRequests, handoverState,
+  listPreferencesState, loadBoard, loadFormOrders, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, sendHandover, setActionError
 } from './store.js'
 import { fmtInt, qtyMain } from './format.js'
 import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
 import { boxAllocationText, expectedUnits, unitLabel, unitProblem, validateBoxAllocation } from './handover-box.js'
+import { foItemsText, foStatusMeta, laneStatusMeta } from './form-order.js'
 import {
-  CheckCircle2, ClipboardList, Filter, GripVertical, Inbox,
-  Search, Snowflake, Truck, Undo2
+  CheckCircle2, ClipboardList, Filter, GripVertical, Inbox, KanbanSquare,
+  PackageCheck, Search, Snowflake, Table2, Truck, Undo2
 } from 'lucide-vue-next'
 
 const isGudang = computed(() => !!handoverBoard.roles.is_gudang)
@@ -150,7 +152,7 @@ const coldPage = ref(1)
 const searchQ = ref('')
 const saveHandoverPreferences = () => saveListPreferences({
   workOrder: savedListPreferences.workOrder || {},
-  handover: { from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value, filterOpen: lotFilterOpen.value }
+  handover: { from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value, filterOpen: lotFilterOpen.value, viewMode: viewMode.value }
 })
 function setColdPageSize(value) {
   coldPageSize.value = normalizePageSize(value)
@@ -387,12 +389,87 @@ function chooseCancel() {
   openCancelDialog(id)
 }
 
+// ---- FO 2026-09-18: mode tampilan Kanban|Tabel (preferensi per-user) + tab
+// Form Order di tampilan tabel. Kanban tiga lajur tidak berubah. ----
+const viewMode = ref('kanban') // 'kanban' | 'tabel'
+const tableTab = ref('serah') // 'serah' | 'form-order'
+function setViewMode(mode) {
+  viewMode.value = mode
+  saveHandoverPreferences()
+}
+function setTableTab(tab) {
+  tableTab.value = tab
+  if (tab === 'form-order' && !formOrderState.loaded && !formOrderState.loading) loadFormOrders()
+}
+
+// baris tabel Serah Terima: seluruh request papan (status dari lane/flag),
+// dicari dengan helper kartu yang sama (nama item / WO / dokumen / batch)
+const serahRows = computed(() =>
+  handoverRequests
+    .map((r) => ({ r, meta: laneStatusMeta(r) }))
+    .filter(({ r }) => boardMatch({ name: r.item, workOrder: r.workOrder, document: r.materialRequest || r.stockEntry, batch: r.batch }, searchQ.value))
+)
+const foRows = computed(() => {
+  const q = searchQ.value.trim().toLowerCase()
+  if (!q) return formOrders
+  return formOrders.filter((o) =>
+    [o.materialRequest, o.stockEntry, o.ownerName, ...o.items.map((i) => i.name)].join(' ').toLowerCase().includes(q)
+  )
+})
+
+// ---- dialog (Gudang): proses Form Order → Stock Entry Material Transfer ----
+const dlgFulfill = ref(null)
+const fulfillTarget = ref(null)
+const fulfillError = ref('')
+function openFulfillDialog(id) {
+  fulfillTarget.value = formOrders.find((o) => o.id === id) || null
+  fulfillError.value = ''
+  if (fulfillTarget.value) nextTick(() => dlgFulfill.value.showModal())
+}
+function closeFulfill() {
+  dlgFulfill.value.close()
+  fulfillTarget.value = null
+}
+async function confirmFulfill() {
+  fulfillError.value = ''
+  try {
+    await fulfillFormOrder(fulfillTarget.value.id) // daftar diganti server truth
+    closeFulfill()
+  } catch (e) {
+    fulfillError.value = e.message
+  }
+}
+
+// tabel Form Order: batalkan milik sendiri yang belum diproses (guard server)
+const dlgFoCancel = ref(null)
+const foCancelTarget = ref(null)
+const foCancelError = ref('')
+function openFoCancelDialog(id) {
+  foCancelTarget.value = formOrders.find((o) => o.id === id) || null
+  foCancelError.value = ''
+  if (foCancelTarget.value) nextTick(() => dlgFoCancel.value.showModal())
+}
+function closeFoCancel() {
+  dlgFoCancel.value.close()
+  foCancelTarget.value = null
+}
+async function confirmFoCancel() {
+  foCancelError.value = ''
+  try {
+    await cancelFormOrder(foCancelTarget.value.id)
+    closeFoCancel()
+  } catch (e) {
+    foCancelError.value = e.message
+  }
+}
+
 onMounted(() => {
   const apply = () => {
     const p = savedListPreferences.handover || {}
     lotFrom.value = p.from || ''; lotTo.value = p.to || ''
     coldPageSize.value = normalizePageSize(p.pageSize)
     lotFilterOpen.value = !!p.filterOpen
+    viewMode.value = p.viewMode === 'tabel' ? 'tabel' : 'kanban'
     loadBoard()
   }
   if (listPreferencesState.loaded) apply()
@@ -408,7 +485,7 @@ onMounted(() => {
 <template>
   <div class="page-head">
     <div class="ph-left">
-      <h1>Stock Entry</h1>
+      <h1>Serah Terima</h1>
       <p class="sub">Permintaan gudang dan pengiriman barang jadi dari Cold Storage.</p>
     </div>
     <div class="ph-date">{{ new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) }}</div>
@@ -427,7 +504,27 @@ onMounted(() => {
         aria-label="Cari item di papan serah terima"
       />
     </div>
-    <div class="filterwrap">
+    <!-- FO: segmented control Kanban|Tabel (reuse .viewswitch ala daftar WO) —
+    preferensi per-user -->
+    <div class="viewswitch" role="group" aria-label="Mode tampilan">
+      <button
+        type="button"
+        :class="{ on: viewMode === 'kanban' }"
+        :aria-pressed="viewMode === 'kanban'"
+        @click="setViewMode('kanban')"
+      >
+        <KanbanSquare :size="14" :stroke-width="2" /> Kanban
+      </button>
+      <button
+        type="button"
+        :class="{ on: viewMode === 'tabel' }"
+        :aria-pressed="viewMode === 'tabel'"
+        @click="setViewMode('tabel')"
+      >
+        <Table2 :size="14" :stroke-width="2" /> Tabel
+      </button>
+    </div>
+    <div v-if="viewMode === 'kanban'" class="filterwrap">
       <button
         class="btn filterbtn"
         :class="{ active: lotFilterCount }"
@@ -461,6 +558,7 @@ onMounted(() => {
     </div>
   </div>
 
+  <template v-if="viewMode === 'kanban'">
   <div class="kb" :class="{ dragging: !!drag }">
     <section
       v-for="l in lanes"
@@ -539,6 +637,125 @@ onMounted(() => {
       </select>
     </label>
   </div>
+  </template>
+
+  <!-- ============ FO: tampilan Tabel — antrian kerja per role ============ -->
+  <template v-else>
+    <div class="viewswitch vtabs" role="tablist" aria-label="Jenis antrian">
+      <button
+        type="button"
+        role="tab"
+        :class="{ on: tableTab === 'serah' }"
+        :aria-selected="tableTab === 'serah'"
+        @click="setTableTab('serah')"
+      >
+        Serah Terima
+      </button>
+      <button
+        type="button"
+        role="tab"
+        :class="{ on: tableTab === 'form-order' }"
+        :aria-selected="tableTab === 'form-order'"
+        @click="setTableTab('form-order')"
+      >
+        Form Order
+      </button>
+    </div>
+
+    <section v-if="tableTab === 'serah'" class="panel tbl-panel">
+      <div class="panel-head">
+        <span class="p-ico"><Truck :size="15" :stroke-width="1.9" /></span>
+        <h2>Antrian Serah Terima</h2>
+        <span class="lead">Status dihitung server dari Material Request / Stock Entry.</span>
+      </div>
+      <div class="panel-body">
+        <div class="tbl-wrap">
+          <table class="datatable">
+            <thead>
+              <tr>
+                <th>Dokumen</th><th>Item</th><th>Qty</th><th>Work Order</th><th>Batch</th>
+                <th>Dibuat oleh</th><th>Status</th><th v-if="isProduksi || isGudang"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="{ r, meta } in serahRows" :key="r.id">
+                <td>
+                  <span class="tbl-doc">{{ r.materialRequest }}</span>
+                  <span v-if="r.stockEntry" class="tbl-sub">{{ r.stockEntry }} · {{ r.sentAt }}</span>
+                </td>
+                <td>{{ r.item }}</td>
+                <td>{{ qtyMain(r.requestedQtyPcs, lotForWo(r.workOrder) || r) }}</td>
+                <td>{{ r.workOrder }}</td>
+                <td>{{ r.batch || '-' }}</td>
+                <td>{{ r.ownerName || '-' }}</td>
+                <td><span class="chip" :class="meta.cls">{{ meta.label }}</span></td>
+                <td v-if="isProduksi || isGudang">
+                  <template v-if="r.lane === 'request' && !r.flag">
+                    <button v-if="isMultiRole" class="btn btn-sm" :disabled="!!handoverState.pending" @click="openChooseDialog(r.id)">Pilih Aksi</button>
+                    <button v-else-if="isProduksi" class="btn btn-sm btn-primary" :disabled="!!handoverState.pending" @click="openSendDialog(r.id)">Kirim</button>
+                    <button v-else class="btn btn-sm" :disabled="!!handoverState.pending" @click="openCancelDialog(r.id)">Batalkan</button>
+                  </template>
+                </td>
+              </tr>
+              <tr v-if="!serahRows.length">
+                <td :colspan="8" class="tbl-empty">
+                  <Inbox :size="16" :stroke-width="1.8" aria-hidden="true" />
+                  <span>Belum ada request.</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section v-else class="panel tbl-panel">
+      <div class="panel-head">
+        <span class="p-ico"><PackageCheck :size="15" :stroke-width="1.9" /></span>
+        <h2>Antrian Form Order</h2>
+        <span class="lead">Permintaan produksi ke gudang — Proses memindahkan stok ke tujuan.</span>
+      </div>
+      <div class="panel-body">
+        <div v-if="formOrderState.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ formOrderState.error }} — <a href="#" @click.prevent="loadFormOrders()">coba lagi</a></div>
+        <div class="tbl-wrap">
+          <table class="datatable">
+            <thead>
+              <tr>
+                <th>Dokumen</th><th>Item</th><th>Dibutuhkan</th><th>Dibuat oleh</th>
+                <th>Status</th><th>Catatan</th><th v-if="isGudang || isProduksi"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="o in foRows" :key="o.id">
+                <td>
+                  <span class="tbl-doc">{{ o.materialRequest }}</span>
+                  <span v-if="o.stockEntry" class="tbl-sub">{{ o.stockEntry }} · {{ o.sentAt }}</span>
+                </td>
+                <td>
+                  <span>{{ foItemsText(o) }}</span>
+                  <span class="tbl-sub">{{ o.fromWarehouse || '-' }} → {{ o.toWarehouse || '-' }}</span>
+                </td>
+                <td>{{ o.scheduleDate || '-' }}</td>
+                <td>{{ o.ownerName }}</td>
+                <td><span class="chip" :class="foStatusMeta(o.status).cls">{{ foStatusMeta(o.status).label }}</span></td>
+                <td class="tbl-note">{{ o.note || '-' }}</td>
+                <td v-if="isGudang || isProduksi">
+                  <button v-if="isGudang && o.status === 'menunggu'" class="btn btn-sm btn-primary" :disabled="!!formOrderState.pending" @click="openFulfillDialog(o.id)">Proses</button>
+                  <button v-else-if="isProduksi && o.status === 'menunggu'" class="btn btn-sm" :disabled="!!formOrderState.pending" @click="openFoCancelDialog(o.id)">Batalkan</button>
+                </td>
+              </tr>
+              <tr v-if="!foRows.length">
+                <td :colspan="7" class="tbl-empty">
+                  <Inbox :size="16" :stroke-width="1.8" aria-hidden="true" />
+                  <span>Belum ada Form Order.</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </template>
 
   <!-- ============ dialog: Buat Request Gudang (Gudang, dari Cold Storage) ============ -->
   <dialog ref="dlgRequest" class="dialog" @click.self="closeRequest" @cancel="guardRequestCancel">
@@ -714,6 +931,54 @@ onMounted(() => {
       <div class="dlg-actions">
         <button class="btn" @click="chooseCancel">Batalkan Request</button>
         <button class="btn btn-primary" @click="chooseSend">Kirim ke Gudang</button>
+      </div>
+    </template>
+  </dialog>
+
+  <!-- ============ dialog: Proses Form Order (Gudang, tampilan tabel) ============ -->
+  <dialog ref="dlgFulfill" class="dialog" @click.self="closeFulfill">
+    <template v-if="fulfillTarget">
+      <header class="dlg-head">
+        <span class="dlg-ico" aria-hidden="true"><PackageCheck :size="16" :stroke-width="1.9" /></span>
+        <div class="dlg-hgroup">
+          <h3>Proses Form Order?</h3>
+          <p class="dlg-sub"><strong>{{ fulfillTarget.materialRequest }}</strong> · {{ fulfillTarget.ownerName }}</p>
+        </div>
+      </header>
+      <div class="sum-row">
+        <span class="k">Item</span>
+        <span class="v">{{ foItemsText(fulfillTarget) }}</span>
+      </div>
+      <div class="sum-row">
+        <span class="k">Rute</span>
+        <span class="v"><span class="dim">{{ fulfillTarget.fromWarehouse || '-' }} → {{ fulfillTarget.toWarehouse || '-' }}</span></span>
+      </div>
+      <p class="hint" style="margin-top: 8px">Stock Entry Material Transfer dibuat dan disubmit — kekurangan stok ditolak apa adanya.</p>
+      <p v-if="fulfillError" class="err" role="alert">{{ fulfillError }}</p>
+      <p v-if="formOrderState.pending === 'fulfill_form_order'" role="status">Menyimpan…</p>
+      <div class="dlg-actions">
+        <button class="btn" :disabled="!!formOrderState.pending" @click="closeFulfill">Batal</button>
+        <button class="btn btn-primary" :disabled="!!formOrderState.pending" @click="confirmFulfill">Ya, Proses</button>
+      </div>
+    </template>
+  </dialog>
+
+  <!-- ============ dialog: batalkan Form Order (pembuat, tampilan tabel) ============ -->
+  <dialog ref="dlgFoCancel" class="dialog" @click.self="closeFoCancel">
+    <template v-if="foCancelTarget">
+      <header class="dlg-head">
+        <span class="dlg-ico" aria-hidden="true"><Undo2 :size="16" :stroke-width="1.9" /></span>
+        <div class="dlg-hgroup">
+          <h3>Batalkan Form Order?</h3>
+          <p class="dlg-sub"><strong>{{ foCancelTarget.materialRequest }}</strong> · {{ foItemsText(foCancelTarget) }}</p>
+        </div>
+      </header>
+      <p>Permintaan dibatalkan selama belum diproses gudang.</p>
+      <p v-if="foCancelError" class="err" role="alert">{{ foCancelError }}</p>
+      <p v-if="formOrderState.pending === 'cancel_form_order'" role="status">Menyimpan…</p>
+      <div class="dlg-actions">
+        <button class="btn" :disabled="!!formOrderState.pending" @click="closeFoCancel">Kembali</button>
+        <button class="btn btn-primary" :disabled="!!formOrderState.pending" @click="confirmFoCancel">Ya, Batalkan</button>
       </div>
     </template>
   </dialog>

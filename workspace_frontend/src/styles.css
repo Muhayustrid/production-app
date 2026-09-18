@@ -1864,3 +1864,78 @@ textarea.input { height: auto; padding: 8px 10px; }
 .link-results { display: grid; gap: 4px; margin: 4px 0; max-height: 220px; overflow: auto; }
 .link-results button { text-align: left; display: block; height: auto; white-space: normal; }
 .link-results small { display: block; }
+
+/* ============ FO 2026-09-18: tabel Serah Terima + Form Order ============ */
+
+.vtabs { margin: 2px 0 12px; }
+
+.tbl-panel .panel-body { padding-top: 0; }
+.tbl-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  -webkit-overflow-scrolling: touch;
+}
+.datatable {
+  width: 100%;
+  min-width: 720px; /* mobile: scroll horizontal aman, bukan kolom remuk */
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.datatable th, .datatable td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  white-space: nowrap;
+}
+.datatable td.tbl-note { white-space: normal; max-width: 220px; }
+.datatable tbody tr:last-child td { border-bottom: 0; }
+.datatable tbody tr:hover { background: var(--brand-softer); }
+/* header sticky semi-transparan — konten lewat di bawahnya (apple-design) */
+.datatable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.86);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  border-bottom: 1px solid var(--line2);
+}
+.tbl-doc { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; display: block; }
+.tbl-sub { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.tbl-empty { text-align: center; color: var(--muted); padding: 26px 12px !important; }
+.tbl-empty svg, .tbl-empty span { display: inline-block; vertical-align: middle; }
+.tbl-empty span { margin-left: 6px; }
+
+/* form multi-baris Form Order */
+.fo-rows { display: grid; gap: 10px; }
+.fo-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(110px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.fo-row .field { margin: 0; }
+.fo-del { flex: none; }
+.fo-add { margin-top: 10px; }
+.fo-row-err { grid-column: 1 / -1; margin: 0; }
+
+@media (max-width: 720px) {
+  .fo-row { grid-template-columns: 1fr; }
+  .fo-del { justify-self: end; }
+  .vtabs { margin-left: 0; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .datatable thead th {
+    background: #ffffff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
