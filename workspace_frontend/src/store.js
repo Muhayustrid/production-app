@@ -125,6 +125,9 @@ export function mapDetail(d) {
     plannedDate: (d.planned_start_date || '').slice(0, 10),
     status: d.status,
     stage: STAGE_UI[d.stage] || d.stage,
+    // FU46: server memutuskan bolehkah sesi ini mengoreksi Data Adonan
+    // (WO selesai hanya Manufacturing Manager) — frontend hanya mengikuti
+    canEditPersiapan: !!d.can_edit_persiapan,
     handover: d.handover || null,
     hasOperations: (d.operations || []).length > 0,
     qtyInPack: d.display_conversion_factor ?? null,

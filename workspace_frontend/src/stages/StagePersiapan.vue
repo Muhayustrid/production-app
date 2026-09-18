@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ClipboardList } from 'lucide-vue-next'
 import { startProduction, suggestionPreferences } from '../store.js'
 
@@ -22,6 +22,9 @@ const form = reactive({
 })
 const errors = reactive({})
 const tried = ref(false)
+
+// FU45: panel dibuka ulang dari bar tahap setelah tahap ini lewat — mode perbaikan
+const reedit = computed(() => !props.review && props.wo.stage !== 'persiapan')
 
 function validate() {
   errors.adonanKe = !(Number(form.adonanKe) >= 1) ? 'Isi nomor adonan (min. 1).' : ''
@@ -51,6 +54,7 @@ function submit() {
       <span class="p-ico"><ClipboardList :size="15" :stroke-width="1.9" /></span>
       <h2>Persiapan</h2>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
+      <span v-else-if="reedit" class="chip chip-info" style="margin-left: auto">Perbaikan</span>
     </div>
 
     <div class="panel-body">
@@ -100,7 +104,7 @@ function submit() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" @click="submit">Mulai Produksi</button>
+      <button class="btn btn-primary" @click="submit">{{ reedit ? 'Simpan Perbaikan' : 'Mulai Produksi' }}</button>
     </div>
   </section>
 </template>

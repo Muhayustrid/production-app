@@ -59,6 +59,11 @@ STAGE_SELESAI = "selesai"
 STAGE_CANCELLED = "cancelled"
 STAGE_REVIEW = "review"
 
+# FU46: satu-satunya role yang boleh mengoreksi Data Adonan pada WO yang sudah
+# selesai (stage selesai); keputusan enforcement ada di server (prepare gate +
+# flag can_edit_persiapan di wo_detail), frontend hanya mengikuti flag.
+PREP_FINISHED_ROLE = "Manufacturing Manager"
+
 # stage-filter scan cap: exact stage needs child-table truth, so stage-filtered
 # lists scan at most this many permission-visible rows before slicing a page
 STAGE_SCAN_LIMIT = 2500
@@ -394,6 +399,11 @@ def wo_detail(name):
 	data["job_cards"] = job_cards
 	data["stock_entries"] = stock_entries
 	data["stage"] = derive_stage(data, operations)
+	# FU46: frontend membuka kunci panel Persiapan hanya bila server mengizinkan
+	# (WO selesai hanya untuk Manufacturing Manager; stage lain sudah terkunci UI)
+	data["can_edit_persiapan"] = data["stage"] != STAGE_SELESAI or (
+		PREP_FINISHED_ROLE in frappe.get_roles()
+	)
 
 	data["suggestions_enabled"] = _suggestions_enabled()
 	data["suggestion_sources"] = {}
@@ -602,6 +612,15 @@ def prepare(name, values, submit=0):
 	wo = frappe.get_doc(DOCTYPE, name)
 	if wo.docstatus == 2 or wo.status in ("Stopped", "Closed"):
 		frappe.throw(_("Work Order {0} tidak bisa disiapkan").format(name))
+	# FU46: WO yang sudah selesai hanya boleh dikoreksi Data Adonannya oleh
+	# Manufacturing Manager — ditolak sebelum ada tulisan apa pun
+	if derive_stage(wo) == STAGE_SELESAI and PREP_FINISHED_ROLE not in frappe.get_roles():
+		frappe.throw(
+			_("Hanya {0} yang bisa mengubah Data Adonan Work Order yang sudah selesai").format(
+				PREP_FINISHED_ROLE
+			),
+			frappe.PermissionError,
+		)
 
 	cleaned = _validate_prep_values(frappe.parse_json(values) or {})
 	if wo.docstatus == 0:
