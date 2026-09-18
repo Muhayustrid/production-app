@@ -48,3 +48,17 @@ export function foItemsText(order) {
 export function foQtyTotal(order) {
   return (order?.items || []).reduce((sum, i) => sum + (Number(i.qty) || 0), 0)
 }
+
+// info item dari item_info() → masalah dini utk baris grid (server tetap
+// otoritatif; pesan ini hanya memandu sebelum submit)
+export function itemRowProblem(info) {
+  if (!info) return ''
+  if (!Number(info.is_stock_item)) return 'bukan-stok'
+  if (Number(info.has_batch_no)) return 'batch'
+  return ''
+}
+
+export const ITEM_PROBLEM_TEXT = {
+  'bukan-stok': 'Bukan item stok — tidak bisa dipesan lewat Form Order.',
+  batch: 'Item ber-batch — untuk sementara minta lewat Desk ERPNext.'
+}

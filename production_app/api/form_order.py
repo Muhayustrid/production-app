@@ -185,6 +185,18 @@ def _validated_items(raw):
 
 
 @frappe.whitelist()
+def item_info(item_code):
+	"""Info tampilan untuk satu baris grid Form Order (nama, satuan, penanda
+	non-stok/ber-batch) — UX dini saja; validasi otoritatif tetap di
+	create_form_order. Tanpa izin baca Item → None (bukan error)."""
+	if not frappe.has_permission("Item", "read"):
+		return None
+	return frappe.db.get_value(
+		"Item", item_code, ["item_name", "stock_uom", "is_stock_item", "has_batch_no"], as_dict=True
+	)
+
+
+@frappe.whitelist()
 @_retry_on_deadlock
 def create_form_order(items, schedule_date=None, note=None):
 	"""Produksi (Manufacturing User / Manufacturing Manager): buat + submit MR

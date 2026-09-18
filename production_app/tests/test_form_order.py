@@ -37,7 +37,7 @@ def _company_and_group():
 	return company, parent
 
 
-def _make_user(local, role):
+def _make_user(local, role=None):
 	suffix = random_string(6).upper()
 	user = (
 		frappe.get_doc(
@@ -50,8 +50,9 @@ def _make_user(local, role):
 		)
 		.insert()
 	)
-	user.append("roles", {"role": role})
-	user.save()
+	if role:
+		user.append("roles", {"role": role})
+		user.save()
 	return user.name
 
 
@@ -250,6 +251,24 @@ class TestFormOrder(IntegrationTestCase):
 			frappe.set_user("Administrator")
 
 	# ------------------------------------------- create: zero-write contract
+
+	def test_fo_item_info(self):
+		"""FO-8: info tampilan grid — nama/satuan/penanda; tanpa izin baca Item
+		→ None (bukan error); item tak dikenal → None."""
+		info = form_order.item_info(self.item)
+		self.assertTrue(info.item_name.startswith("FO Item"))
+		self.assertTrue(info.stock_uom)
+		self.assertEqual(int(info.is_stock_item), 1)
+		self.assertEqual(int(info.has_batch_no), 0)
+		self.assertEqual(int(form_order.item_info(self.item_batch).has_batch_no), 1)
+		self.assertIsNone(form_order.item_info("TIDAK-ADA-ITEM"))
+
+		bare = _make_user("bareinfo")
+		frappe.set_user(bare)
+		try:
+			self.assertIsNone(form_order.item_info(self.item))  # tanpa Item read
+		finally:
+			frappe.set_user("Administrator")
 
 	def test_fo_create_validations_write_nothing(self):
 		self._set_route()

@@ -1,30 +1,58 @@
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ClipboardList, Inbox, Plus, Trash2 } from 'lucide-vue-next'
 import LinkInput from './LinkInput.vue'
-import { cancelFormOrder, createFormOrder, formOrders, formOrderState, loadFormOrders, uiTopLoading } from './store.js'
-import { foItemsText, foStatusMeta, formCanSubmit, validateFormRows } from './form-order.js'
+import { cancelFormOrder, createFormOrder, foItemInfo, formOrders, formOrderState, loadFormOrders, uiTopLoading } from './store.js'
+import { foItemsText, foStatusMeta, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT, validateFormRows } from './form-order.js'
 
 // FO 2026-09-18: produksi meminta barang dari gudang → MR Material Transfer
-// native (custom_is_form_order). Server otoritatif: validasi baris di sini
-// hanya UX; error server ditampilkan apa adanya dan isian dipertahankan.
+// native (custom_is_form_order). Input berbentuk grid ala child table ERPNext:
+// kolom Item|Qty|Satuan, baris "+ Tambah Baris" di dalam tabel. Server tetap
+// otoritatif; info item (satuan/nama/penanda) hanya memandu sebelum submit.
 const tomorrow = () => {
   const d = new Date()
   d.setDate(d.getDate() + 1)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-const rows = reactive([{ code: '', qty: '' }])
+const rows = reactive([{ code: '', qty: '', info: null, infoFor: '' }])
 const scheduleDate = ref(tomorrow())
 const note = ref('')
 const error = ref('')
 const savedAt = ref('')
 
+// ambil info item (satuan/nama) saat kode terpilih; ber-batch/non-stok
+// mendapat peringatan dini di barisnya — validasi server tetap otoritatif
+watch(rows, async () => {
+  for (const row of rows) {
+    if (row.code && row.infoFor !== row.code) {
+      row.infoFor = row.code
+      row.info = await foItemInfo(row.code)
+    } else if (!row.code && (row.info || row.infoFor)) {
+      row.info = null
+      row.infoFor = ''
+    }
+  }
+}, { deep: true })
+
 const rowErrors = computed(() => validateFormRows(rows))
-const canSubmit = computed(() => formCanSubmit(rows, rowErrors.value) && !!scheduleDate.value && !formOrderState.pending)
+const rowProblems = computed(() => rows.map((r) => itemRowProblem(r.info)))
+const rowNotes = computed(() =>
+  rows.map((row, i) =>
+    [rowProblems.value[i] ? ITEM_PROBLEM_TEXT[rowProblems.value[i]] : '', rowErrors.value[i]]
+      .filter(Boolean)
+      .join(' · ')
+  )
+)
+const canSubmit = computed(() =>
+  formCanSubmit(rows, rowErrors.value)
+  && !rowProblems.value.some(Boolean)
+  && !!scheduleDate.value
+  && !formOrderState.pending
+)
 
 function addRow() {
-  rows.push({ code: '', qty: '' })
+  rows.push({ code: '', qty: '', info: null, infoFor: '' })
 }
 function removeRow(i) {
   if (rows.length > 1) rows.splice(i, 1)
@@ -37,7 +65,7 @@ async function submit() {
   try {
     await createFormOrder(rows, scheduleDate.value, note.value)
     // sukses: daftar sudah diganti server truth — reset form
-    rows.splice(0, rows.length, { code: '', qty: '' })
+    rows.splice(0, rows.length, { code: '', qty: '', info: null, infoFor: '' })
     note.value = ''
     savedAt.value = new Date().toLocaleTimeString('id-ID')
   } catch (e) {
@@ -96,27 +124,8 @@ onMounted(async () => {
       <h2>Buat Form Order</h2>
     </div>
     <div class="panel-body">
-      <div class="fo-rows">
-        <div v-for="(row, i) in rows" :key="i" class="fo-row">
-          <div class="field fo-item">
-            <label :for="`fo-item-${i}`">Item <span class="req">*</span></label>
-            <LinkInput :id="`fo-item-${i}`" v-model="row.code" doctype="Item" />
-          </div>
-          <div class="field fo-qty">
-            <label :for="`fo-qty-${i}`">Qty <span class="req">*</span></label>
-            <input :id="`fo-qty-${i}`" v-model="row.qty" class="input" type="number" step="any" min="0" inputmode="decimal" :aria-invalid="!!rowErrors[i]" />
-          </div>
-          <button class="btn fo-del" :disabled="rows.length === 1" :aria-label="`Hapus baris ${i + 1}`" @click="removeRow(i)">
-            <Trash2 :size="14" :stroke-width="2" />
-          </button>
-          <p v-if="rowErrors[i]" class="err fo-row-err" role="alert">{{ rowErrors[i] }}</p>
-        </div>
-      </div>
-      <button class="btn fo-add" @click="addRow">
-        <Plus :size="14" :stroke-width="2" /> Tambah item
-      </button>
-
-      <div class="form-grid cols2" style="margin-top: 14px">
+      <!-- field induk dulu, grid item di bawahnya — urutan ala form ERPNext -->
+      <div class="form-grid cols2">
         <div class="field">
           <label for="fo-date">Tanggal dibutuhkan <span class="req">*</span></label>
           <input id="fo-date" v-model="scheduleDate" class="input" type="date" />
@@ -126,6 +135,57 @@ onMounted(async () => {
           <label for="fo-note">Catatan</label>
           <input id="fo-note" v-model="note" class="input" type="text" maxlength="280" placeholder="Opsional" />
         </div>
+      </div>
+
+      <!-- grid item ala child table ERPNext -->
+      <div class="tbl-wrap fo-grid-wrap">
+        <table class="datatable fo-grid">
+          <thead>
+            <tr>
+              <th class="fo-c-item">Item</th>
+              <th class="fo-c-qty">Qty</th>
+              <th class="fo-c-uom">Satuan</th>
+              <th class="fo-c-act" aria-label="Aksi baris"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="(row, i) in rows" :key="i">
+              <tr>
+                <td class="fo-c-item">
+                  <LinkInput :id="`fo-item-${i}`" v-model="row.code" :display-label="row.info?.item_name" doctype="Item" />
+                </td>
+                <td class="fo-c-qty">
+                  <input
+                    :id="`fo-qty-${i}`"
+                    v-model="row.qty"
+                    class="input fo-qty-input"
+                    type="number"
+                    step="any"
+                    min="0"
+                    inputmode="decimal"
+                    :aria-invalid="!!rowNotes[i]"
+                  />
+                </td>
+                <td class="fo-c-uom fo-uom">{{ row.info?.stock_uom || '—' }}</td>
+                <td class="fo-c-act">
+                  <button class="btn fo-del" :disabled="rows.length === 1" :aria-label="`Hapus baris ${i + 1}`" @click="removeRow(i)">
+                    <Trash2 :size="14" :stroke-width="2" />
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="rowNotes[i]" class="fo-grid-err">
+                <td colspan="4"><p class="err" role="alert">{{ rowNotes[i] }}</p></td>
+              </tr>
+            </template>
+            <tr class="fo-grid-addrow">
+              <td colspan="4">
+                <button type="button" class="btn fo-add" @click="addRow">
+                  <Plus :size="14" :stroke-width="2" /> Tambah Baris
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <p v-if="error" class="err" role="alert">{{ error }}</p>

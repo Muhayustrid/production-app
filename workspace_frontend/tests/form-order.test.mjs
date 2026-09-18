@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  foItemsText, foQtyTotal, foStatusMeta, formCanSubmit, laneStatusMeta, validateFormRows
+  foItemsText, foQtyTotal, foStatusMeta, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT, laneStatusMeta, validateFormRows
 } from '../src/form-order.js'
 
 test('foStatusMeta: label + warna chip per status server', () => {
@@ -53,4 +53,15 @@ test('foItemsText: item pertama + sisa, kosong = dash', () => {
 test('foQtyTotal: jumlah semua baris', () => {
   assert.equal(foQtyTotal(null), 0)
   assert.equal(foQtyTotal({ items: [{ qty: 10 }, { qty: 2.5 }] }), 12.5)
+})
+
+test('itemRowProblem: penanda dini dari item_info (FO-8)', () => {
+  assert.equal(itemRowProblem(null), '') // belum termuat / tanpa izin
+  assert.equal(itemRowProblem({ is_stock_item: 1, has_batch_no: 0 }), '') // item normal
+  assert.equal(itemRowProblem({ is_stock_item: 0, has_batch_no: 0 }), 'bukan-stok')
+  assert.equal(itemRowProblem({ is_stock_item: 1, has_batch_no: 1 }), 'batch')
+  // teks peringatan tersedia utk tiap masalah (tidak ada key hilang)
+  for (const key of ['bukan-stok', 'batch']) {
+    assert.ok(ITEM_PROBLEM_TEXT[key].length > 10)
+  }
 })

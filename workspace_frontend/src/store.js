@@ -547,6 +547,9 @@ async function formOrderAction(method, args) {
 }
 
 // error dilempar apa adanya — form/aksi mempertahankan isian pengguna (FU14)
+export function foItemInfo(itemCode) {
+  return call('production_app.api.form_order.item_info', { item_code: itemCode })
+}
 export function createFormOrder(rows, scheduleDate, note) {
   return formOrderAction('create_form_order', {
     items: rows.map((r) => ({ item_code: r.code, qty: Number(r.qty) })),

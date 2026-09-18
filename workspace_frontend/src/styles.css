@@ -1913,22 +1913,37 @@ textarea.input { height: auto; padding: 8px 10px; }
 .tbl-empty svg, .tbl-empty span { display: inline-block; vertical-align: middle; }
 .tbl-empty span { margin-left: 6px; }
 
-/* form multi-baris Form Order */
-.fo-rows { display: grid; gap: 10px; }
-.fo-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 2fr) minmax(110px, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-}
-.fo-row .field { margin: 0; }
+/* grid item Form Order — bentuk child table ERPNext: kolom input dalam sel,
+   "+ Tambah Baris" sebagai baris di dalam tabel */
+.fo-grid { min-width: 640px; }
+.fo-grid td { vertical-align: middle; }
+.fo-grid .input { width: 100%; }
+.fo-grid .link-results { margin: 4px 0 2px; }
+.fo-c-item { width: 46%; }
+.fo-c-qty { width: 130px; }
+.fo-c-uom { width: 90px; }
+.fo-c-act { width: 44px; }
+.fo-qty-input { min-width: 96px; }
+.fo-uom { color: var(--muted); }
 .fo-del { flex: none; }
-.fo-add { margin-top: 10px; }
-.fo-row-err { grid-column: 1 / -1; margin: 0; }
+.fo-grid-addrow td {
+  padding: 0;
+  border-top: 1px dashed var(--line2);
+}
+.fo-add {
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font-weight: 500;
+  height: 40px;
+  padding: 0 12px;
+  gap: 5px;
+}
+.fo-add:hover:not(:disabled) { background: var(--brand-softer); }
+.fo-grid-err td { padding-top: 0; padding-bottom: 8px; }
+.fo-grid-err .err { margin: 2px 0 0; }
 
 @media (max-width: 720px) {
-  .fo-row { grid-template-columns: 1fr; }
-  .fo-del { justify-self: end; }
   .vtabs { margin-left: 0; }
 }
 
