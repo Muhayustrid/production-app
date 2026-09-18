@@ -7,6 +7,9 @@
 // requested in the Cold Storage -> Request form; verification is gone (server
 // create_request validates; the old postpacking call has no supported
 // caller). Request cards: gudang cancels, produksi sends direct.
+// FU47: baris tabel klikabel (semantik = klik kartu), dialog Kirim = form
+// review Stock Entry, baris Terkirim → detail baca-saja, default view
+// role-aware (produksi tanpa preferensi → Tabel).
 import { computed, nextTick, reactive, onMounted, ref, watch } from 'vue'
 import {
   cancelFormOrder, cancelRequest, createRequest, fulfillFormOrder, formOrders, formOrderState,
@@ -16,6 +19,7 @@ import {
 import { fmtInt, qtyMain } from './format.js'
 import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
+import { rowClickAction, seRouteLabel } from './handover-se.js'
 import { boxAllocationText, expectedUnits, unitLabel, unitProblem, validateBoxAllocation } from './handover-box.js'
 import { foItemsText, foStatusMeta, laneStatusMeta } from './form-order.js'
 import {
@@ -244,6 +248,16 @@ function clickCard(c) {
   }
 }
 
+// FU47: klik BARIS tabel = semantik klik kartu kanban (rowClickAction murni
+// ter-test) — request tanpa flag → aksi per role; Terkirim → detail baca-saja.
+function rowAction(r) {
+  const action = rowClickAction(r, handoverBoard.roles)
+  if (action === 'send') openSendDialog(r.id)
+  else if (action === 'cancel') openCancelDialog(r.id)
+  else if (action === 'choose') openChooseDialog(r.id)
+  else if (action === 'done') openSentDialog(r.id)
+}
+
 // ---- dialog (Gudang): Buat Request Gudang — alokasi box kg + jumlah (T35,
 // T39 universal: satuan mengikuti UOM gudang item — Pack, Pcs, dll.) ----
 const dlgRequest = ref(null)
@@ -294,16 +308,23 @@ async function confirmRequest() {
   }
 }
 
-// ---- dialog (Produksi): Kirim ke Gudang — request langsung jadi Terkirim ----
+// ---- dialog (Produksi): Kirim Serah Terima — form review Stock Entry
+// (FU47). Submit tetap SATU jalur server: send_handover membuat + submit SE
+// Material Transfer via mapper native dalam satu transaksi. Panel sukses
+// dipakai juga sebagai detail baca-saja untuk baris Terkirim (kirimReadonly). ----
 const dlgKirim = ref(null)
 const kirimReq = ref(null)
 const kirimError = ref('')
 const kirimDone = ref(false)
+// true = dibuka dari baris Terkirim (tanpa tombol kirim, judul detail)
+const kirimReadonly = ref(false)
 
 // T32 (R6): qty kirim = qty diminta MR (== produced_qty WO); server tidak pernah stop
 const kirimGood = computed(() => kirimReq.value?.requestedQtyPcs ?? 0)
-const kirimRoute = computed(() =>
-  `${kirimReq.value?.fromWarehouse || 'Cold Storage'} → ${kirimReq.value?.toWarehouse || handoverBoard.targetWarehouse || '-'}`
+const kirimRoute = computed(() => seRouteLabel(kirimReq.value, handoverBoard.targetWarehouse))
+// FU29: peringatan stok rute tampil DI DALAM form review sebelum submit
+const kirimRouteWarn = computed(() =>
+  kirimReq.value && !kirimReadonly.value ? routeWarn(kirimReq.value) : ''
 )
 
 function openSendDialog(reqId) {
@@ -312,6 +333,18 @@ function openSendDialog(reqId) {
   kirimReq.value = r
   kirimError.value = ''
   kirimDone.value = false
+  kirimReadonly.value = false
+  nextTick(() => dlgKirim.value.showModal())
+}
+
+// FU47: baris Terkirim → panel baca-saja (detail SE yang sudah terkirim)
+function openSentDialog(reqId) {
+  const r = handoverRequests.find((x) => x.id === reqId)
+  if (!r || r.lane !== 'terkirim' || !r.stockEntry) return
+  kirimReq.value = r
+  kirimError.value = ''
+  kirimDone.value = true
+  kirimReadonly.value = true
   nextTick(() => dlgKirim.value.showModal())
 }
 function closeKirim() {
@@ -402,6 +435,17 @@ function setTableTab(tab) {
   if (tab === 'form-order' && !formOrderState.loaded && !formOrderState.loading) loadFormOrders()
 }
 
+// FU47: default mode tampilan role-aware — sesi produksi yang belum punya
+// preferensi tersimpan mulai di Tabel (antrian MR → form Stock Entry);
+// gudang-only tetap Kanban (alat utamanya drag lot). Preferensi tersimpan
+// (toggle / perubahan filter ikut menyimpan viewMode) selalu menang.
+let viewModeDefaulted = false
+watch(() => handoverBoard.roles, (roles) => {
+  if (viewModeDefaulted || (savedListPreferences.handover || {}).viewMode != null) return
+  viewModeDefaulted = true
+  viewMode.value = roles.is_produksi ? 'tabel' : 'kanban'
+})
+
 // baris tabel Serah Terima: seluruh request papan (status dari lane/flag),
 // dicari dengan helper kartu yang sama (nama item / WO / dokumen / batch)
 const serahRows = computed(() =>
@@ -469,7 +513,8 @@ onMounted(() => {
     lotFrom.value = p.from || ''; lotTo.value = p.to || ''
     coldPageSize.value = normalizePageSize(p.pageSize)
     lotFilterOpen.value = !!p.filterOpen
-    viewMode.value = p.viewMode === 'tabel' ? 'tabel' : 'kanban'
+    // preferensi eksplisit menang; tanpa preferensi → default role-aware (watch di atas)
+    if (p.viewMode === 'tabel' || p.viewMode === 'kanban') viewMode.value = p.viewMode
     loadBoard()
   }
   if (listPreferencesState.loaded) apply()
@@ -666,7 +711,7 @@ onMounted(() => {
       <div class="panel-head">
         <span class="p-ico"><Truck :size="15" :stroke-width="1.9" /></span>
         <h2>Antrian Serah Terima</h2>
-        <span class="lead">Status dihitung server dari Material Request / Stock Entry.</span>
+        <span class="lead">Klik baris untuk aksi / detail Stock Entry. Status dihitung server dari Material Request / Stock Entry.</span>
       </div>
       <div class="panel-body">
         <div class="tbl-wrap">
@@ -678,7 +723,12 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="{ r, meta } in serahRows" :key="r.id">
+              <tr
+                v-for="{ r, meta } in serahRows"
+                :key="r.id"
+                :class="{ rowlink: !!rowClickAction(r, handoverBoard.roles) }"
+                @click="rowAction(r)"
+              >
                 <td>
                   <span class="tbl-doc">{{ r.materialRequest }}</span>
                   <span v-if="r.stockEntry" class="tbl-sub">{{ r.stockEntry }} · {{ r.sentAt }}</span>
@@ -689,7 +739,7 @@ onMounted(() => {
                 <td>{{ r.batch || '-' }}</td>
                 <td>{{ r.ownerName || '-' }}</td>
                 <td><span class="chip" :class="meta.cls">{{ meta.label }}</span></td>
-                <td v-if="isProduksi || isGudang">
+                <td v-if="isProduksi || isGudang" @click.stop>
                   <template v-if="r.lane === 'request' && !r.flag">
                     <button v-if="isMultiRole" class="btn btn-sm" :disabled="!!handoverState.pending" @click="openChooseDialog(r.id)">Pilih Aksi</button>
                     <button v-else-if="isProduksi" class="btn btn-sm btn-primary" :disabled="!!handoverState.pending" @click="openSendDialog(r.id)">Kirim</button>
@@ -823,49 +873,67 @@ onMounted(() => {
     </template>
   </dialog>
 
-  <!-- ============ dialog: Kirim ke Gudang (Produksi, dari Request) ============ -->
+  <!-- ============ dialog: Kirim Serah Terima — form review Stock Entry
+       (Produksi, dari request; FU47 juga detail baca-saja baris Terkirim) ============ -->
   <dialog ref="dlgKirim" class="dialog" @click.self="closeKirim">
     <template v-if="kirimReq">
       <template v-if="!kirimDone">
         <header class="dlg-head">
           <span class="dlg-ico" aria-hidden="true"><Truck :size="16" :stroke-width="1.9" /></span>
           <div class="dlg-hgroup">
-            <h3>Kirim ke Gudang</h3>
+            <h3>Kirim Serah Terima</h3>
             <p class="dlg-sub"><strong>{{ kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
           </div>
         </header>
-        <div class="sum-row">
-          <span class="k">Material Request</span>
-          <span class="v">{{ kirimReq.materialRequest }}</span>
+        <div class="dlg-context">
+          <div class="sum-row">
+            <span class="k">Material Request</span>
+            <span class="v">{{ kirimReq.materialRequest }}</span>
+          </div>
+          <div class="sum-row">
+            <span class="k">Item</span>
+            <span class="v">
+              {{ kirimReq.item }}
+              <span v-if="kirimReq.itemCode" class="tbl-sub">{{ kirimReq.itemCode }}</span>
+            </span>
+          </div>
+          <div class="sum-row">
+            <span class="k">Rute</span>
+            <span class="v"><span class="dim">{{ kirimRoute }}</span></span>
+          </div>
+          <div class="sum-row">
+            <span class="k">Batch</span>
+            <span class="v">{{ kirimReq.batch || '-' }}</span>
+          </div>
+          <div class="sum-row">
+            <span class="k">Box</span>
+            <span class="v" style="white-space: pre-line">{{ boxAllocationText(kirimReq) || '-' }}</span>
+          </div>
         </div>
-        <div class="sum-row">
-          <span class="k">Rute</span>
-          <span class="v"><span class="dim">{{ kirimRoute }}</span></span>
-        </div>
-        <div class="sum-row">
-          <span class="k">Batch</span>
-          <span class="v">{{ kirimReq.batch || '-' }}</span>
-        </div>
-        <div class="sum-row">
-          <span class="k">Box</span>
-          <span class="v" style="white-space: pre-line">{{ boxAllocationText(kirimReq) || '-' }}</span>
-        </div>
-        <div class="fgbox" style="margin-top: 10px">
-          <span>Qty Transfer</span>
-          <span>{{ qtyMain(kirimGood, lotForWo(kirimReq.workOrder) || kirimReq) }}</span>
+        <div class="boxgroup" style="margin-top: 14px">
+          <div class="grouptitle">Stock Entry — Material Transfer</div>
+          <div class="fgbox">
+            <span>Qty Transfer</span>
+            <span>{{ qtyMain(kirimGood, lotForWo(kirimReq.workOrder) || kirimReq) }}</span>
+          </div>
+          <p class="hint" style="margin-top: 6px">
+            Qty terkunci sesuai permintaan (hasil Work Order saat request dibuat). Tanggal catat otomatis
+            (sekarang). Stock Entry dibuat dan disubmit server saat dikirim — kekurangan stok ditolak apa adanya.
+          </p>
+          <p v-if="kirimRouteWarn" class="callout" role="alert">{{ kirimRouteWarn }}</p>
         </div>
         <p v-if="kirimError" class="err" style="margin-top: 10px" role="alert">{{ kirimError }}</p>
         <p v-if="handoverState.pending" role="status">Menyimpan…</p>
         <div class="dlg-actions">
           <button class="btn" :disabled="!!handoverState.pending" @click="closeKirim">Batal</button>
-          <button class="btn btn-primary" :disabled="!!handoverState.pending" @click="confirmKirim">Kirim Barang</button>
+          <button class="btn btn-primary" :disabled="!!handoverState.pending" @click="confirmKirim">Buat &amp; Kirim Stock Entry</button>
         </div>
       </template>
       <template v-else>
         <header class="dlg-head">
           <span class="dlg-ico ok" aria-hidden="true"><CheckCircle2 :size="16" :stroke-width="1.9" /></span>
           <div class="dlg-hgroup">
-            <h3>Terkirim</h3>
+            <h3>{{ kirimReadonly ? 'Detail Stock Entry' : 'Terkirim' }}</h3>
             <p class="dlg-sub"><strong>{{ kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
           </div>
         </header>
@@ -873,13 +941,27 @@ onMounted(() => {
           <span>Ditransfer</span>
           <span>{{ qtyMain(kirimGood, lotForWo(kirimReq.workOrder) || kirimReq) }}</span>
         </div>
-        <div class="sum-row" style="margin-top: 8px">
-          <span class="k">Material Request</span>
-          <span class="v">{{ kirimReq.materialRequest }}</span>
-        </div>
-        <div class="sum-row">
-          <span class="k">Stock Entry</span>
-          <span class="v">{{ kirimReq.stockEntry }}</span>
+        <div class="dlg-context" style="margin-top: 8px">
+          <div class="sum-row">
+            <span class="k">Stock Entry</span>
+            <span class="v">{{ kirimReq.stockEntry }}</span>
+          </div>
+          <div class="sum-row">
+            <span class="k">Material Request</span>
+            <span class="v">{{ kirimReq.materialRequest }}</span>
+          </div>
+          <div class="sum-row">
+            <span class="k">Rute</span>
+            <span class="v"><span class="dim">{{ kirimRoute }}</span></span>
+          </div>
+          <div class="sum-row">
+            <span class="k">Batch</span>
+            <span class="v">{{ kirimReq.batch || '-' }}</span>
+          </div>
+          <div v-if="kirimReq.sentAt" class="sum-row">
+            <span class="k">Dikirim</span>
+            <span class="v">{{ kirimReq.sentAt }}</span>
+          </div>
         </div>
         <div class="dlg-actions">
           <button class="btn" @click="closeKirim">Tutup</button>

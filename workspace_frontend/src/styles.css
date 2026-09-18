@@ -1893,6 +1893,8 @@ textarea.input { height: auto; padding: 8px 10px; }
 .datatable td.tbl-note { white-space: normal; max-width: 220px; }
 .datatable tbody tr:last-child td { border-bottom: 0; }
 .datatable tbody tr:hover { background: var(--brand-softer); }
+/* FU47: baris tabel Serah Terima klikabel — semantik sama dengan kartu papan */
+.datatable tbody tr.rowlink { cursor: pointer; }
 /* header sticky semi-transparan — konten lewat di bawahnya (apple-design) */
 .datatable thead th {
   position: sticky;
