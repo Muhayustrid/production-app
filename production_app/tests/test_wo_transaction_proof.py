@@ -477,6 +477,22 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		if cancelled:
 			self.assertEqual(wo_detail(cancelled)["stage"], "cancelled")
 
+	def test_t06_search_matches_item_name(self):
+		from production_app.api.work_order import wo_list
+
+		wo = self._make_wo(100)
+		original = frappe.db.get_value("Item", self.fg, "item_name")
+		marker = f"Roti Unik {random_string(6).upper()}"
+		try:
+			frappe.db.set_value("Item", self.fg, "item_name", marker)
+			# FU44: item name (berbeda dari kode) menemukan WO-nya
+			self.assertTrue(any(r.name == wo.name for r in wo_list(search=marker)))
+			# jalur lama tetap jalan: kode item dan nama Work Order
+			self.assertTrue(any(r.name == wo.name for r in wo_list(search=self.fg)))
+			self.assertTrue(any(r.name == wo.name for r in wo_list(search=wo.name)))
+		finally:
+			frappe.db.set_value("Item", self.fg, "item_name", original)
+
 	def test_t06_permission_filtering(self):
 		from production_app.api.work_order import wo_detail, wo_list
 
