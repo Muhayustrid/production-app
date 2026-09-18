@@ -43,9 +43,10 @@ const displayed = computed(() => view.value || activeStage.value)
 // FU12: Pre/Post-Packing masih bisa DIPERBAIKI dari bar tahap selama WO belum
 // diselesaikan (panel tahap lampau dibuka editable, bukan Tinjauan); setelah
 // "Selesaikan Produksi" (stage completed) semua kembali read-only.
+// FU45: Persiapan (Data Adonan) ikut bisa diperbaiki dari tahap lanjut.
 const finishedStage = computed(() => ['completed', 'review', 'cancelled'].includes(wo.value.stage))
 const reeditable = computed(() =>
-  !finishedStage.value && ['prepacking', 'postpacking'].includes(displayed.value)
+  !finishedStage.value && ['persiapan', 'prepacking', 'postpacking'].includes(displayed.value)
 )
 const review = computed(() =>
   (displayed.value !== activeStage.value && !reeditable.value) || finishedStage.value
