@@ -44,12 +44,19 @@ const displayed = computed(() => view.value || activeStage.value)
 // diselesaikan (panel tahap lampau dibuka editable, bukan Tinjauan); setelah
 // "Selesaikan Produksi" (stage completed) semua kembali read-only.
 // FU45: Persiapan (Data Adonan) ikut bisa diperbaiki dari tahap lanjut.
+// FU46: pada WO yang sudah Selesai, Persiapan tetap terbuka untuk sesi yang
+// diizinkan server (canEditPersiapan = Manufacturing Manager); tahap lain
+// (review/cancelled) dan panel lain tetap read-only.
 const finishedStage = computed(() => ['completed', 'review', 'cancelled'].includes(wo.value.stage))
-const reeditable = computed(() =>
-  !finishedStage.value && ['persiapan', 'prepacking', 'postpacking'].includes(displayed.value)
+const canReeditPersiapan = computed(
+  () => wo.value.stage === 'completed' && displayed.value === 'persiapan' && !!wo.value.canEditPersiapan
 )
-const review = computed(() =>
-  (displayed.value !== activeStage.value && !reeditable.value) || finishedStage.value
+const reeditable = computed(() =>
+  canReeditPersiapan.value ||
+  (!finishedStage.value && ['persiapan', 'prepacking', 'postpacking'].includes(displayed.value))
+)
+const review = computed(
+  () => !reeditable.value && ((displayed.value !== activeStage.value) || finishedStage.value)
 )
 
 function stepState(s) {

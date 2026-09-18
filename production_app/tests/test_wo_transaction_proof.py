@@ -1232,6 +1232,61 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 			"Stock Entry", filters={"work_order": wo.name, "docstatus": 1}
 		))
 
+	def test_t46_prepare_on_completed_wo_requires_manager(self):
+		"""FU46: after Selesai, Data Adonan is editable only by Manufacturing
+		Manager. Non-manager is rejected with zero writes; the manager's edit
+		persists without touching any stock document."""
+		from production_app.api.work_order import (
+			confirm_postpacking,
+			confirm_prepacking,
+			finish,
+			prepare,
+			transfer_materials,
+			wo_detail,
+		)
+
+		self._receipt(self.rm1, 1000)
+		self._receipt(self.rm2, 1000)
+		wo = self._make_wo(10)
+		prepare(wo.name, values={"adonan_ke": "1", "suhu_adonan": 25.0}, submit=1)
+		transfer_materials(wo.name)
+		confirm_prepacking(wo.name, values={"good": 10})
+		confirm_postpacking(wo.name, values={"good": 10})
+		finish(wo.name)
+		wo.reload()
+		self.assertEqual(wo.status, "Completed")
+
+		user = frappe.get_doc(
+			{"doctype": "User", "email": "testwot46@prodapp.example.com", "first_name": "T46"}
+		).insert()
+		user.add_roles("Manufacturing User")
+
+		frappe.set_user(user.name)
+		try:
+			with self.assertRaises(frappe.PermissionError):
+				prepare(wo.name, values={"adonan_ke": "2", "suhu_adonan": 30.0}, submit=1)
+			self.assertFalse(wo_detail(wo.name)["can_edit_persiapan"])
+		finally:
+			frappe.set_user("Administrator")
+		wo.reload()
+		self.assertEqual(wo.custom_adonan_ke, "1")  # rejection leaves no partial write
+
+		user.add_roles("Manufacturing Manager")
+		frappe.set_user(user.name)
+		try:
+			prepare(wo.name, values={"adonan_ke": "2", "suhu_adonan": 30.0}, submit=1)
+			self.assertTrue(wo_detail(wo.name)["can_edit_persiapan"])
+		finally:
+			frappe.set_user("Administrator")
+		wo.reload()
+		self.assertEqual(wo.custom_adonan_ke, "2")
+		self.assertEqual(flt(wo.custom_suhu_adonan), 30.0)
+		self.assertEqual(wo.status, "Completed")
+		# exactly the transfer + manufacture from the normal flow — no new documents
+		self.assertEqual(len(frappe.get_all(
+			"Stock Entry", filters={"work_order": wo.name, "docstatus": 1}
+		)), 2)
+
 	def test_t12_cancel_manufacture_recomputes_and_retry_is_safe(self):
 		from production_app.api.work_order import (
 			confirm_postpacking,
