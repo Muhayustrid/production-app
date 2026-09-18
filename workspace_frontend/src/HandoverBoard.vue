@@ -14,10 +14,11 @@ import {
 } from './store.js'
 import { fmtInt, qtyMain } from './format.js'
 import { handoverCard } from './handover-card.js'
+import { boardMatch } from './handover-search.js'
 import { boxAllocationText, expectedUnits, unitLabel, unitProblem, validateBoxAllocation } from './handover-box.js'
 import {
   CheckCircle2, ClipboardList, Filter, GripVertical, Inbox,
-  Snowflake, Truck, Undo2
+  Search, Snowflake, Truck, Undo2
 } from 'lucide-vue-next'
 
 const isGudang = computed(() => !!handoverBoard.roles.is_gudang)
@@ -143,6 +144,10 @@ const lotTo = ref('')
 const lotFilterOpen = ref(false)
 const coldPageSize = ref(PAGE_SIZE_OPTIONS[0])
 const coldPage = ref(1)
+// FU44: search papan (nama item / WO / dokumen / batch) — client-side karena
+// papan sudah termuat penuh; sengaja tidak dipersisten agar reload selalu
+// menampilkan papan utuh.
+const searchQ = ref('')
 const saveHandoverPreferences = () => saveListPreferences({
   workOrder: savedListPreferences.workOrder || {},
   handover: { from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value, filterOpen: lotFilterOpen.value }
@@ -161,9 +166,13 @@ const filteredLots = computed(() => handoverLots.filter((l) => {
   return (!lotFrom.value || day >= lotFrom.value) && (!lotTo.value || day <= lotTo.value)
 }))
 const coldLots = computed(() => filteredLots.value.filter((l) => l.unsupported || lotAvailablePcs(l) > 0))
-const coldTotalPages = computed(() => Math.max(1, Math.ceil(coldLots.value.length / coldPageSize.value)))
-const pagedColdLots = computed(() => coldLots.value.slice((coldPage.value - 1) * coldPageSize.value, coldPage.value * coldPageSize.value))
+// FU44: cari pada kartu (bukan baris) SEBELUM pagination — searchQ mengubah
+// jumlah kartu lane Cold Storage maupun halamannya.
+const coldCards = computed(() => coldLots.value.map(lotCard).filter((c) => boardMatch(c, searchQ.value)))
+const coldTotalPages = computed(() => Math.max(1, Math.ceil(coldCards.value.length / coldPageSize.value)))
+const pagedColdLots = computed(() => coldCards.value.slice((coldPage.value - 1) * coldPageSize.value, coldPage.value * coldPageSize.value))
 watch([lotFrom, lotTo], () => { coldPage.value = 1; saveHandoverPreferences() })
+watch(searchQ, () => { coldPage.value = 1 })
 // panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
 watch(lotFilterOpen, () => saveHandoverPreferences())
 function lotToday() { lotFrom.value = todayISO(); lotTo.value = todayISO() }
@@ -171,14 +180,16 @@ function lotAllDates() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.val
 function lotReset() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
 
 const byLane = computed(() => ({
-  cold: pagedColdLots.value.map(lotCard),
+  cold: pagedColdLots.value,
   request: handoverRequests
     .filter((r) => r.lane === 'request' && r.flag !== 'cancelled' && r.flag !== 'draft')
-    .map(reqCard),
+    .map(reqCard)
+    .filter((c) => boardMatch(c, searchQ.value)),
   kirim: handoverRequests
     .filter((r) => r.lane === 'terkirim')
     .sort((a, b) => (a.sentAt || '').localeCompare(b.sentAt || ''))
     .map(doneCard)
+    .filter((c) => boardMatch(c, searchQ.value))
 }))
 
 // ---- drag & drop = niat bisnis: selalu buka dialog dulu ----
@@ -406,6 +417,16 @@ onMounted(() => {
   <div v-if="handoverState.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ handoverState.error }} — <a href="#" @click.prevent="loadBoard()">coba lagi</a></div>
 
   <div class="toolbar">
+    <div class="searchbox">
+      <Search :size="15" :stroke-width="2" class="search-ico" />
+      <input
+        v-model="searchQ"
+        class="input"
+        type="search"
+        placeholder="Cari nama item, WO, atau dokumen"
+        aria-label="Cari item di papan serah terima"
+      />
+    </div>
     <div class="filterwrap">
       <button
         class="btn filterbtn"

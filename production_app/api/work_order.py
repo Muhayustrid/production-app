@@ -128,6 +128,13 @@ def _base_filters(search=None, production_item=None, status=None, start_date=Non
 				[DOCTYPE, "production_item", "like", f"%{search}%"],
 			]
 		)
+		# FU44: nama item tinggal di Item, bukan di Work Order — ikutkan agar
+		# operator bisa mencari dengan nama produk, bukan hanya kode/dokumen
+		item_codes = frappe.get_all(
+			"Item", filters={"item_name": ("like", f"%{search}%")}, pluck="name", limit=0
+		)
+		if item_codes:
+			or_filters.append([DOCTYPE, "production_item", "in", item_codes])
 	if production_item:
 		filters.append([DOCTYPE, "production_item", "=", production_item])
 	if status:
