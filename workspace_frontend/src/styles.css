@@ -169,7 +169,7 @@ p { margin: 0; }
 }
 
 .maincol { min-width: 0; padding-top: 56px; }
-.content { max-width: 1200px; margin: 0 auto; padding: 24px 32px 48px; }
+.content { max-width: 1400px; margin: 0 auto; padding: 24px 32px 48px; }
 
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brandmark {
