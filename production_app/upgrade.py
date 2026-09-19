@@ -1184,15 +1184,19 @@ def ensure_form_order_permissions():
 # FU48a (2026-09-19) — guard anti "MR yatim": MR Material Transfer serah terima
 # kini dibuat MANUAL oleh gudang di Desk ERPNext; yang lupa mengisi
 # custom_work_order di baris item tidak pernah muncul di papan produksi
-# (silent break). Property Setter di bawah menandai kolom itu wajib TEPAT saat
-# baris MR Material Transfer bukan Form Order. Terverifikasi terhadap sumber
-# Frappe terpasang (v16.33.1): mandatory_depends_on HANYA dievaluasi client-side
-# (save.js is_docfield_mandatory + layout.js/grid_row.js, konteks eval
-# {doc: baris, parent: MR} — `parent.` TERSEDIA) dan nilainya WAJIB berprefiks
-# "eval:" (tanpa prefiks string dibaca sebagai nama field baris — guard tidak
-# pernah menyala). Jalur server tidak melewati pemeriksaan Desk dan memang
-# sudah memenuhi guard: create_form_order menyimpan custom_is_form_order=1,
-# create_request mengisi custom_work_order per baris.
+# (silent break). Property Setter menandai kolom itu wajib TEPAT saat
+# baris MR Material Transfer bukan Form Order.
+#
+# FU57 (2026-09-20) — GUARD INI DIPENSIUNKAN atas keputusan user: MR native
+# ERPNext TIDAK BOLEH terpengaruh custom app — Material Transfer native
+# non-manufaktur terblokir oleh Work Order wajib (laporan user + screenshot).
+# Arah arsitektur: production_app fokus user manufacturing; alat gudang
+# nanti berdiri sebagai custom app terpisah. Konsekuensi disadari &
+# diterima: MR serah terima manual gudang yang lupa custom_work_order
+# kembali bisa "yatim" (tak muncul di papan — perilaku pra-FU48a); jalur
+# SPA/produksi tidak berubah (create_request mengisi custom_work_order per
+# baris, create_form_order menyimpan custom_is_form_order=1). Rollback
+# guard: snapshot fu48a-mr-guard-pre.json + MR_GUARD di bawah.
 # ---------------------------------------------------------------------------
 
 MR_GUARD_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu48a-mr-guard-pre.json")
@@ -1226,36 +1230,22 @@ def snapshot_mr_guard():
 	return MR_GUARD_SNAPSHOT
 
 
-def ensure_mr_guard():
-	"""FU48a anti-orphan guard (see block comment above). Idempotent:
-	unchanged on value equality; creates the missing Property Setter or updates
-	a drifted one (snapshot written once before the first change)."""
-	existing = frappe.db.get_value(
-		"Property Setter",
-		{key: MR_GUARD[key] for key in ("doc_type", "field_name", "property")},
-		["name", "value"],
-		as_dict=True,
-	)
-	if existing and (existing.value or "") == MR_GUARD["value"]:
+def retire_mr_guard():
+	"""FU57 retirement of the FU48a guard (see block comment above): delete every
+	mandatory_depends_on Property Setter bound to Material Request
+	Item.custom_work_order — native Desk MRs must never be forced through a
+	Work Order. Idempotent: "unchanged" when nothing remains; the pre-guard
+	snapshot (fu48a-mr-guard-pre.json) stays the rollback record."""
+	filters = {key: MR_GUARD[key] for key in ("doc_type", "field_name", "property")}
+	names = frappe.get_all("Property Setter", filters=filters, pluck="name")
+	if not names:
 		return "unchanged"
 	if not os.path.exists(MR_GUARD_SNAPSHOT):
-		snapshot_mr_guard()  # never change guard metadata without a pre-state
-	if existing:
-		frappe.db.set_value("Property Setter", existing.name, "value", MR_GUARD["value"])
-		action = "updated"
-	else:
-		from frappe.custom.doctype.property_setter.property_setter import make_property_setter
-
-		make_property_setter(
-			MR_GUARD["doc_type"],
-			MR_GUARD["field_name"],
-			MR_GUARD["property"],
-			MR_GUARD["value"],
-			"Text",
-		)
-		action = "created"
+		snapshot_mr_guard()  # never destroy guard metadata without a pre-state
+	for name in names:
+		frappe.delete_doc("Property Setter", name, ignore_permissions=True)
 	frappe.clear_cache(doctype=MR_GUARD["doc_type"])
-	return action
+	return f"deleted {len(names)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1348,7 +1338,7 @@ def apply():
 	result["handover_permissions"] = ensure_handover_permissions()
 	result["form_order_fields"] = ensure_form_order_fields()
 	result["form_order_permissions"] = ensure_form_order_permissions()
-	result["mr_guard"] = ensure_mr_guard()
+	result["mr_guard"] = retire_mr_guard()
 	frappe.clear_cache(doctype=DOCTYPE)
 	frappe.db.commit()
 	return result

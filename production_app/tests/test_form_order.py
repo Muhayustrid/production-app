@@ -13,13 +13,14 @@
 #   through the locking SE re-check), status derives to terkirim;
 # - free-form FO MRs never touch the Work Order handover mirror (doc_events
 #   no-op, no Error Log entries).
-# - FU48a: the anti-orphan-MR guard Property Setter (Material Request Item
-#   custom_work_order mandatory_depends_on) is live in the merged Desk meta,
-#   idempotent, and leaves the two open paths unaffected (create_form_order —
-#   parent custom_is_form_order=1; MR of other types, e.g. Purchase, without a
-#   Work Order). The Desk-side rejection itself is client-side by design
-#   (verified frappe v16.33.1: mandatory_depends_on is JS-only) and is proven
-#   in the browser walkthrough (fu48a-fixture.json), not here.
+# - FU48a→FU57: the anti-orphan-MR guard Property Setter (Material Request
+#   Item custom_work_order mandatory_depends_on) was RETIRED by FU57 (user
+#   ruling 2026-09-20: native Desk MRs must never be forced through a Work
+#   Order). The retirement is idempotent, leaves no meta/Property Setter
+#   trace, and the two open paths stay open (create_form_order — parent
+#   custom_is_form_order=1; MR of other types, e.g. Purchase, without a
+#   Work Order). Desk-side evaluation was client-side by design
+#   (verified frappe v16.33.1: mandatory_depends_on is JS-only).
 #
 # Test-only records carry the FO prefix; the Frappe test framework rolls each
 # run back (class fixtures are purged in tearDownClass — apply() commits).
@@ -673,31 +674,32 @@ class TestFormOrder(IntegrationTestCase):
 	# anything created earlier would be persisted with them — a Purchase MR
 	# there leaves a committed Bin.ordered_qty that blocks the warehouse purge.
 
-	def test_fo_z48a_mr_guard_meta_live(self):
-		"""The guard Property Setter is merged into the Desk meta with the exact
-		contract value (idempotency itself asserted in test_fo_apply...)."""
+	def test_fo_z57_mr_guard_retired(self):
+		"""FU57: the FU48a guard is RETIRED — native Desk MRs must never be
+		forced through a Work Order. Meta carries no mandatory_depends_on and
+		no Property Setter row remains (retirement idempotency itself is
+		asserted in test_fo_apply... via the 'mr_guard' key)."""
 		df = frappe.get_meta("Material Request Item").get_field("custom_work_order")
 		self.assertIsNotNone(df)
-		self.assertEqual(df.mandatory_depends_on, upgrade.MR_GUARD["value"])
-		self.assertIn("eval:", df.mandatory_depends_on)  # prefix-less never fires (v16 JS eval)
-		self.assertIn("parent.material_request_type", df.mandatory_depends_on)
-		self.assertIn("parent.custom_is_form_order", df.mandatory_depends_on)
-
-		ps = frappe.db.get_value(
-			"Property Setter",
-			{
-				"doc_type": "Material Request Item",
-				"field_name": "custom_work_order",
-				"property": "mandatory_depends_on",
-			},
-			"value",
+		self.assertFalse(df.mandatory_depends_on)
+		self.assertFalse(
+			frappe.db.get_value(
+				"Property Setter",
+				{
+					"doc_type": "Material Request Item",
+					"field_name": "custom_work_order",
+					"property": "mandatory_depends_on",
+				},
+				"name",
+			)
 		)
-		self.assertEqual(ps, upgrade.MR_GUARD["value"])
+		# retirement is idempotent: apply() converges to "unchanged"
+		self.assertEqual(upgrade.retire_mr_guard(), "unchanged")
 
 	def test_fo_z48a_guard_leaves_form_order_and_other_types_open(self):
-		"""Guard cases (b)/(d): create_form_order still succeeds (parent
-		custom_is_form_order=1 exempts it) and a Material Transfer-sibling MR of
-		another type without custom_work_order submits untouched."""
+		"""Post-FU57 (guard retired) the open paths stay open: create_form_order
+		succeeds with rows carrying no work order (custom_is_form_order=1) and a
+		sibling MR of another type without custom_work_order submits untouched."""
 		self._set_route()
 		prod = _make_user("prod48a", "Manufacturing User")
 		frappe.set_user(prod)
