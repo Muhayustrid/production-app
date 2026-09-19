@@ -585,6 +585,45 @@ textarea.input { height: auto; padding: 8px 10px; }
 .c-arrow { color: var(--faint); display: grid; place-items: center; transition: color 0.14s ease, transform 0.14s ease; }
 .wo-row:hover .c-arrow { color: var(--brand-light); transform: translateX(1px); }
 
+/* FU49: tabel Stock Entry memakai pola baris Work Order (wo-body/wo-row) —
+   hanya kolom + area mobile milik Stock Entry, selebihnya reuse */
+.wo-body.se-queue .wo-thead,
+.wo-body.se-queue .wo-row {
+  grid-template-columns: minmax(118px, 132px) minmax(130px, 1.2fr) minmax(78px, 1fr) 134px 128px 92px 100px 16px;
+}
+.se-queue .wo-row:not(.rowlink) { cursor: default; }
+.se-queue-row .c-doc { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.se-queue-row .c-doc small { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-queue-row .c-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-queue-row .c-wo, .se-queue-row .c-batch, .se-queue-row .c-owner {
+  font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (max-width: 1180px) {
+  .wo-body.se-queue .wo-thead,
+  .wo-body.se-queue .wo-row {
+    grid-template-columns: 116px minmax(122px, 1.2fr) minmax(74px, 1fr) 126px 122px 88px 96px 14px;
+  }
+}
+@media (max-width: 820px) {
+  .wo-body.se-queue .wo-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "doc status"
+      "item item"
+      "qty qty"
+      "wo batch"
+      "owner owner";
+  }
+  .se-queue-row .c-doc { grid-area: doc; }
+  .se-queue-row .c-item { grid-area: item; }
+  .se-queue-row .c-qty { grid-area: qty; }
+  .se-queue-row .c-wo { grid-area: wo; }
+  .se-queue-row .c-batch { grid-area: batch; text-align: right; }
+  .se-queue-row .c-owner { grid-area: owner; }
+  .se-queue-row .c-status { grid-area: status; text-align: right; }
+  .se-queue-row .c-arrow { display: none; }
+}
+
 .empty-inset {
   display: flex;
   flex-direction: column;

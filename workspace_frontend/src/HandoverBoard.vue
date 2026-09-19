@@ -13,18 +13,19 @@ import {
   listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs,
   normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, sendHandover
 } from './store.js'
-import { fmtInt, qtyMain } from './format.js'
+import { fmtInt, qtyMain, qtyStack } from './format.js'
 import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
 import { rowClickAction, seRouteLabel } from './handover-se.js'
 import { boxAllocationText } from './handover-box.js'
 import { laneStatusMeta } from './form-order.js'
 import {
-  CheckCircle2, ClipboardList, Filter, Inbox, KanbanSquare,
+  CheckCircle2, ChevronRight, ClipboardList, Filter, Inbox, KanbanSquare,
   Search, Snowflake, Table2, Truck
 } from 'lucide-vue-next'
 
-const isProduksi = computed(() => !!handoverBoard.roles.is_produksi)
+// FU49: tabel memakai baris kartu ala Work Order; klik baris (rowClickAction)
+// tetap satu-satunya aksi — role diambil dari payload board saat dibutuhkan.
 
 // ---- papan: 3 lane (T35), lot Cold Storage FIFO (urutan dari server) ----
 const lanes = [
@@ -278,6 +279,8 @@ const serahRows = computed(() =>
     .map((r) => ({ r, meta: laneStatusMeta(r) }))
     .filter(({ r }) => boardMatch({ name: r.item, workOrder: r.workOrder, document: r.materialRequest || r.stockEntry, batch: r.batch }, searchQ.value))
 )
+// FU49: qty bertumpuk ala baris Work Order (Pack utama · Pcs sub)
+const qtyStk = (r) => qtyStack(r.requestedQtyPcs, lotForWo(r.workOrder) || r)
 
 onMounted(() => {
   const apply = () => {
@@ -321,26 +324,7 @@ onMounted(() => {
         aria-label="Cari item di papan Stock Entry"
       />
     </div>
-    <!-- FO: segmented control Kanban|Tabel (reuse .viewswitch ala daftar WO) —
-    preferensi per-user -->
-    <div class="viewswitch" role="group" aria-label="Mode tampilan">
-      <button
-        type="button"
-        :class="{ on: viewMode === 'kanban' }"
-        :aria-pressed="viewMode === 'kanban'"
-        @click="setViewMode('kanban')"
-      >
-        <KanbanSquare :size="14" :stroke-width="2" /> Kanban
-      </button>
-      <button
-        type="button"
-        :class="{ on: viewMode === 'tabel' }"
-        :aria-pressed="viewMode === 'tabel'"
-        @click="setViewMode('tabel')"
-      >
-        <Table2 :size="14" :stroke-width="2" /> Tabel
-      </button>
-    </div>
+    <!-- FU49: urutan toolbar serupa daftar WO — cari → filter → mode tampilan -->
     <div v-if="viewMode === 'kanban'" class="filterwrap">
       <button
         class="btn filterbtn"
@@ -372,6 +356,24 @@ onMounted(() => {
           <button class="linkbtn filter-clear" type="button" @click="lotReset">Hapus semua filter</button>
         </div>
       </Transition>
+    </div>
+    <div class="viewswitch" role="group" aria-label="Mode tampilan">
+      <button
+        type="button"
+        :class="{ on: viewMode === 'kanban' }"
+        :aria-pressed="viewMode === 'kanban'"
+        @click="setViewMode('kanban')"
+      >
+        <KanbanSquare :size="14" :stroke-width="2" /> Kanban
+      </button>
+      <button
+        type="button"
+        :class="{ on: viewMode === 'tabel' }"
+        :aria-pressed="viewMode === 'tabel'"
+        @click="setViewMode('tabel')"
+      >
+        <Table2 :size="14" :stroke-width="2" /> Tabel
+      </button>
     </div>
   </div>
 
@@ -448,60 +450,54 @@ onMounted(() => {
   </div>
   </template>
 
-  <!-- ============ FU48: tampilan Tabel — hanya antrian Stock Entry ============ -->
+  <!-- ============ FU49: tampilan Tabel — baris kartu ala daftar Work Order
+       (wo-body/wo-row reuse; klik baris = semantik FU47: kirim / detail) ============ -->
   <template v-else>
-    <section class="panel tbl-panel">
-      <div class="panel-head">
-        <span class="p-ico"><Truck :size="15" :stroke-width="1.9" /></span>
-        <h2>Antrian Kirim Stock Entry</h2>
-        <span class="lead">Klik baris untuk aksi / detail Stock Entry. Status dihitung server dari Material Request / Stock Entry.</span>
+    <div class="wo-body se-queue">
+      <div class="wo-thead" v-if="serahRows.length">
+        <span>Dokumen</span>
+        <span>Item</span>
+        <span style="text-align: right">Qty</span>
+        <span>Work Order</span>
+        <span>Batch</span>
+        <span>Dibuat oleh</span>
+        <span>Status</span>
+        <span></span>
       </div>
-      <div class="panel-body">
-        <div class="tbl-wrap">
-          <table class="datatable">
-            <thead>
-              <tr>
-                <th>Dokumen</th><th>Item</th><th>Qty</th><th>Work Order</th><th>Batch</th>
-                <th>Dibuat oleh</th><th>Status</th><th v-if="isProduksi"></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="{ r, meta } in serahRows"
-                :key="r.id"
-                :class="{ rowlink: !!rowClickAction(r, handoverBoard.roles) }"
-                @click="rowAction(r)"
-              >
-                <td>
-                  <span class="tbl-doc">{{ r.materialRequest }}</span>
-                  <span v-if="r.stockEntry" class="tbl-sub">{{ r.stockEntry }} · {{ r.sentAt }}</span>
-                </td>
-                <td>{{ r.item }}</td>
-                <td>{{ qtyMain(r.requestedQtyPcs, lotForWo(r.workOrder) || r) }}</td>
-                <td>{{ r.workOrder }}</td>
-                <td>{{ r.batch || '-' }}</td>
-                <td>{{ r.ownerName || '-' }}</td>
-                <td><span class="chip" :class="meta.cls">{{ meta.label }}</span></td>
-                <td v-if="isProduksi" @click.stop>
-                  <button
-                    v-if="r.lane === 'request' && !r.flag"
-                    class="btn btn-sm btn-primary"
-                    :disabled="!!handoverState.pending"
-                    @click="openSendDialog(r.id)"
-                  >Kirim</button>
-                </td>
-              </tr>
-              <tr v-if="!serahRows.length">
-                <td :colspan="8" class="tbl-empty">
-                  <Inbox :size="16" :stroke-width="1.8" aria-hidden="true" />
-                  <span>Belum ada request.</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+
+      <div
+        v-for="{ r, meta } in serahRows"
+        :key="r.id"
+        class="wo-row se-queue-row"
+        :class="{ rowlink: !!rowClickAction(r, handoverBoard.roles) }"
+        :role="rowClickAction(r, handoverBoard.roles) ? 'button' : undefined"
+        :tabindex="rowClickAction(r, handoverBoard.roles) ? 0 : undefined"
+        @click="rowAction(r)"
+        @keydown.enter="rowAction(r)"
+      >
+        <span class="wo-id c-doc">
+          {{ r.materialRequest }}
+          <small v-if="r.stockEntry" class="mono">{{ r.stockEntry }}</small>
+        </span>
+        <span class="wo-prod c-item">{{ r.item }} <small class="mono">{{ r.itemCode }}</small></span>
+        <span class="wo-qty c-qty">
+          <span class="qmain">{{ qtyStk(r).main }}</span>
+          <span v-if="qtyStk(r).sub" class="qsub">{{ qtyStk(r).sub }}</span>
+        </span>
+        <span class="c-wo">{{ r.workOrder }}</span>
+        <span class="c-batch">{{ r.batch || '-' }}</span>
+        <span class="c-owner">{{ r.ownerName || '-' }}</span>
+        <span class="c-status"><span class="chip" :class="meta.cls">{{ meta.label }}</span></span>
+        <span v-if="rowClickAction(r, handoverBoard.roles)" class="c-arrow"><ChevronRight :size="16" :stroke-width="2" /></span>
+        <span v-else class="c-arrow"></span>
       </div>
-    </section>
+
+      <div v-if="!serahRows.length" class="empty-inset">
+        <span class="eico"><Inbox :size="19" :stroke-width="1.8" /></span>
+        <p class="etitle">Belum ada request</p>
+        <p class="ehint">Request gudang dari Desk akan muncul di sini untuk dikirim.</p>
+      </div>
+    </div>
   </template>
 
   <!-- ============ dialog: Kirim Stock Entry — form review
