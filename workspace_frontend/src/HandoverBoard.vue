@@ -16,6 +16,7 @@ import {
 import { fmtInt, qtyMain, qtyStack } from './format.js'
 import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
+import { distinctItems, filterSerahRows, serahFilterCount } from './handover-filter.js'
 import { rowClickAction, seRouteLabel } from './handover-se.js'
 import { boxAllocationText } from './handover-box.js'
 import { laneStatusMeta } from './form-order.js'
@@ -148,9 +149,18 @@ const coldPage = ref(1)
 // papan sudah termuat penuh; sengaja tidak dipersisten agar reload selalu
 // menampilkan papan utuh.
 const searchQ = ref('')
+// FU50: filter mode tabel — status/item/tanggal dibuat; tersimpan per-user
+// (pola FU18, panel + persistence meniru halaman Work Order).
+const seStatus = ref('all')
+const seItem = ref('all')
+const seFrom = ref('')
+const seTo = ref('')
 const saveHandoverPreferences = () => saveListPreferences({
   workOrder: savedListPreferences.workOrder || {},
-  handover: { from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value, filterOpen: lotFilterOpen.value, viewMode: viewMode.value }
+  handover: {
+    from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value, filterOpen: lotFilterOpen.value, viewMode: viewMode.value,
+    seStatus: seStatus.value, seItem: seItem.value, seFrom: seFrom.value, seTo: seTo.value
+  }
 })
 function setColdPageSize(value) {
   coldPageSize.value = normalizePageSize(value)
@@ -172,12 +182,27 @@ const coldCards = computed(() => coldLots.value.map(lotCard).filter((c) => board
 const coldTotalPages = computed(() => Math.max(1, Math.ceil(coldCards.value.length / coldPageSize.value)))
 const pagedColdLots = computed(() => coldCards.value.slice((coldPage.value - 1) * coldPageSize.value, coldPage.value * coldPageSize.value))
 watch([lotFrom, lotTo], () => { coldPage.value = 1; saveHandoverPreferences() })
+watch([seStatus, seItem, seFrom, seTo], () => saveHandoverPreferences())
 watch(searchQ, () => { coldPage.value = 1 })
 // panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
 watch(lotFilterOpen, () => saveHandoverPreferences())
 function lotToday() { lotFrom.value = todayISO(); lotTo.value = todayISO() }
 function lotAllDates() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
 function lotReset() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
+
+// FU50: aksi cepat filter tabel (pola halaman WO — panel tetap terbuka)
+const seFilter = () => ({ status: seStatus.value, item: seItem.value, from: seFrom.value, to: seTo.value })
+const seToday = () => { seFrom.value = todayISO(); seTo.value = todayISO() }
+const seAllDates = () => { seFrom.value = ''; seTo.value = '' }
+const seReset = () => { seStatus.value = 'all'; seItem.value = 'all'; seFrom.value = ''; seTo.value = '' }
+const itemOptions = computed(() => distinctItems(handoverRequests))
+// opsi item tersimpan bisa basi (item tak lagi ada di papan) — tetap
+// ditampilkan agar pilihan lama terbaca (pola fProduct halaman WO)
+const itemStale = computed(() =>
+  seItem.value !== 'all' && !itemOptions.value.some((o) => o.name === seItem.value))
+// badge tombol Filter mengikuti mode yang sedang aktif
+const activeFilterCount = computed(() =>
+  viewMode.value === 'tabel' ? serahFilterCount(seFilter()) : lotFilterCount.value)
 
 const byLane = computed(() => ({
   cold: pagedColdLots.value,
@@ -273,12 +298,16 @@ function setViewMode(mode) {
 }
 
 // baris tabel Stock Entry: seluruh request papan (status dari lane/flag),
-// dicari dengan helper kartu yang sama (nama item / WO / dokumen / batch)
+// dicari dengan helper kartu yang sama (nama item / WO / dokumen / batch),
+// lalu difilter status/item/tanggal (FU50, helper murni ter-test)
 const serahRows = computed(() =>
-  handoverRequests
+  filterSerahRows(handoverRequests, seFilter())
     .map((r) => ({ r, meta: laneStatusMeta(r) }))
     .filter(({ r }) => boardMatch({ name: r.item, workOrder: r.workOrder, document: r.materialRequest || r.stockEntry, batch: r.batch }, searchQ.value))
 )
+// FU50: empty state membedakan "belum ada request" vs "terfilter habis"
+const serahFilteredOut = computed(() =>
+  !serahRows.value.length && (!!searchQ.value || serahFilterCount(seFilter()) > 0))
 // FU49: qty bertumpuk ala baris Work Order (Pack utama · Pcs sub)
 const qtyStk = (r) => qtyStack(r.requestedQtyPcs, lotForWo(r.workOrder) || r)
 
@@ -288,6 +317,8 @@ onMounted(() => {
     lotFrom.value = p.from || ''; lotTo.value = p.to || ''
     coldPageSize.value = normalizePageSize(p.pageSize)
     lotFilterOpen.value = !!p.filterOpen
+    seStatus.value = p.seStatus || 'all'; seItem.value = p.seItem || 'all'
+    seFrom.value = p.seFrom || ''; seTo.value = p.seTo || ''
     // preferensi eksplisit menang; tanpa preferensi → default Tabel
     if (p.viewMode === 'tabel' || p.viewMode === 'kanban') viewMode.value = p.viewMode
     loadBoard()
@@ -324,36 +355,79 @@ onMounted(() => {
         aria-label="Cari item di papan Stock Entry"
       />
     </div>
-    <!-- FU49: urutan toolbar serupa daftar WO — cari → filter → mode tampilan -->
-    <div v-if="viewMode === 'kanban'" class="filterwrap">
+    <!-- FU49/50: urutan toolbar serupa daftar WO — cari → filter → mode
+         tampilan; tombol Filter tampil di KEDUA mode (FU50), isi panel
+         menyesuaikan mode: tabel = status/item/tanggal dibuat, kanban =
+         tanggal lot masuk (FU18). -->
+    <div class="filterwrap">
       <button
         class="btn filterbtn"
-        :class="{ active: lotFilterCount }"
+        :class="{ active: activeFilterCount }"
         aria-label="Filter"
         @click="lotFilterOpen = !lotFilterOpen"
       >
         <Filter :size="14" :stroke-width="2" />
         <span class="btext">Filter</span>
-        <span v-if="lotFilterCount" class="filtercount">{{ lotFilterCount }}</span>
+        <span v-if="activeFilterCount" class="filtercount">{{ activeFilterCount }}</span>
       </button>
       <div v-if="lotFilterOpen" class="popoverlay" @click="lotFilterOpen = false"></div>
       <Transition name="pop">
         <div v-if="lotFilterOpen" class="filterpanel">
-          <div class="frow2">
+          <template v-if="viewMode === 'tabel'">
             <div class="ffield">
-              <label>Lot masuk dari</label>
-              <input v-model="lotFrom" class="input" type="date" />
+              <label>Status</label>
+              <select v-model="seStatus" class="select">
+                <option value="all">Semua status</option>
+                <option value="request">Diminta</option>
+                <option value="terkirim">Terkirim</option>
+                <option value="cancelled">Dibatalkan</option>
+                <option value="stopped">Dihentikan</option>
+                <option value="draft">Draf</option>
+              </select>
             </div>
             <div class="ffield">
-              <label>Lot masuk s.d.</label>
-              <input v-model="lotTo" class="input" type="date" />
+              <label>Item</label>
+              <select v-model="seItem" class="select">
+                <option value="all">Semua item</option>
+                <option v-if="itemStale" :value="seItem">{{ seItem }}</option>
+                <option v-for="o in itemOptions" :key="o.name" :value="o.name">
+                  {{ o.code ? `${o.code} · ${o.name}` : o.name }}
+                </option>
+              </select>
             </div>
-          </div>
-          <div class="frow2 filter-actions">
-            <button class="linkbtn" type="button" @click="lotToday">Hari ini</button>
-            <button class="linkbtn" type="button" @click="lotAllDates">Semua tanggal</button>
-          </div>
-          <button class="linkbtn filter-clear" type="button" @click="lotReset">Hapus semua filter</button>
+            <div class="frow2">
+              <div class="ffield">
+                <label>Dibuat dari</label>
+                <input v-model="seFrom" class="input" type="date" />
+              </div>
+              <div class="ffield">
+                <label>Dibuat s.d.</label>
+                <input v-model="seTo" class="input" type="date" />
+              </div>
+            </div>
+            <div class="frow2 filter-actions">
+              <button class="linkbtn" type="button" @click="seToday">Hari ini</button>
+              <button class="linkbtn" type="button" @click="seAllDates">Semua tanggal</button>
+            </div>
+            <button class="linkbtn filter-clear" type="button" @click="seReset">Hapus semua filter</button>
+          </template>
+          <template v-else>
+            <div class="frow2">
+              <div class="ffield">
+                <label>Lot masuk dari</label>
+                <input v-model="lotFrom" class="input" type="date" />
+              </div>
+              <div class="ffield">
+                <label>Lot masuk s.d.</label>
+                <input v-model="lotTo" class="input" type="date" />
+              </div>
+            </div>
+            <div class="frow2 filter-actions">
+              <button class="linkbtn" type="button" @click="lotToday">Hari ini</button>
+              <button class="linkbtn" type="button" @click="lotAllDates">Semua tanggal</button>
+            </div>
+            <button class="linkbtn filter-clear" type="button" @click="lotReset">Hapus semua filter</button>
+          </template>
         </div>
       </Transition>
     </div>
@@ -494,8 +568,8 @@ onMounted(() => {
 
       <div v-if="!serahRows.length" class="empty-inset">
         <span class="eico"><Inbox :size="19" :stroke-width="1.8" /></span>
-        <p class="etitle">Belum ada request</p>
-        <p class="ehint">Request gudang dari Desk akan muncul di sini untuk dikirim.</p>
+        <p class="etitle">{{ serahFilteredOut ? 'Tidak ada request' : 'Belum ada request' }}</p>
+        <p class="ehint">{{ serahFilteredOut ? 'Tidak ada request untuk filter saat ini. Ubah filter atau kata pencarian.' : 'Request gudang dari Desk akan muncul di sini untuk dikirim.' }}</p>
       </div>
     </div>
   </template>
