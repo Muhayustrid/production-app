@@ -434,19 +434,19 @@ onMounted(() => {
     <div class="viewswitch" role="group" aria-label="Mode tampilan">
       <button
         type="button"
-        :class="{ on: viewMode === 'kanban' }"
-        :aria-pressed="viewMode === 'kanban'"
-        @click="setViewMode('kanban')"
-      >
-        <KanbanSquare :size="14" :stroke-width="2" /> Kanban
-      </button>
-      <button
-        type="button"
         :class="{ on: viewMode === 'tabel' }"
         :aria-pressed="viewMode === 'tabel'"
         @click="setViewMode('tabel')"
       >
         <Table2 :size="14" :stroke-width="2" /> Tabel
+      </button>
+      <button
+        type="button"
+        :class="{ on: viewMode === 'kanban' }"
+        :aria-pressed="viewMode === 'kanban'"
+        @click="setViewMode('kanban')"
+      >
+        <KanbanSquare :size="14" :stroke-width="2" /> Kanban
       </button>
     </div>
   </div>
