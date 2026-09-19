@@ -2032,10 +2032,15 @@ textarea.input { height: auto; padding: 8px 10px; }
 .fo-grid { min-width: 640px; }
 .fo-grid td { vertical-align: middle; }
 .fo-grid .input { width: 100%; }
-/* FU53: baris diberi jarak — header mini ala wo-thead, pemisah dashed
-   tipis, sel lebih lapang sehingga input antar baris tidak menempel */
+/* FU53b: baris diberi jarak — header mini ala wo-thead, pemisah dashed
+   tipis, sel lebih lapang sehingga input antar baris tidak menempel.
+   position:static — sticky milik .datatable membuat header grid FO yang
+   pendek menempel/menumpuk field Tanggal di rendering subpixel/zoom;
+   margin-top wrap memberi jarak eksplisit field → tabel. */
+.fo-grid-wrap { margin-top: 18px; }
 .fo-grid thead th {
-  padding: 0 12px 8px;
+  position: static;
+  padding: 10px 12px 8px;
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.08em;
