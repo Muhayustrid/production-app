@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  foItemsText, foQtyTotal, foStatusMeta, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT, laneStatusMeta, validateFormRows
+  defaultUom, foItemsText, foQtyTotal, foStatusMeta, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT,
+  laneStatusMeta, uomOptions, uomProblem, validateFormRows
 } from '../src/form-order.js'
 
 test('foStatusMeta: label + warna chip per status server', () => {
@@ -61,7 +62,43 @@ test('itemRowProblem: penanda dini dari item_info (FO-8)', () => {
   assert.equal(itemRowProblem({ is_stock_item: 0, has_batch_no: 0 }), 'bukan-stok')
   assert.equal(itemRowProblem({ is_stock_item: 1, has_batch_no: 1 }), 'batch')
   // teks peringatan tersedia utk tiap masalah (tidak ada key hilang)
-  for (const key of ['bukan-stok', 'batch']) {
+  for (const key of ['bukan-stok', 'batch', 'uom-invalid']) {
     assert.ok(ITEM_PROBLEM_TEXT[key].length > 10)
   }
+})
+
+// ---- FU48c: dropdown Satuan + default satuan terakhir dipakai ----
+
+const INFO = {
+  stock_uom: 'Kg',
+  last_uom: null,
+  uoms: [
+    { uom: 'Pack', conversion_factor: 10 },
+    { uom: 'Gram', conversion_factor: 1000 },
+    { uom: 'Kg', conversion_factor: 1 } // server auto-append stock row → dedup wajib
+  ]
+}
+
+test('uomOptions: stock_uom + konversi, tanpa duplikat', () => {
+  assert.deepEqual(uomOptions(INFO), ['Kg', 'Pack', 'Gram'])
+  assert.deepEqual(uomOptions({ stock_uom: 'Kg' }), ['Kg']) // tanpa baris konversi
+  assert.deepEqual(uomOptions(null), []) // info belum termuat
+})
+
+test('defaultUom: last_uom valid menang; basi → stock_uom', () => {
+  assert.equal(defaultUom({ ...INFO, last_uom: 'Pack' }), 'Pack') // last dipakai
+  assert.equal(defaultUom({ ...INFO, last_uom: 'Sak' }), 'Kg') // basi → stock_uom
+  assert.equal(defaultUom(INFO), 'Kg') // tanpa last_uom
+  assert.equal(defaultUom(null), '') // info belum termuat → kosong
+  // ganti item: default dihitung ulang dari info item BARU
+  const itemBaru = { stock_uom: 'Pcs', last_uom: 'Pack', uoms: [{ uom: 'Dus', conversion_factor: 5 }] }
+  assert.equal(defaultUom(itemBaru), 'Pcs') // Pack bukan anggota item baru
+})
+
+test('uomProblem: satuan tak valid → error baris, submit terkunci', () => {
+  assert.equal(uomProblem({ info: INFO, uom: 'Pack' }), '')
+  assert.equal(uomProblem({ info: INFO, uom: 'Sak' }), 'uom-invalid')
+  assert.equal(uomProblem({ info: INFO, uom: '' }), '') // belum pilih (tak mungkin: select terisi)
+  assert.equal(uomProblem({ info: null, uom: '' }), '') // item belum termuat
+  assert.equal(uomProblem(null), '') // baris null-safe
 })

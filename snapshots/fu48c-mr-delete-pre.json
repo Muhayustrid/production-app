@@ -1,0 +1,18 @@
+{
+  "captured_at": "2026-09-19 18:31:47.309977",
+  "custom_docperm": [
+    {
+      "amend": 1,
+      "cancel": 1,
+      "create": 1,
+      "delete": 0,
+      "if_owner": 0,
+      "permlevel": 0,
+      "read": 1,
+      "role": "Gudang Barang Jadi",
+      "submit": 1,
+      "write": 1
+    }
+  ],
+  "docperm": []
+}

@@ -61,8 +61,7 @@ const ACTION_LABELS = {
   jobcard_complete: 'Selesaikan Operasi',
   confirm_prepacking: 'Pre-Packing',
   confirm_postpacking: 'Post-Packing',
-  finish: 'Finish',
-  create_request: 'Request Gudang'
+  finish: 'Finish'
 }
 
 function decodeErrorText(value) {
@@ -462,21 +461,9 @@ async function handoverAction(method, args) {
   }
 }
 
-// T35/T37/T39: form Request Gudang memvalidasi alokasi box (kg + jumlah
-// dalam satuan gudang item); validasi server tetap yang otoritatif — error
-// dilempar apa adanya agar dialog mempertahankan isian pengguna.
-export function createRequest(workOrder, v) {
-  return handoverAction('create_request', {
-    work_order: workOrder,
-    box_1: Number(v.box1),
-    box_1_qty: Number(v.box1Qty),
-    box_2: Number(v.box2),
-    box_2_qty: Number(v.box2Qty)
-  })
-}
-export function cancelRequest(materialRequest) {
-  return handoverAction('cancel_request', { material_request: materialRequest })
-}
+// FU48 produksi-only: create_request/cancel_request/fulfill_form_order tidak
+// lagi dipanggil SPA (UI gudang dihapus); endpoint server tetap hidup dan
+// bisa dipanggil via HTTP langsung bila kelak perlu.
 export function sendHandover(materialRequest) {
   return handoverAction('send_handover', { material_request: materialRequest })
 }
@@ -552,14 +539,12 @@ export function foItemInfo(itemCode) {
 }
 export function createFormOrder(rows, scheduleDate, note) {
   return formOrderAction('create_form_order', {
-    items: rows.map((r) => ({ item_code: r.code, qty: Number(r.qty) })),
+    // FU48c: satuan terpilih per baris (kosong → server pakai stock_uom)
+    items: rows.map((r) => ({ item_code: r.code, qty: Number(r.qty), uom: r.uom || null })),
     schedule_date: scheduleDate || null,
     note: note || null
   })
 }
 export function cancelFormOrder(materialRequest) {
   return formOrderAction('cancel_form_order', { material_request: materialRequest })
-}
-export function fulfillFormOrder(materialRequest) {
-  return formOrderAction('fulfill_form_order', { material_request: materialRequest })
 }

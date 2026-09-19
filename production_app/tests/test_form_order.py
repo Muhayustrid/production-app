@@ -13,11 +13,19 @@
 #   through the locking SE re-check), status derives to terkirim;
 # - free-form FO MRs never touch the Work Order handover mirror (doc_events
 #   no-op, no Error Log entries).
+# - FU48a: the anti-orphan-MR guard Property Setter (Material Request Item
+#   custom_work_order mandatory_depends_on) is live in the merged Desk meta,
+#   idempotent, and leaves the two open paths unaffected (create_form_order —
+#   parent custom_is_form_order=1; MR of other types, e.g. Purchase, without a
+#   Work Order). The Desk-side rejection itself is client-side by design
+#   (verified frappe v16.33.1: mandatory_depends_on is JS-only) and is proven
+#   in the browser walkthrough (fu48a-fixture.json), not here.
 #
 # Test-only records carry the FO prefix; the Frappe test framework rolls each
 # run back (class fixtures are purged in tearDownClass — apply() commits).
 
 import frappe
+from frappe.defaults import get_user_default, set_user_default
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, getdate, now, random_string
 
@@ -107,6 +115,48 @@ class TestFormOrder(IntegrationTestCase):
 		cls.item_batch = item("Batch", {"has_batch_no": 1, "create_new_batch": 0})
 		cls.item_service = item("Service", {"is_stock_item": 0})
 
+		# FU48c: pilihan satuan — item dengan konversi (enabled + disabled) dan
+		# item dengan faktor 0/negatif; UOM fixture dibuang di tearDownClass.
+		cls.uom_pack = frappe.get_doc(
+			{"doctype": "UOM", "uom_name": f"{PREFIX} Pak {suffix}"}
+		).insert().name
+		cls.uom_gram = frappe.get_doc(
+			{"doctype": "UOM", "uom_name": f"{PREFIX} Gram {suffix}"}
+		).insert().name
+		cls.uom_off = frappe.get_doc(
+			{"doctype": "UOM", "uom_name": f"{PREFIX} Off {suffix}", "enabled": 0}
+		).insert().name
+
+		def item_with_uoms(label, rows):
+			doc = frappe.get_doc(
+				{
+					"doctype": "Item",
+					"item_code": f"{PREFIX}-{label}-{suffix}",
+					"item_name": f"{PREFIX} {label} {suffix}",
+					"item_group": frappe.db.get_value("Item Group", {}, "name"),
+					"stock_uom": frappe.db.get_value(
+						"Work Order", {"docstatus": 1}, "stock_uom", order_by="creation desc"
+					),
+					"is_stock_item": 1,
+					"is_purchase_item": 0,
+					"is_sales_item": 0,
+					"is_fixed_asset": 0,
+				}
+			)
+			for uom, factor in rows:
+				doc.append("uoms", {"uom": uom, "conversion_factor": factor})
+			return doc.insert().name
+
+		cls.item_uom = item_with_uoms(
+			"Uom", [(cls.uom_pack, 10), (cls.uom_off, 5)]
+		)
+		# faktor 0 tidak ikut; faktor negatif TIDAK BISA dibuat — field
+		# conversion_factor native non_negative (ORM menolak, terbukti saat
+		# fixture -1 ditolak NonNegativeError) → guard >0 di server tetap ada.
+		cls.item_conv_bad = item_with_uoms(
+			"ConvBad", [(cls.uom_pack, 0), (cls.uom_gram, 0)]
+		)
+
 	@classmethod
 	def tearDownClass(cls):
 		"""apply() commits mid-class (metadata) which persists the class
@@ -117,6 +167,8 @@ class TestFormOrder(IntegrationTestCase):
 		for doctype, field, pattern in (
 			("Warehouse", "warehouse_name", f"{PREFIX} %"),
 			("Item", "item_code", f"{PREFIX}-%"),
+			("Item", "item_name", f"{PREFIX} %"),  # site autoname recodes item_code -> ITEM#####
+			("UOM", "uom_name", f"{PREFIX} %"),
 		):
 			for name in frappe.get_all(doctype, filters={field: ("like", pattern)}, pluck="name"):
 				frappe.delete_doc(doctype, name, force=True)
@@ -171,11 +223,15 @@ class TestFormOrder(IntegrationTestCase):
 	def test_fo_apply_idempotent_and_matrix(self):
 		r1 = upgrade.apply()
 		r2 = upgrade.apply()
-		for key in ("form_order_fields", "form_order_permissions"):
-			entries = r2[key].values() if isinstance(r2[key], dict) else r2[key]
+		for key in ("form_order_fields", "form_order_permissions", "handover_permissions", "mr_guard"):
+			value = r2[key]
+			if isinstance(value, str):
+				self.assertEqual(value, "unchanged", f"{key} not idempotent: {value}")
+				continue
+			entries = value.values() if isinstance(value, dict) else value
 			self.assertTrue(
 				all(entry.endswith(": unchanged") for entry in entries),
-				f"{key} not idempotent: {r2[key]}",
+				f"{key} not idempotent: {value}",
 			)
 		self.assertTrue(frappe.get_meta("Material Request").has_field("custom_is_form_order"))
 		for fieldname in (
@@ -184,30 +240,36 @@ class TestFormOrder(IntegrationTestCase):
 		):
 			self.assertTrue(frappe.get_meta("Manufacturing Settings").has_field(fieldname))
 
+		RIGHTS = ("read", "write", "create", "submit", "cancel", "amend", "delete", "if_owner")
+
 		def flags(doctype, role):
 			name = frappe.db.get_value("Custom DocPerm", {"parent": doctype, "role": role}, "name")
-			row = frappe.db.get_value(
-				"Custom DocPerm", name,
-				["read", "write", "create", "submit", "cancel", "amend"], as_dict=True,
-			)
-			return {k: int(row.get(k) or 0) for k in ("read", "write", "create", "submit", "cancel", "amend")}
+			row = frappe.db.get_value("Custom DocPerm", name, list(RIGHTS), as_dict=True)
+			return {k: int(row.get(k) or 0) for k in RIGHTS}
 
 		# FO raises Manufacturing User to the full MR lifecycle (Form Order)
 		self.assertEqual(
 			flags("Material Request", "Manufacturing User"),
-			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
+			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0, "delete": 0, "if_owner": 0},
 		)
 		self.assertEqual(flags("Material Request Item", "Manufacturing User")["create"], 1)
 		# Manufacturing Manager: full MR (previously no row at all)
 		self.assertEqual(
 			flags("Material Request", "Manufacturing Manager"),
-			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
+			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0, "delete": 0, "if_owner": 0},
 		)
 		self.assertEqual(flags("Material Request Item", "Manufacturing Manager")["create"], 1)
 		# Gudang Barang Jadi fulfills via Stock Entry create/submit (FO)
 		self.assertEqual(
 			flags("Stock Entry", ROLE_GUDANG),
-			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
+			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0, "delete": 0, "if_owner": 0},
+		)
+		# FU48c: gudang menghapus DRAFT MR-nya di Desk. if_owner sengaja 0 —
+		# terbukti merusak scope baca gudang (flag berlaku satu baris penuh;
+		# lihat komentar DOCPERM_MATRIX di upgrade.py)
+		self.assertEqual(
+			flags("Material Request", ROLE_GUDANG),
+			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1, "if_owner": 0},
 		)
 		self.assertTrue(frappe.get_meta("Material Request").get_field("custom_is_form_order").read_only)
 
@@ -471,3 +533,209 @@ class TestFormOrder(IntegrationTestCase):
 		self.assertEqual(hit[0]["status"], "terkirim")
 		self.assertEqual(hit[0]["stock_entry"], se_name)
 		self.assertTrue(hit[0]["sent_at"])
+
+	# ------------------------------------------------------------ FU48c satuan
+
+	def test_fo_valid_uoms(self):
+		"""Pilihan satuan dari UOM Conversion Detail: faktor finite > 0, hanya
+		UOM enabled; item tanpa konversi aktif hanya punya stock UOM."""
+		valid = {v["uom"]: float(v["conversion_factor"]) for v in form_order._valid_uoms(self.item_uom)}
+		self.assertEqual(valid[self.uom_pack], 10.0)
+		self.assertIn(frappe.db.get_value("Item", self.item_uom, "stock_uom"), valid)
+		self.assertNotIn(self.uom_off, valid)  # UOM disabled difilter
+
+		# faktor 0 / negatif tidak ikut (hanya sisa baris stock_uom faktor 1)
+		bad = {v["uom"] for v in form_order._valid_uoms(self.item_conv_bad)}
+		self.assertNotIn(self.uom_pack, bad)
+		self.assertNotIn(self.uom_gram, bad)
+		stock = frappe.db.get_value("Item", self.item_conv_bad, "stock_uom")
+		self.assertEqual(bad, {stock})
+
+		# tanpa baris konversi sama sekali (item tak dikenal) → kosong
+		self.assertEqual(form_order._valid_uoms("TIDAK-ADA-ITEM"), [])
+
+	def test_fo_item_info_uoms_and_last_uom(self):
+		"""item_info membawa uoms + last_uom (valid); last_uom basi → null."""
+		info = form_order.item_info(self.item_uom)
+		self.assertIn(self.uom_pack, [v["uom"] for v in info["uoms"]])
+		self.assertIsNone(info["last_uom"])  # belum ada default user
+
+		user = _make_user("uominfo", "Manufacturing User")
+		stock = frappe.db.get_value("Item", self.item_uom, "stock_uom")
+		frappe.set_user(user)
+		try:
+			set_user_default(form_order.UOM_DEFAULT_KEY, frappe.as_json({self.item_uom: self.uom_pack}))
+			self.assertEqual(form_order.item_info(self.item_uom)["last_uom"], self.uom_pack)
+			# basi: tersimpan tapi bukan lagi pilihan item → null
+			set_user_default(
+				form_order.UOM_DEFAULT_KEY, frappe.as_json({self.item_uom: "SATUAN-PALING-TAK-ADA"})
+			)
+			self.assertIsNone(form_order.item_info(self.item_uom)["last_uom"])
+			# stock_uom selalu anggota pilihan → valid
+			set_user_default(form_order.UOM_DEFAULT_KEY, frappe.as_json({self.item_uom: stock}))
+			self.assertEqual(form_order.item_info(self.item_uom)["last_uom"], stock)
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_fo_create_alternative_uom(self):
+		"""Satuan alternatif: baris MR benar-benar membawa uom terpilih, faktor
+		baris, stock_qty = qty × faktor; uom tak dikenal/disabled → tolak,
+		zero-write."""
+		self._set_route()
+		prod = _make_user("produom", "Manufacturing User")
+		stock_uom = frappe.db.get_value("Item", self.item_uom, "stock_uom")
+		frappe.set_user(prod)
+		try:
+			res = form_order.create_form_order(
+				items=[{"item_code": self.item_uom, "qty": 2, "uom": self.uom_pack}]
+			)
+			row = frappe.get_value(
+				"Material Request Item",
+				{"parent": res["material_request"]},
+				["qty", "uom", "stock_uom", "conversion_factor", "stock_qty"],
+				as_dict=True,
+			)
+			self.assertEqual(row.uom, self.uom_pack)
+			self.assertEqual(row.stock_uom, stock_uom)
+			self.assertEqual(float(row.conversion_factor), 10.0)
+			self.assertEqual(float(row.qty), 2.0)
+			self.assertEqual(float(row.stock_qty), 20.0)
+			# peta last_uom pembuat terisi satuan terpilih
+			prefs = frappe.parse_json(get_user_default(form_order.UOM_DEFAULT_KEY) or "{}") or {}
+			self.assertEqual(prefs.get(self.item_uom), self.uom_pack)
+
+			before = self._fo_count()
+			for bad in ("SATUAN-PALING-TAK-ADA", self.uom_off):  # disabled = tak valid
+				with self.assertRaises(frappe.ValidationError):
+					form_order.create_form_order(items=[{"item_code": self.item_uom, "qty": 1, "uom": bad}])
+				self.assertEqual(self._fo_count(), before)  # zero-write
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_fo_create_without_uom_regression(self):
+		"""Tanpa `uom` di payload → perilaku lama: stock_uom, faktor 1."""
+		self._set_route()
+		prod = _make_user("prodnouom", "Manufacturing User")
+		stock_uom = frappe.db.get_value("Item", self.item_uom, "stock_uom")
+		frappe.set_user(prod)
+		try:
+			res = form_order.create_form_order(items=[{"item_code": self.item_uom, "qty": 3}])
+			row = frappe.get_value(
+				"Material Request Item",
+				{"parent": res["material_request"]},
+				["qty", "uom", "stock_uom", "conversion_factor", "stock_qty"],
+				as_dict=True,
+			)
+			self.assertEqual(row.uom, stock_uom)
+			self.assertEqual(row.stock_uom, stock_uom)
+			self.assertEqual(float(row.conversion_factor), 1.0)
+			self.assertEqual(float(row.stock_qty), 3.0)
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_fo_last_uom_map_per_user_and_cap(self):
+		"""Peta last_uom per user: A terisi, B tak terpengaruh; cap 200 — entri
+		tertua (urutan sisip pertama) dibuang."""
+		self._set_route()
+		user_a = _make_user("uoma", "Manufacturing User")
+		user_b = _make_user("uomb", "Manufacturing User")
+		key = form_order.UOM_DEFAULT_KEY
+
+		frappe.set_user(user_a)
+		try:
+			form_order.create_form_order(items=[{"item_code": self.item_uom, "qty": 1, "uom": self.uom_pack}])
+			prefs = frappe.parse_json(get_user_default(key) or "{}") or {}
+			self.assertEqual(prefs.get(self.item_uom), self.uom_pack)
+		finally:
+			frappe.set_user("Administrator")
+
+		frappe.set_user(user_b)
+		try:
+			self.assertEqual(frappe.parse_json(get_user_default(key) or "{}") or {}, {})
+		finally:
+			frappe.set_user("Administrator")
+
+		# cap 200: 201 entri → sisipan baru masuk, entri posisi pertama terbuang
+		frappe.set_user(user_a)
+		try:
+			set_user_default(key, frappe.as_json({f"ITEM-{i}": "U" for i in range(200)}))
+			form_order._remember_last_uoms([{"item_code": "ITEM-BARU", "uom": "U"}])
+			prefs = frappe.parse_json(get_user_default(key) or "{}") or {}
+			self.assertEqual(len(prefs), 200)
+			self.assertNotIn("ITEM-0", prefs)
+			self.assertIn("ITEM-BARU", prefs)
+		finally:
+			frappe.set_user("Administrator")
+
+	# -------------------------------------------- FU48a anti-orphan MR guard
+	# Named fo_z48a so these run LAST: the apply() calls in test_fo_apply...
+	# (first test, before any MR exists) commit the class transaction, and
+	# anything created earlier would be persisted with them — a Purchase MR
+	# there leaves a committed Bin.ordered_qty that blocks the warehouse purge.
+
+	def test_fo_z48a_mr_guard_meta_live(self):
+		"""The guard Property Setter is merged into the Desk meta with the exact
+		contract value (idempotency itself asserted in test_fo_apply...)."""
+		df = frappe.get_meta("Material Request Item").get_field("custom_work_order")
+		self.assertIsNotNone(df)
+		self.assertEqual(df.mandatory_depends_on, upgrade.MR_GUARD["value"])
+		self.assertIn("eval:", df.mandatory_depends_on)  # prefix-less never fires (v16 JS eval)
+		self.assertIn("parent.material_request_type", df.mandatory_depends_on)
+		self.assertIn("parent.custom_is_form_order", df.mandatory_depends_on)
+
+		ps = frappe.db.get_value(
+			"Property Setter",
+			{
+				"doc_type": "Material Request Item",
+				"field_name": "custom_work_order",
+				"property": "mandatory_depends_on",
+			},
+			"value",
+		)
+		self.assertEqual(ps, upgrade.MR_GUARD["value"])
+
+	def test_fo_z48a_guard_leaves_form_order_and_other_types_open(self):
+		"""Guard cases (b)/(d): create_form_order still succeeds (parent
+		custom_is_form_order=1 exempts it) and a Material Transfer-sibling MR of
+		another type without custom_work_order submits untouched."""
+		self._set_route()
+		prod = _make_user("prod48a", "Manufacturing User")
+		frappe.set_user(prod)
+		try:
+			# (b) produksi path: FO MR submits with rows that carry NO work order
+			mr_name = form_order.create_form_order(
+				items=[{"item_code": self.item, "qty": 4}]
+			)["material_request"]
+			mr = frappe.get_doc("Material Request", mr_name)
+			self.assertEqual(mr.docstatus, 1)
+			self.assertEqual(mr.material_request_type, "Material Transfer")
+			self.assertEqual(mr.custom_is_form_order, 1)
+			for row in mr.items:
+				self.assertFalse(row.custom_work_order)
+		finally:
+			frappe.set_user("Administrator")
+
+		# (d) other MR type: Purchase without a Work Order is not guard scope
+		purchase = frappe.get_doc(
+			{
+				"doctype": "Material Request",
+				"material_request_type": "Purchase",
+				"company": self.company,
+				"transaction_date": now(),
+				"schedule_date": add_days(now(), 1),
+				"items": [
+					{
+						"item_code": self.item,
+						"qty": 2,
+						"uom": frappe.db.get_value("Item", self.item, "stock_uom"),
+						"warehouse": self.dst_wh,
+						"schedule_date": add_days(now(), 1),
+					}
+				],
+			}
+		)
+		purchase.insert()
+		purchase.submit()
+		self.assertEqual(purchase.docstatus, 1)
+		for row in purchase.items:
+			self.assertFalse(row.custom_work_order)

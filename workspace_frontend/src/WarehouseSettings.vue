@@ -13,8 +13,8 @@ const woFields = [
   { key: 'scrap_warehouse', label: 'Gudang Scrap', desc: 'Scrap Warehouse — lokasi material scrap disimpan.' }
 ]
 const handoverFields = [
-  { key: 'handover_warehouse', label: 'Gudang Tujuan Serah Terima', desc: 'Tujuan pengiriman barang jadi (halaman Serah Terima).' },
-  { key: 'handover_source_warehouse', label: 'Gudang Asal Serah Terima', desc: 'Asal pengiriman — biasanya Cold Storage (halaman Serah Terima).' }
+  { key: 'handover_warehouse', label: 'Gudang Tujuan Stock Entry', desc: 'Tujuan pengiriman barang jadi (halaman Stock Entry).' },
+  { key: 'handover_source_warehouse', label: 'Gudang Asal Stock Entry', desc: 'Asal pengiriman — biasanya Cold Storage (halaman Stock Entry).' }
 ]
 // FO 2026-09-18: rute default Form Order (produksi minta barang dari gudang).
 const formOrderFields = [
@@ -86,7 +86,7 @@ async function save() {
     <div class="panel-head">
       <span class="p-ico"><Warehouse :size="15" :stroke-width="1.9" /></span>
       <h2>Pengaturan Gudang</h2>
-      <span class="lead">Gudang default untuk Work Order dan serah terima di workspace ini.</span>
+      <span class="lead">Gudang default untuk Work Order dan Stock Entry di workspace ini.</span>
     </div>
 
     <div class="panel-body">
@@ -128,8 +128,8 @@ async function save() {
         <div class="settings-block">
           <div class="settings-block-head">
             <div>
-              <h3>Serah Terima</h3>
-              <p class="hint">Asal dan tujuan default pengiriman di papan Serah Terima.</p>
+              <h3>Stock Entry (Kirim ke Gudang)</h3>
+              <p class="hint">Asal dan tujuan default pengiriman di papan Stock Entry.</p>
             </div>
           </div>
           <div class="form-grid cols2" style="margin-top: 12px">

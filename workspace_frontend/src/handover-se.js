@@ -1,18 +1,13 @@
-// FU47: logika klik baris tabel Serah Terima — helper murni (tanpa akses
+// FU47: logika klik baris tabel Stock Entry — helper murni (tanpa akses
 // store/Vue) agar ter-test terpisah. Semantik sengaja IDENTIK dengan klik
-// kartu kanban (clickCard): request tanpa flag → aksi per role (multi-role
-// memilih, gudang-only membatalkan, produksi mengirim); baris Terkirim
-// membuka detail baca-saja (afordansi khusus tabel); flag
-// draft/cancelled/stopped tidak klikabel.
+// kartu kanban (clickCard). FU48 produksi-only: request tanpa flag → kirim
+// (cabang gudang/multi-role dihapus); baris Terkirim membuka detail baca-saja
+// (afordansi khusus tabel); flag draft/cancelled/stopped tidak klikabel.
+// Parameter roles dipertahankan agar signature stabil dan null-safety teruji.
 export function rowClickAction(r, roles) {
   if (!r || !roles) return null
   if (r.lane === 'request' && !r.flag) {
-    const gudang = !!roles.is_gudang
-    const produksi = !!roles.is_produksi
-    if (gudang && produksi) return 'choose'
-    if (gudang) return 'cancel'
-    if (produksi) return 'send'
-    return null
+    return roles.is_produksi ? 'send' : null
   }
   if (r.lane === 'terkirim' && r.stockEntry) return 'done'
   return null

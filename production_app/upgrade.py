@@ -513,7 +513,19 @@ MR_CUSTOM_FIELDS = [
 # lama read/write dipertahankan; before-state ada di form-order-pre.json.
 DOCPERM_MATRIX = {
 	"Material Request": {
-		HANDOVER_ROLE: {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1},
+		# FU48c: delete=1 — temuan walkthrough FU48a: gudang murni (tanpa Stock
+		# User) tak bisa menghapus DRAFT MR buatannya sendiri di Desk; kini
+		# gudang bekerja di Desk native (FU48b), draft salah harus bisa
+		# dibuang sendiri. if_owner=1 (sesuai draft awal brief) TERBUKTI
+		# merusak: flag itu berlaku SATU BARIS penuh — get_list gudang
+		# terfilter owner sendiri (papan requests kosong: test_t23_role_
+		# filtering_per_session_user) dan submit/cancel docless gagal
+		# (test_t22_gudang_runs_mr_lifecycle...) — keduanya regresi suite
+		# handover yang tidak boleh diubah. Baris ini memang sudah membebaskan
+		# submit/cancel/amend tanpa if_owner sejak T22 (lingkup kepercayaan
+		# yang sama), jadi delete ikut pola itu; if_owner eksplisit 0 untuk
+		# mengembalikan drift percobaan pertama.
+		HANDOVER_ROLE: {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1, "if_owner": 0},
 		"Manufacturing User": {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
 	},
 	"Material Request Item": {
@@ -1168,6 +1180,116 @@ def ensure_form_order_permissions():
 	return out
 
 
+# ---------------------------------------------------------------------------
+# FU48a (2026-09-19) — guard anti "MR yatim": MR Material Transfer serah terima
+# kini dibuat MANUAL oleh gudang di Desk ERPNext; yang lupa mengisi
+# custom_work_order di baris item tidak pernah muncul di papan produksi
+# (silent break). Property Setter di bawah menandai kolom itu wajib TEPAT saat
+# baris MR Material Transfer bukan Form Order. Terverifikasi terhadap sumber
+# Frappe terpasang (v16.33.1): mandatory_depends_on HANYA dievaluasi client-side
+# (save.js is_docfield_mandatory + layout.js/grid_row.js, konteks eval
+# {doc: baris, parent: MR} — `parent.` TERSEDIA) dan nilainya WAJIB berprefiks
+# "eval:" (tanpa prefiks string dibaca sebagai nama field baris — guard tidak
+# pernah menyala). Jalur server tidak melewati pemeriksaan Desk dan memang
+# sudah memenuhi guard: create_form_order menyimpan custom_is_form_order=1,
+# create_request mengisi custom_work_order per baris.
+# ---------------------------------------------------------------------------
+
+MR_GUARD_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu48a-mr-guard-pre.json")
+MR_GUARD = {
+	"doc_type": "Material Request Item",
+	"field_name": "custom_work_order",
+	"property": "mandatory_depends_on",
+	"value": 'eval:parent.material_request_type==="Material Transfer" && !parent.custom_is_form_order',
+}
+
+
+def snapshot_mr_guard():
+	"""Pre-change snapshot of every Property Setter already bound to the guard
+	field, so the first apply() is reversible. apply() runs it only when the
+	file is absent (idempotent)."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"property_setters": frappe.get_all(
+			"Property Setter",
+			filters={
+				"doc_type": MR_GUARD["doc_type"],
+				"field_name": MR_GUARD["field_name"],
+			},
+			fields=["name", "doctype_or_field", "property", "property_type", "value"],
+			order_by="property",
+		),
+	}
+	with open(MR_GUARD_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return MR_GUARD_SNAPSHOT
+
+
+def ensure_mr_guard():
+	"""FU48a anti-orphan guard (see block comment above). Idempotent:
+	unchanged on value equality; creates the missing Property Setter or updates
+	a drifted one (snapshot written once before the first change)."""
+	existing = frappe.db.get_value(
+		"Property Setter",
+		{key: MR_GUARD[key] for key in ("doc_type", "field_name", "property")},
+		["name", "value"],
+		as_dict=True,
+	)
+	if existing and (existing.value or "") == MR_GUARD["value"]:
+		return "unchanged"
+	if not os.path.exists(MR_GUARD_SNAPSHOT):
+		snapshot_mr_guard()  # never change guard metadata without a pre-state
+	if existing:
+		frappe.db.set_value("Property Setter", existing.name, "value", MR_GUARD["value"])
+		action = "updated"
+	else:
+		from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+
+		make_property_setter(
+			MR_GUARD["doc_type"],
+			MR_GUARD["field_name"],
+			MR_GUARD["property"],
+			MR_GUARD["value"],
+			"Text",
+		)
+		action = "created"
+	frappe.clear_cache(doctype=MR_GUARD["doc_type"])
+	return action
+
+
+# ---------------------------------------------------------------------------
+# FU48c (2026-09-19) — temuan walkthrough FU48a: gudang murni (tanpa Stock
+# User) tidak bisa menghapus DRAFT Material Request buatannya sendiri di Desk
+# (delete gagal senyap). Flag delete=1 masuk DOCPERM_MATRIX di atas (satu
+# sumber kebenaran, di-upsert ensure_handover_permissions); if_owner=1 dari
+# draft brief TERBUKTI merusak (berlaku satu baris penuh, memfilter scope
+# baca gudang — rincian di komentar matrix); di sini hanya pre-state baris
+# MR × Gudang Barang Jadi, di-snapshot sekali.
+# ---------------------------------------------------------------------------
+
+MR_DELETE_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu48c-mr-delete-pre.json")
+
+MR_PERM_FIELDS = [
+	"role", "permlevel", "read", "write", "create", "submit", "cancel", "amend", "delete", "if_owner",
+]
+
+
+def snapshot_mr_delete_perm():
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {"captured_at": frappe.utils.now()}
+	for kind, doctype in (("docperm", "DocPerm"), ("custom_docperm", "Custom DocPerm")):
+		data[kind] = frappe.get_all(
+			doctype,
+			filters={"parent": "Material Request", "role": HANDOVER_ROLE},
+			fields=MR_PERM_FIELDS,
+			order_by="permlevel",
+		)
+	with open(MR_DELETE_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return MR_DELETE_SNAPSHOT
+
+
 def apply():
 	"""Create/upgrade the workspace fields; migrate leader to Data. Idempotent."""
 	if not os.path.exists(T22_SNAPSHOT):
@@ -1221,9 +1343,12 @@ def apply():
 	result["stock_user_batch_read"] = ensure_stock_user_batch_read()
 	result["warehouse_default_fields"] = ensure_warehouse_default_fields()
 	result["handover_mr_fields"] = ensure_handover_mr_fields()
+	if not os.path.exists(MR_DELETE_SNAPSHOT):
+		snapshot_mr_delete_perm()  # never change the delete perm without a pre-state
 	result["handover_permissions"] = ensure_handover_permissions()
 	result["form_order_fields"] = ensure_form_order_fields()
 	result["form_order_permissions"] = ensure_form_order_permissions()
+	result["mr_guard"] = ensure_mr_guard()
 	frappe.clear_cache(doctype=DOCTYPE)
 	frappe.db.commit()
 	return result

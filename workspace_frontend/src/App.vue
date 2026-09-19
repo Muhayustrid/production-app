@@ -33,11 +33,12 @@ const section = computed(() =>
         : 'workorder'
 )
 
-// peran dari papan server (bukan simulasi) — hanya untuk LANDING + Pengaturan.
-// Item menu Work Orders & Stock Entry SELALU tampil (permintaan user 2026-09-14):
-// visibilitas menu tidak boleh bergantung pada flag asinkron (dulu menyebabkan
-// menu "kedip/hilang" sebelum/saat gagal load board); isi halaman tetap
-// difilter izin di server.
+// peran dari papan server (bukan simulasi) — untuk Pengaturan. FU48: user
+// gudang-only tidak pernah sampai sini lagi (dialihkan ke /app oleh server);
+// item menu Work Orders & Stock Entry SELALU tampil (permintaan user
+// 2026-09-14): visibilitas menu tidak boleh bergantung pada flag asinkron
+// (dulu menyebabkan menu "kedip/hilang" sebelum/saat gagal load board); isi
+// halaman tetap difilter izin di server.
 const isGudangOnly = computed(() =>
   !!handoverBoard.roles.is_gudang && !handoverBoard.roles.is_produksi
 )
@@ -49,13 +50,6 @@ const canSettings = computed(() => !isGudangOnly.value)
 const canFormOrder = computed(() =>
   !!(handoverBoard.roles.is_produksi || handoverBoard.roles.is_manajer_produksi)
 )
-// Gudang murni otomatis mendarat di Stock Entry
-watch(() => handoverState.loaded, (loaded) => {
-  const h = window.location.hash
-  if (loaded && isGudangOnly.value && (!h || h === '#' || h === '#/')) {
-    window.location.hash = '#/handover'
-  }
-})
 
 // drawer ala YouTube: tutup default, burger di top bar membuka/menutup
 const navOpen = ref(false)
@@ -158,7 +152,7 @@ function onNavClick() {
           @click="onNavClick"
         >
           <Package :size="18" :stroke-width="1.9" class="nicon" />
-          <span class="nlabel">Serah Terima</span>
+          <span class="nlabel">Stock Entry</span>
           <span v-if="handoverCount" class="navbadge">{{ handoverCount }}</span>
         </a>
         <a
@@ -216,7 +210,7 @@ function onNavClick() {
           <Package :size="20" :stroke-width="1.9" />
           <span v-if="handoverCount" class="bnav-badge">{{ handoverCount }}</span>
         </span>
-        <span class="bnav-label">Serah Terima</span>
+        <span class="bnav-label">Stock Entry</span>
       </a>
       <a
         v-if="canFormOrder"

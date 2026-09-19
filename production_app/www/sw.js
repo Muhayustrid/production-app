@@ -6,7 +6,7 @@
  * private files and non-GET requests are never intercepted: production and handover
  * actions are server-truth transactions and must always hit the network.
  */
-const VERSION = 'production-workspace-v1';
+const VERSION = 'production-workspace-v2';
 const SHELL_CACHE = VERSION + '-shell';
 const STATIC_CACHE = VERSION + '-static';
 const SHELL_URLS = [

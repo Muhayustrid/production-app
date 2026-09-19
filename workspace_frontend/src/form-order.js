@@ -60,5 +60,31 @@ export function itemRowProblem(info) {
 
 export const ITEM_PROBLEM_TEXT = {
   'bukan-stok': 'Bukan item stok — tidak bisa dipesan lewat Form Order.',
-  batch: 'Item ber-batch — untuk sementara minta lewat Desk ERPNext.'
+  batch: 'Item ber-batch — untuk sementara minta lewat Desk ERPNext.',
+  'uom-invalid': 'Satuan tidak dikenal untuk item ini — pilih dari daftar.'
+}
+
+// FU48c: pilihan satuan valid dari info item — stock_uom + uoms, tanpa duplikat
+export function uomOptions(info) {
+  if (!info) return []
+  const opts = [info.stock_uom]
+  for (const u of info.uoms || []) {
+    if (u.uom && !opts.includes(u.uom)) opts.push(u.uom)
+  }
+  return opts
+}
+
+// pilihan default baris: last_uom user (bila masih anggota opsi) → stock_uom;
+// ganti item, satuan lama basi otomatis jatuh ke default
+export function defaultUom(info) {
+  const opts = uomOptions(info)
+  if (info?.last_uom && opts.includes(info.last_uom)) return info.last_uom
+  return info?.stock_uom || ''
+}
+
+// masalah baris: satuan terpilih bukan anggota opsi item (error baris,
+// submit terkunci — cermin validasi server)
+export function uomProblem(row) {
+  if (!row?.info || !row.uom) return ''
+  return uomOptions(row.info).includes(row.uom) ? '' : 'uom-invalid'
 }

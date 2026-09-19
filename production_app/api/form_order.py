@@ -11,6 +11,7 @@ import math
 
 import frappe
 from frappe import _
+from frappe.defaults import get_user_default, set_user_default
 from frappe.utils import add_days, cint, flt, get_link_to_form, getdate, now
 
 from erpnext.stock.doctype.material_request.material_request import (
@@ -39,6 +40,12 @@ STATUS_DRAF = "draf"
 STATUS_MENUNGGU = "menunggu"
 STATUS_TERKIRIM = "terkirim"
 STATUS_BATAL = "batal"
+
+# FU48c: satuan terakhir dipakai user per item — user default JSON (pola
+# LIST_PREFERENCES_KEY di api/work_order.py), dibaca item_info, ditulis
+# create_form_order setelah MR submit sukses.
+UOM_DEFAULT_KEY = "production_app_form_order_uom"
+LAST_UOM_CAP = 200
 
 
 def _orders():
@@ -150,9 +157,59 @@ def _warehouses_or_throw():
 	return source, target
 
 
+def _valid_uoms(item_code):
+	"""Pilihan satuan item dari child table konversi (UOM Conversion Detail di
+	Item.uoms): faktor finite > 0, hanya UOM enabled (field `enabled` ada di
+	UOM master v16 — terverifikasi di source terpasang). Item tanpa baris →
+	list kosong (artinya hanya stock UOM)."""
+	rows = frappe.get_all(
+		"UOM Conversion Detail",
+		filters={"parent": item_code, "parenttype": "Item"},
+		fields=["uom", "conversion_factor"],
+		order_by="idx asc",
+	)
+	valid = []
+	for row in rows:
+		if not row.uom:
+			continue
+		try:
+			factor = float(row.conversion_factor)
+		except (TypeError, ValueError):
+			continue
+		if math.isfinite(factor) and factor > 0:
+			valid.append({"uom": row.uom, "conversion_factor": factor})
+	names = [v["uom"] for v in valid]
+	if names:
+		enabled = set(frappe.get_all("UOM", filters={"name": ("in", names), "enabled": 1}, pluck="name"))
+		valid = [v for v in valid if v["uom"] in enabled]
+	return valid
+
+
+def _user_uom_map():
+	"""Peta {item_code: satuan terakhir dipakai user} dari user default JSON
+	session user (pola LIST_PREFERENCES_KEY api/work_order.py)."""
+	return frappe.parse_json(get_user_default(UOM_DEFAULT_KEY) or "{}") or {}
+
+
+def _remember_last_uoms(rows):
+	"""FU48c: merge peta {item_code: satuan terpilih} ke user default JSON,
+	di transaksi yang sama SETELAH MR submit sukses. Cap 200 entri — bila
+	lebih, entri tertua (urutan sisip) dibuang."""
+	# ponytail: eviction urutan sisip — item dipakai ulang tidak naik urutan;
+	# ganti ke LRU eksplisit bila urutan pemakaian jadi penting.
+	prefs = _user_uom_map()
+	prefs.update({row["item_code"]: row["uom"] for row in rows})
+	if len(prefs) > LAST_UOM_CAP:
+		prefs = dict(list(prefs.items())[-LAST_UOM_CAP:])
+	set_user_default(UOM_DEFAULT_KEY, frappe.as_json(prefs))
+
+
 def _validated_items(raw):
-	"""[{item_code, qty, stock_uom}] — item stok non-batch, qty finite > 0.
-	Semua validasi selesai SEBELUM tulisan pertama (kontrak zero-write)."""
+	"""[{item_code, qty, stock_uom, uom, factor}] — item stok non-batch, qty
+	finite > 0. `uom` opsional: kosong → stock_uom (faktor 1); selain stock_uom
+	harus anggota konversi item — SELAINNYA frappe.throw (tanpa fallback
+	faktor-1 senyap, pola T39). Semua validasi selesai SEBELUM tulisan
+	pertama (kontrak zero-write)."""
 	rows = frappe.parse_json(raw) if isinstance(raw, str) else raw
 	if not rows:
 		frappe.throw(_("Form Order minimal satu baris item."))
@@ -167,6 +224,7 @@ def _validated_items(raw):
 			qty = 0.0
 		if not math.isfinite(qty) or qty <= 0:
 			frappe.throw(_("Qty untuk {0} harus angka positif.").format(code))
+		uom = str(row.get("uom") or "").strip() if isinstance(row, dict) else ""
 		item = frappe.db.get_value(
 			"Item", code, ["is_stock_item", "has_batch_no", "stock_uom"], as_dict=True
 		)
@@ -178,8 +236,24 @@ def _validated_items(raw):
 			frappe.throw(
 				_("Item {0} ber-batch — untuk sementara minta lewat Desk ERPNext.").format(code)
 			)
+		factor = 1.0
+		if uom and uom != item.stock_uom:
+			factors = {v["uom"]: v["conversion_factor"] for v in _valid_uoms(code)}
+			if uom not in factors:
+				frappe.throw(
+					_("Satuan {0} tidak dikenal untuk item {1} — pilih dari pilihan satuan item.").format(
+						uom, code
+					)
+				)
+			factor = factors[uom]
 		cleaned.append(
-			{"item_code": code, "qty": qty, "stock_uom": item.stock_uom}
+			{
+				"item_code": code,
+				"qty": qty,
+				"stock_uom": item.stock_uom,
+				"uom": uom or item.stock_uom,
+				"factor": factor,
+			}
 		)
 	return cleaned
 
@@ -187,13 +261,24 @@ def _validated_items(raw):
 @frappe.whitelist()
 def item_info(item_code):
 	"""Info tampilan untuk satu baris grid Form Order (nama, satuan, penanda
-	non-stok/ber-batch) — UX dini saja; validasi otoritatif tetap di
+	non-stok/ber-batch) + pilihan satuan (`uoms`) + `last_uom` — satuan
+	terakhir dipakai user utk item ini, DIVALIDASI ULANG terhadap pilihan
+	aktual (basi → null). UX dini saja; validasi otoritatif tetap di
 	create_form_order. Tanpa izin baca Item → None (bukan error)."""
 	if not frappe.has_permission("Item", "read"):
 		return None
-	return frappe.db.get_value(
+	info = frappe.db.get_value(
 		"Item", item_code, ["item_name", "stock_uom", "is_stock_item", "has_batch_no"], as_dict=True
 	)
+	if info:
+		info["uoms"] = _valid_uoms(item_code)
+		last = _user_uom_map().get(item_code)
+		info["last_uom"] = (
+			last
+			if last and (last == info.stock_uom or any(v["uom"] == last for v in info["uoms"]))
+			else None
+		)
+	return info
 
 
 @frappe.whitelist()
@@ -233,9 +318,15 @@ def create_form_order(items, schedule_date=None, note=None):
 			"items": [
 				{
 					"item_code": row["item_code"],
+					# FU48c: qty dihitung dalam satuan terpilih; konversi ditulis
+					# eksplisit (native hanya mengisi field kosong — nilai eksplisit
+					# bertahan lewat validate). stock_qty = qty × conversion_factor
+					# dalam stock_uom; tanpa recompute native.
 					"qty": row["qty"],
-					"uom": row["stock_uom"],
+					"uom": row["uom"],
 					"stock_uom": row["stock_uom"],
+					"conversion_factor": row["factor"],
+					"stock_qty": row["qty"] * row["factor"],
 					"from_warehouse": source,
 					"warehouse": target,
 					"schedule_date": schedule_date,
@@ -246,6 +337,7 @@ def create_form_order(items, schedule_date=None, note=None):
 	)
 	mr.insert()  # session user; native permission + validation
 	mr.submit()
+	_remember_last_uoms(rows)  # transaksi yang sama; MR sudah pasti tersubmit
 	return {"ok": True, "material_request": mr.name, "orders": _orders()}
 
 

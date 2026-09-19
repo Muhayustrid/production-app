@@ -3,40 +3,46 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ClipboardList, Inbox, Plus, Trash2 } from 'lucide-vue-next'
 import LinkInput from './LinkInput.vue'
 import { cancelFormOrder, createFormOrder, foItemInfo, formOrders, formOrderState, loadFormOrders, uiTopLoading } from './store.js'
-import { foItemsText, foStatusMeta, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT, validateFormRows } from './form-order.js'
+import { defaultUom, foItemsText, foStatusMeta, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT, uomOptions, uomProblem, validateFormRows } from './form-order.js'
 
 // FO 2026-09-18: produksi meminta barang dari gudang → MR Material Transfer
 // native (custom_is_form_order). Input berbentuk grid ala child table ERPNext:
 // kolom Item|Qty|Satuan, baris "+ Tambah Baris" di dalam tabel. Server tetap
 // otoritatif; info item (satuan/nama/penanda) hanya memandu sebelum submit.
+// FU48c: Satuan jadi dropdown (stock_uom + konversi item), default = satuan
+// terakhir dipakai user utk item itu (server last_uom, divalidasi ulang).
 const tomorrow = () => {
   const d = new Date()
   d.setDate(d.getDate() + 1)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-const rows = reactive([{ code: '', qty: '', info: null, infoFor: '' }])
+const rows = reactive([{ code: '', qty: '', info: null, infoFor: '', uom: '' }])
 const scheduleDate = ref(tomorrow())
 const note = ref('')
 const error = ref('')
 const savedAt = ref('')
 
 // ambil info item (satuan/nama) saat kode terpilih; ber-batch/non-stok
-// mendapat peringatan dini di barisnya — validasi server tetap otoritatif
+// mendapat peringatan dini di barisnya — validasi server tetap otoritatif.
+// Info termuat → satuan baris di-reset ke default item TERPILIH (last_uom
+// tervalidasi → stock_uom): ganti item tak pernah menyisakan satuan lama.
 watch(rows, async () => {
   for (const row of rows) {
     if (row.code && row.infoFor !== row.code) {
       row.infoFor = row.code
       row.info = await foItemInfo(row.code)
+      row.uom = defaultUom(row.info)
     } else if (!row.code && (row.info || row.infoFor)) {
       row.info = null
       row.infoFor = ''
+      row.uom = ''
     }
   }
 }, { deep: true })
 
 const rowErrors = computed(() => validateFormRows(rows))
-const rowProblems = computed(() => rows.map((r) => itemRowProblem(r.info)))
+const rowProblems = computed(() => rows.map((r) => itemRowProblem(r.info) || uomProblem(r)))
 const rowNotes = computed(() =>
   rows.map((row, i) =>
     [rowProblems.value[i] ? ITEM_PROBLEM_TEXT[rowProblems.value[i]] : '', rowErrors.value[i]]
@@ -52,7 +58,7 @@ const canSubmit = computed(() =>
 )
 
 function addRow() {
-  rows.push({ code: '', qty: '', info: null, infoFor: '' })
+  rows.push({ code: '', qty: '', info: null, infoFor: '', uom: '' })
 }
 function removeRow(i) {
   if (rows.length > 1) rows.splice(i, 1)
@@ -65,7 +71,7 @@ async function submit() {
   try {
     await createFormOrder(rows, scheduleDate.value, note.value)
     // sukses: daftar sudah diganti server truth — reset form
-    rows.splice(0, rows.length, { code: '', qty: '', info: null, infoFor: '' })
+    rows.splice(0, rows.length, { code: '', qty: '', info: null, infoFor: '', uom: '' })
     note.value = ''
     savedAt.value = new Date().toLocaleTimeString('id-ID')
   } catch (e) {
@@ -166,7 +172,17 @@ onMounted(async () => {
                     :aria-invalid="!!rowNotes[i]"
                   />
                 </td>
-                <td class="fo-c-uom fo-uom">{{ row.info?.stock_uom || '—' }}</td>
+                <td class="fo-c-uom fo-uom">
+                  <select
+                    v-if="row.info"
+                    v-model="row.uom"
+                    class="input fo-uom-select"
+                    :aria-label="`Satuan baris ${i + 1}`"
+                  >
+                    <option v-for="u in uomOptions(row.info)" :key="u" :value="u">{{ u }}</option>
+                  </select>
+                  <span v-else aria-hidden="true">—</span>
+                </td>
                 <td class="fo-c-act">
                   <button class="btn fo-del" :disabled="rows.length === 1" :aria-label="`Hapus baris ${i + 1}`" @click="removeRow(i)">
                     <Trash2 :size="14" :stroke-width="2" />
