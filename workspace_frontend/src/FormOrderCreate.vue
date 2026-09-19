@@ -5,10 +5,10 @@
 // ber-nama MR disimpan di formOrderState (dibaca halaman riwayat).
 // Isi form dipindah apa adanya dari FormOrderPage (FU48c: dropdown Satuan,
 // default satuan terakhir user; validasi server tetap otoritatif).
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ArrowLeft, ClipboardList, Plus, Trash2 } from 'lucide-vue-next'
 import LinkInput from './LinkInput.vue'
-import { createFormOrder, foItemInfo, formOrderState } from './store.js'
+import { createFormOrder, foItemInfo, formOrders, formOrderState, loadFormOrders } from './store.js'
 import { defaultUom, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT, uomOptions, uomProblem, validateFormRows } from './form-order.js'
 
 const tomorrow = () => {
@@ -65,6 +65,23 @@ function removeRow(i) {
 function goBack() {
   window.location.hash = '#/form-order'
 }
+
+// FU53: prefill dari MR Form Order TERAKHIR user — item sama (urutan MR),
+// qty sengaja kosong. List server creation-desc + scoped per-user; satuan
+// diisi watch di bawah dari last_uom → stock_uom (mekanisme FU48c) saat
+// info item termuat, jadi tiap baris langsung pakai satuan transaksi
+// terakhir untuk item itu.
+onMounted(async () => {
+  if (!formOrderState.loaded) {
+    try { await loadFormOrders() } catch { /* list gagal → form kosong tetap jalan */ }
+  }
+  const last = formOrders.find((o) => (o.items || []).length)
+  if (last) {
+    rows.splice(0, rows.length, ...last.items.map((i) => (
+      { code: i.code, qty: '', info: null, infoFor: '', uom: '' }
+    )))
+  }
+})
 
 async function submit() {
   if (!canSubmit.value) return

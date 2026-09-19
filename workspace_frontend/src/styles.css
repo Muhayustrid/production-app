@@ -2032,6 +2032,21 @@ textarea.input { height: auto; padding: 8px 10px; }
 .fo-grid { min-width: 640px; }
 .fo-grid td { vertical-align: middle; }
 .fo-grid .input { width: 100%; }
+/* FU53: baris diberi jarak — header mini ala wo-thead, pemisah dashed
+   tipis, sel lebih lapang sehingga input antar baris tidak menempel */
+.fo-grid thead th {
+  padding: 0 12px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line2);
+}
+.fo-grid tbody tr:not(.fo-grid-addrow):not(.fo-grid-err) td {
+  padding: 13px 12px;
+  border-bottom: 1px dashed var(--line2);
+}
 /* FU52: wrapper grid FO tidak memotong dropdown overlay (scroll-x hanya
    perlu di layar sempit) */
 .tbl-wrap.fo-grid-wrap { overflow: visible; }
@@ -2044,8 +2059,8 @@ textarea.input { height: auto; padding: 8px 10px; }
 .fo-uom { color: var(--muted); }
 .fo-del { flex: none; }
 .fo-grid-addrow td {
-  padding: 0;
-  border-top: 1px dashed var(--line2);
+  padding: 10px 12px 0;
+  border-top: 0;
 }
 .fo-add {
   border: 0;
