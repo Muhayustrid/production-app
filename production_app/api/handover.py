@@ -55,6 +55,10 @@ from production_app.api.work_order import _enrich_units
 ROLE_GUDANG = "Gudang Barang Jadi"
 ROLES_GUDANG = ("Gudang Barang Jadi", "Stock User")
 ROLE_PRODUKSI = "Manufacturing User"
+# FO 2026-09-18: flag terpisah untuk Manufacturing Manager — is_produksi TIDAK
+# dilebarkan (isGudangOnly/landing & aksi kirim di UI tidak berubah); menu Form
+# Order tampil untuk produksi ATAU manager, guard server tetang otoritatif.
+ROLE_MANAJER_PRODUKSI = "Manufacturing Manager"
 
 LANE_REQUEST = "request"
 LANE_KIRIM = "terkirim"
@@ -116,11 +120,12 @@ def _pool_warehouse(lot_row):
 
 
 def _roles():
-	roles = frappe.get_roles()
-	return {
-		"is_gudang": any(r in roles for r in ROLES_GUDANG),
-		"is_produksi": ROLE_PRODUKSI in roles,
-	}
+    roles = frappe.get_roles()
+    return {
+        "is_gudang": any(r in roles for r in ROLES_GUDANG),
+        "is_produksi": ROLE_PRODUKSI in roles,
+        "is_manajer_produksi": ROLE_MANAJER_PRODUKSI in roles,
+    }
 
 
 def _batch_quantities(requirements):

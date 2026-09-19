@@ -4,8 +4,10 @@ import WorkOrderList from './WorkOrderList.vue'
 import Workspace from './Workspace.vue'
 import WarehouseSettings from './WarehouseSettings.vue'
 import HandoverBoard from './HandoverBoard.vue'
-import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard } from './store.js'
-import { ClipboardCheck, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
+import FormOrderPage from './FormOrderPage.vue'
+import FormOrderCreate from './FormOrderCreate.vue'
+import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState } from './store.js'
+import { ClipboardCheck, ClipboardList, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
 
 // router hash minimal: '#/' + '#/wo/<id>' (work order), '#/handover' (stock entry)
 const hash = ref(window.location.hash)
@@ -28,25 +30,29 @@ const woId = computed(() =>
 const section = computed(() =>
   hash.value.startsWith('#/settings') ? 'settings'
     : hash.value.startsWith('#/handover') ? 'handover'
-      : 'workorder'
+      : hash.value.startsWith('#/form-order') ? 'form-order'
+        : 'workorder'
 )
+// FU52: halaman buat Form Order terpisah dari riwayat
+const foCreate = computed(() => hash.value === '#/form-order/baru')
 
-// peran dari papan server (bukan simulasi) — hanya untuk LANDING + Pengaturan.
-// Item menu Work Orders & Stock Entry SELALU tampil (permintaan user 2026-09-14):
-// visibilitas menu tidak boleh bergantung pada flag asinkron (dulu menyebabkan
-// menu "kedip/hilang" sebelum/saat gagal load board); isi halaman tetap
-// difilter izin di server.
+// peran dari papan server (bukan simulasi) — untuk Pengaturan. FU48: user
+// gudang-only tidak pernah sampai sini lagi (dialihkan ke /app oleh server);
+// item menu Work Orders & Stock Entry SELALU tampil (permintaan user
+// 2026-09-14): visibilitas menu tidak boleh bergantung pada flag asinkron
+// (dulu menyebabkan menu "kedip/hilang" sebelum/saat gagal load board); isi
+// halaman tetap difilter izin di server.
 const isGudangOnly = computed(() =>
   !!handoverBoard.roles.is_gudang && !handoverBoard.roles.is_produksi
 )
 const canSettings = computed(() => !isGudangOnly.value)
-// Gudang murni otomatis mendarat di Stock Entry
-watch(() => handoverState.loaded, (loaded) => {
-  const h = window.location.hash
-  if (loaded && isGudangOnly.value && (!h || h === '#' || h === '#/')) {
-    window.location.hash = '#/handover'
-  }
-})
+// FO 2026-09-18: menu Form Order hanya produksi/manager. Default TERSEMBUNYI
+// sampai role termuat (flag server `is_manajer_produksi`): pihak yang TIDAK
+// berhak tidak pernah melihatnya; produksi melihatnya setelah papan termuat
+// (pola serupa badge yang juga async). Guard otoritatif tetap di server.
+const canFormOrder = computed(() =>
+  !!(handoverBoard.roles.is_produksi || handoverBoard.roles.is_manajer_produksi)
+)
 
 // drawer ala YouTube: tutup default, burger di top bar membuka/menutup
 const navOpen = ref(false)
@@ -60,7 +66,7 @@ const handoverCount = computed(() =>
 )
 // FU20: spinner global di tepi atas untuk semua pemuatan halaman
 const busyLoading = computed(() =>
-  state.loading || handoverState.loading || uiTopLoading.active
+  state.loading || handoverState.loading || formOrderState.loading || uiTopLoading.active
 )
 onMounted(async () => {
   await loadListPreferences()
@@ -152,6 +158,17 @@ function onNavClick() {
           <span class="nlabel">Stock Entry</span>
           <span v-if="handoverCount" class="navbadge">{{ handoverCount }}</span>
         </a>
+        <a
+          v-if="canFormOrder"
+          href="#/form-order"
+          class="navitem"
+          :class="{ on: section === 'form-order' }"
+          :aria-current="section === 'form-order' ? 'page' : undefined"
+          @click="onNavClick"
+        >
+          <ClipboardList :size="18" :stroke-width="1.9" class="nicon" />
+          <span class="nlabel">Form Order</span>
+        </a>
         <div class="navsection">Sistem</div>
         <a
           v-if="canSettings"
@@ -198,6 +215,19 @@ function onNavClick() {
         </span>
         <span class="bnav-label">Stock Entry</span>
       </a>
+      <a
+        v-if="canFormOrder"
+        href="#/form-order"
+        class="bnav-item"
+        :class="{ on: section === 'form-order' }"
+        :aria-current="section === 'form-order' ? 'page' : undefined"
+        @click="onNavClick"
+      >
+        <span class="bnav-ic">
+          <ClipboardList :size="20" :stroke-width="1.9" />
+        </span>
+        <span class="bnav-label">Form Order</span>
+      </a>
     </nav>
 
     <div class="maincol">
@@ -205,6 +235,8 @@ function onNavClick() {
         <div v-if="state.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ state.error }} — <a href="#" @click.prevent="loadList()">coba lagi</a></div>
         <WarehouseSettings v-else-if="section === 'settings'" />
         <HandoverBoard v-else-if="section === 'handover'" />
+        <FormOrderCreate v-else-if="foCreate" />
+        <FormOrderPage v-else-if="section === 'form-order'" />
         <Workspace v-else-if="woId" :key="woId" :id="woId" />
         <WorkOrderList v-else />
         <footer class="appfoot">

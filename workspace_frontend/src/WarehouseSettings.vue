@@ -13,8 +13,13 @@ const woFields = [
   { key: 'scrap_warehouse', label: 'Gudang Scrap', desc: 'Scrap Warehouse — lokasi material scrap disimpan.' }
 ]
 const handoverFields = [
-  { key: 'handover_warehouse', label: 'Gudang Tujuan Serah Terima', desc: 'Tujuan pengiriman barang jadi (halaman Stock Entry).' },
-  { key: 'handover_source_warehouse', label: 'Gudang Asal Serah Terima', desc: 'Asal pengiriman — biasanya Cold Storage (halaman Stock Entry).' }
+  { key: 'handover_warehouse', label: 'Gudang Tujuan Stock Entry', desc: 'Tujuan pengiriman barang jadi (halaman Stock Entry).' },
+  { key: 'handover_source_warehouse', label: 'Gudang Asal Stock Entry', desc: 'Asal pengiriman — biasanya Cold Storage (halaman Stock Entry).' }
+]
+// FO 2026-09-18: rute default Form Order (produksi minta barang dari gudang).
+const formOrderFields = [
+  { key: 'form_order_source_warehouse', label: 'Gudang Asal Form Order', desc: 'Gudang yang diminta produksi (mis. Gudang Bahan Baku).' },
+  { key: 'form_order_target_warehouse', label: 'Gudang Tujuan Form Order', desc: 'Tujuan pemindahan stok saat gudang memproses (mis. WIP).' }
 ]
 
 const form = reactive({
@@ -23,7 +28,9 @@ const form = reactive({
   fg_warehouse: '',
   scrap_warehouse: '',
   handover_warehouse: '',
-  handover_source_warehouse: ''
+  handover_source_warehouse: '',
+  form_order_source_warehouse: '',
+  form_order_target_warehouse: ''
 })
 const loading = ref(true)
 const saving = ref(false)
@@ -79,7 +86,7 @@ async function save() {
     <div class="panel-head">
       <span class="p-ico"><Warehouse :size="15" :stroke-width="1.9" /></span>
       <h2>Pengaturan Gudang</h2>
-      <span class="lead">Gudang default untuk Work Order dan serah terima di workspace ini.</span>
+      <span class="lead">Gudang default untuk Work Order dan Stock Entry di workspace ini.</span>
     </div>
 
     <div class="panel-body">
@@ -121,12 +128,28 @@ async function save() {
         <div class="settings-block">
           <div class="settings-block-head">
             <div>
-              <h3>Serah Terima (Stock Entry)</h3>
-              <p class="hint">Asal dan tujuan default pengiriman di papan Serah Terima.</p>
+              <h3>Stock Entry (Kirim ke Gudang)</h3>
+              <p class="hint">Asal dan tujuan default pengiriman di papan Stock Entry.</p>
             </div>
           </div>
           <div class="form-grid cols2" style="margin-top: 12px">
             <div v-for="f in handoverFields" :key="f.key" class="field">
+              <label :for="`wh-${f.key}`">{{ f.label }}</label>
+              <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
+              <div class="hint">{{ f.desc }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-head">
+            <div>
+              <h3>Form Order</h3>
+              <p class="hint">Rute default permintaan produksi ke gudang — wajib diisi sebelum Form Order bisa dibuat.</p>
+            </div>
+          </div>
+          <div class="form-grid cols2" style="margin-top: 12px">
+            <div v-for="f in formOrderFields" :key="f.key" class="field">
               <label :for="`wh-${f.key}`">{{ f.label }}</label>
               <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
               <div class="hint">{{ f.desc }}</div>

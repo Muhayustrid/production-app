@@ -237,10 +237,12 @@ class TestHandoverSetup(IntegrationTestCase):
 				all(entry.endswith(": unchanged") for entry in entries),
 				f"{key} not idempotent: {r2[key]}",
 			)
-		# drift fix: Manufacturing User MR = read/write ONLY (no create/submit/cancel)
+		# FO 2026-09-18 (Form Order): Manufacturing User kini menjalankan siklus
+		# MR penuh (create/submit/cancel) — ruling T22 lama (read/write saja)
+		# digantikan; before-state tersimpan di form-order-pre.json.
 		mfg = _mr_flags("Material Request", "Manufacturing User")
 		self.assertEqual(
-			mfg, {"read": 1, "write": 1, "create": 0, "submit": 0, "cancel": 0, "amend": 0}
+			mfg, {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0}
 		)
 		self.assertTrue(frappe.db.exists("Role", HANDOVER_ROLE))
 		# 5th + 6th warehouse default fields exist on Manufacturing Settings
@@ -258,7 +260,8 @@ class TestHandoverSetup(IntegrationTestCase):
 			{"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1},
 		)
 		self.assertEqual(_mr_flags("Material Request Item", HANDOVER_ROLE)["create"], 1)
-		self.assertEqual(_mr_flags("Material Request Item", "Manufacturing User")["create"], 0)
+		# FO: Manufacturing User juga create MR Item (Form Order)
+		self.assertEqual(_mr_flags("Material Request Item", "Manufacturing User")["create"], 1)
 		# T31 (R8): WO AND MR box fields are Float kg (allow_on_submit — written
 		# at Verifikasi Siap Kirim on submitted docs)
 		wo_meta = frappe.get_meta("Work Order")
@@ -367,9 +370,10 @@ class TestHandoverSetup(IntegrationTestCase):
 
 	# ------------------------------------------------ permission: gudang
 
-	def test_t22_gudang_runs_mr_lifecycle_but_cannot_send(self):
+	def test_t22_gudang_runs_mr_lifecycle_and_can_fulfill_se(self):
 		"""Gudang Barang Jadi: MR create/submit/cancel allowed; Stock Entry
-		create denied; Work Order write denied; masters read-only visible."""
+		create allowed (FO fulfill, 2026-09-18 — dulu ditolak); Work Order
+		write denied; masters read-only visible."""
 		gudang = _make_user("gudang", HANDOVER_ROLE)
 
 		self.assertTrue(frappe.has_permission("Material Request", "create", user=gudang))
@@ -392,7 +396,9 @@ class TestHandoverSetup(IntegrationTestCase):
 			self.assertTrue(
 				frappe.has_permission(doctype, "read", user=gudang), f"{doctype} read"
 			)
-		self.assertFalse(frappe.has_permission("Stock Entry", "create", user=gudang))
+		# FO 2026-09-18: gudang memproses Form Order (SE create/submit/cancel)
+		self.assertTrue(frappe.has_permission("Stock Entry", "create", user=gudang))
+		self.assertTrue(frappe.has_permission("Stock Entry", "submit", user=gudang))
 		self.assertFalse(frappe.has_permission("Work Order", "write", user=gudang))
 
 		frappe.set_user(gudang)
@@ -401,27 +407,18 @@ class TestHandoverSetup(IntegrationTestCase):
 			self.assertEqual(mr.docstatus, 1)
 			frappe.get_doc("Material Request", mr.name).cancel()  # no sends yet
 			self.assertEqual(frappe.db.get_value("Material Request", mr.name, "docstatus"), 2)
-			with self.assertRaises(frappe.PermissionError):
-				frappe.get_doc(
-					{
-						"doctype": "Stock Entry",
-						"stock_entry_type": "Material Receipt",
-						"company": self.company,
-						"items": [],
-					}
-				).insert()
 		finally:
 			frappe.set_user("Administrator")
 
 	# ------------------------------------------------- permission: prod user
 
-	def test_t22_prod_user_reads_and_writes_but_cannot_create(self):
-		"""Manufacturing User: MR read/write incl. allow_on_submit fields on a
-		SUBMITTED MR; create/cancel/submit denied; MR Item read-only."""
+	def test_t22_prod_user_runs_mr_lifecycle_fo(self):
+		"""Manufacturing User: MR read/write + create/submit/cancel (FO
+		2026-09-18 — Form Order; dulu read/write saja); MR Item read+create."""
 		prod = _make_user("prod", "Manufacturing User")
-		self.assertFalse(frappe.has_permission("Material Request", "create", user=prod))
-		self.assertFalse(frappe.has_permission("Material Request", "cancel", user=prod))
-		self.assertFalse(frappe.has_permission("Material Request", "submit", user=prod))
+		self.assertTrue(frappe.has_permission("Material Request", "create", user=prod))
+		self.assertTrue(frappe.has_permission("Material Request", "cancel", user=prod))
+		self.assertTrue(frappe.has_permission("Material Request", "submit", user=prod))
 		self.assertTrue(frappe.has_permission("Material Request", "read", user=prod))
 		self.assertTrue(frappe.has_permission("Material Request", "write", user=prod))
 		self.assertTrue(
@@ -429,32 +426,25 @@ class TestHandoverSetup(IntegrationTestCase):
 				"Material Request Item", "read", parent_doctype="Material Request", user=prod
 			)
 		)
-		self.assertFalse(
+		self.assertTrue(
 			frappe.has_permission(
 				"Material Request Item", "create", parent_doctype="Material Request", user=prod
 			)
 		)
 
-		mr = self._make_mr(5)
 		frappe.set_user(prod)
 		try:
+			mr = self._make_mr(5)  # FO: create + submit kini diizinkan
+			self.assertEqual(mr.docstatus, 1)
+			# allow_on_submit write path tetap: db_set pada field yang diizinkan
 			doc = frappe.get_doc("Material Request", mr.name)
-			# write YES on the submitted doc; submit NO (native: a full doc.save()
-			# of a submitted doc needs "submit" — check_docstatus_transition 1->1)
-			self.assertTrue(frappe.has_permission("Material Request", "write", doc=doc))
-			# allow_on_submit write path for a write-only role: db_set on the
-			# allowed fields (T24's postpacking action must gate write itself)
 			doc.db_set("custom_good_qty_postpacking", 3.5)
 			doc.db_set("custom_postpacking_confirmed", 1)
 			doc.reload()
 			self.assertEqual(doc.custom_good_qty_postpacking, 3.5)
 			self.assertEqual(doc.custom_postpacking_confirmed, 1)
-			with self.assertRaises(frappe.PermissionError):
-				doc.save()  # submit-less role cannot run the full save path
-			with self.assertRaises(frappe.PermissionError):
-				self._make_mr(1)
-			with self.assertRaises(frappe.PermissionError):
-				frappe.get_doc("Material Request", mr.name).cancel()
+			doc.cancel()  # cancel perm kini ada (FO); owner-scope diterapkan API
+			self.assertEqual(frappe.db.get_value("Material Request", mr.name, "docstatus"), 2)
 		finally:
 			frappe.set_user("Administrator")
 

@@ -264,6 +264,20 @@ WAREHOUSE_DEFAULT_FIELDS = [
 		"options": "Warehouse",
 		"description": "Production App: gudang asal serah terima (Cold Storage) untuk halaman Stock Entry",
 	},
+	{
+		"fieldname": "custom_default_form_order_source_warehouse",
+		"label": "Default Form Order Source Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang asal Form Order (produksi meminta barang dari gudang ini)",
+	},
+	{
+		"fieldname": "custom_default_form_order_target_warehouse",
+		"label": "Default Form Order Target Warehouse (Production App)",
+		"fieldtype": "Link",
+		"options": "Warehouse",
+		"description": "Production App: gudang tujuan Form Order (mis. WIP produksi)",
+	},
 ]
 
 
@@ -493,18 +507,34 @@ MR_CUSTOM_FIELDS = [
 # Manufacturing User: read/write on MR only (drift fix — the pre-existing
 # custom row granted create/submit; snapshot T22-pre-migration.json holds the
 # before-state for rollback).
+# FO 2026-09-18 (Form Order, TASKS.md section I): alur baru "produksi minta
+# barang dari gudang" menaikkan Manufacturing User ke create/submit/cancel MR
+# (+create MR Item) dan Gudang Barang Jadi ke SE penuh untuk memproses — hak
+# lama read/write dipertahankan; before-state ada di form-order-pre.json.
 DOCPERM_MATRIX = {
 	"Material Request": {
-		HANDOVER_ROLE: {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1},
-		"Manufacturing User": {"read": 1, "write": 1, "create": 0, "submit": 0, "cancel": 0, "amend": 0},
+		# FU48c: delete=1 — temuan walkthrough FU48a: gudang murni (tanpa Stock
+		# User) tak bisa menghapus DRAFT MR buatannya sendiri di Desk; kini
+		# gudang bekerja di Desk native (FU48b), draft salah harus bisa
+		# dibuang sendiri. if_owner=1 (sesuai draft awal brief) TERBUKTI
+		# merusak: flag itu berlaku SATU BARIS penuh — get_list gudang
+		# terfilter owner sendiri (papan requests kosong: test_t23_role_
+		# filtering_per_session_user) dan submit/cancel docless gagal
+		# (test_t22_gudang_runs_mr_lifecycle...) — keduanya regresi suite
+		# handover yang tidak boleh diubah. Baris ini memang sudah membebaskan
+		# submit/cancel/amend tanpa if_owner sejak T22 (lingkup kepercayaan
+		# yang sama), jadi delete ikut pola itu; if_owner eksplisit 0 untuk
+		# mengembalikan drift percobaan pertama.
+		HANDOVER_ROLE: {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1, "if_owner": 0},
+		"Manufacturing User": {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
 	},
 	"Material Request Item": {
 		HANDOVER_ROLE: {"read": 1, "create": 1},
-		"Manufacturing User": {"read": 1},
+		"Manufacturing User": {"read": 1, "create": 1},
 	},
 	"Work Order": {HANDOVER_ROLE: {"read": 1}},
 	"Batch": {HANDOVER_ROLE: {"read": 1}},
-	"Stock Entry": {HANDOVER_ROLE: {"read": 1}},
+	"Stock Entry": {HANDOVER_ROLE: {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0}},
 	"Item": {HANDOVER_ROLE: {"read": 1}},
 	# Ruling 6 check: no standard DocPerm grants Warehouse read to the new role
 	# (role is new — zero rows anywhere); without it the MR warehouse links and
@@ -1066,6 +1096,190 @@ def retire_gudang_confirmed_field():
 	return result
 
 
+# ---------------------------------------------------------------------------
+# FO (2026-09-18) — Form Order: produksi meminta barang dari gudang (TASKS.md
+# section I). Marker Check di Material Request membedakan MR Form Order dari
+# MR Desk/serah terima TANPA menyentuh custom_work_order (binding key papan
+# tiga lajur). Hak role yang berubah dinaikkan di DOCPERM_MATRIX di atas;
+# di sini hanya baris baru: Manufacturing Manager (sebelumnya tanpa perm MR).
+# ---------------------------------------------------------------------------
+
+FO_MR_FIELDS = [
+	{
+		"fieldname": "custom_is_form_order",
+		"label": "Form Order",
+		"fieldtype": "Check",
+		"insert_after": "custom_postpacking_confirmed",
+		"hidden": 1,
+		"read_only": 1,
+	},
+]
+
+FO_DOCPERMS = {
+	"Material Request": {
+		"Manufacturing Manager": {"read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 0},
+	},
+	"Material Request Item": {
+		"Manufacturing Manager": {"read": 1, "create": 1},
+	},
+}
+
+FO_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "form-order-pre.json")
+
+
+def snapshot_form_order():
+	"""Pre-change snapshot of everything the FO upgrade may touch: MR marker +
+	2 field settings Form Order, dan DocPerm (standard + custom) MR/MR Item/SE
+	utk semua role yang dinaikkan (DOCPERM_MATRIX + FO_DOCPERMS). Runs BEFORE
+	any change; apply() calls it only when the file is absent."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"custom_fields": frappe.get_all(
+			"Custom Field",
+			filters={"dt": ("in", ["Material Request", "Manufacturing Settings"])},
+			fields=["dt", "fieldname", "label", "fieldtype", "options", "insert_after"],
+			order_by="dt, idx",
+		),
+	}
+	for dt in ("Material Request", "Material Request Item", "Stock Entry"):
+		for kind, doctype in (("docperm", "DocPerm"), ("custom_docperm", "Custom DocPerm")):
+			data.setdefault(kind, {})[dt] = frappe.get_all(
+				doctype,
+				filters={"parent": dt},
+				fields=["role", "permlevel", "read", "write", "create", "submit", "cancel", "amend"],
+				order_by="role",
+			)
+	with open(FO_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return FO_SNAPSHOT
+
+
+def ensure_form_order_fields():
+	"""Marker Form Order di Material Request. Idempoten (converge 'unchanged')."""
+	out = []
+	for spec in FO_MR_FIELDS:
+		action, _name = _upsert_field("Material Request", spec)
+		out.append(f"Material Request.{spec['fieldname']}: {action}")
+	frappe.clear_cache(doctype="Material Request")
+	return out
+
+
+def ensure_form_order_permissions():
+	"""Custom DocPerms Form Order (Manufacturing Manager). Idempoten; hak role
+	lain dikelola DOCPERM_MATRIX agar satu sumber kebenaran (tanpa flip-flop
+	antar apply)."""
+	out = []
+	touched = set()
+	for doctype, roles in FO_DOCPERMS.items():
+		for role, flags in roles.items():
+			out.append(f"{doctype}/{role}: {_ensure_docperm(doctype, role, flags)}")
+			touched.add(doctype)
+	for doctype in touched:
+		frappe.clear_cache(doctype=doctype)
+	return out
+
+
+# ---------------------------------------------------------------------------
+# FU48a (2026-09-19) — guard anti "MR yatim": MR Material Transfer serah terima
+# kini dibuat MANUAL oleh gudang di Desk ERPNext; yang lupa mengisi
+# custom_work_order di baris item tidak pernah muncul di papan produksi
+# (silent break). Property Setter menandai kolom itu wajib TEPAT saat
+# baris MR Material Transfer bukan Form Order.
+#
+# FU57 (2026-09-20) — GUARD INI DIPENSIUNKAN atas keputusan user: MR native
+# ERPNext TIDAK BOLEH terpengaruh custom app — Material Transfer native
+# non-manufaktur terblokir oleh Work Order wajib (laporan user + screenshot).
+# Arah arsitektur: production_app fokus user manufacturing; alat gudang
+# nanti berdiri sebagai custom app terpisah. Konsekuensi disadari &
+# diterima: MR serah terima manual gudang yang lupa custom_work_order
+# kembali bisa "yatim" (tak muncul di papan — perilaku pra-FU48a); jalur
+# SPA/produksi tidak berubah (create_request mengisi custom_work_order per
+# baris, create_form_order menyimpan custom_is_form_order=1). Rollback
+# guard: snapshot fu48a-mr-guard-pre.json + MR_GUARD di bawah.
+# ---------------------------------------------------------------------------
+
+MR_GUARD_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu48a-mr-guard-pre.json")
+MR_GUARD = {
+	"doc_type": "Material Request Item",
+	"field_name": "custom_work_order",
+	"property": "mandatory_depends_on",
+	"value": 'eval:parent.material_request_type==="Material Transfer" && !parent.custom_is_form_order',
+}
+
+
+def snapshot_mr_guard():
+	"""Pre-change snapshot of every Property Setter already bound to the guard
+	field, so the first apply() is reversible. apply() runs it only when the
+	file is absent (idempotent)."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"property_setters": frappe.get_all(
+			"Property Setter",
+			filters={
+				"doc_type": MR_GUARD["doc_type"],
+				"field_name": MR_GUARD["field_name"],
+			},
+			fields=["name", "doctype_or_field", "property", "property_type", "value"],
+			order_by="property",
+		),
+	}
+	with open(MR_GUARD_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return MR_GUARD_SNAPSHOT
+
+
+def retire_mr_guard():
+	"""FU57 retirement of the FU48a guard (see block comment above): delete every
+	mandatory_depends_on Property Setter bound to Material Request
+	Item.custom_work_order — native Desk MRs must never be forced through a
+	Work Order. Idempotent: "unchanged" when nothing remains; the pre-guard
+	snapshot (fu48a-mr-guard-pre.json) stays the rollback record."""
+	filters = {key: MR_GUARD[key] for key in ("doc_type", "field_name", "property")}
+	names = frappe.get_all("Property Setter", filters=filters, pluck="name")
+	if not names:
+		return "unchanged"
+	if not os.path.exists(MR_GUARD_SNAPSHOT):
+		snapshot_mr_guard()  # never destroy guard metadata without a pre-state
+	for name in names:
+		frappe.delete_doc("Property Setter", name, ignore_permissions=True)
+	frappe.clear_cache(doctype=MR_GUARD["doc_type"])
+	return f"deleted {len(names)}"
+
+
+# ---------------------------------------------------------------------------
+# FU48c (2026-09-19) — temuan walkthrough FU48a: gudang murni (tanpa Stock
+# User) tidak bisa menghapus DRAFT Material Request buatannya sendiri di Desk
+# (delete gagal senyap). Flag delete=1 masuk DOCPERM_MATRIX di atas (satu
+# sumber kebenaran, di-upsert ensure_handover_permissions); if_owner=1 dari
+# draft brief TERBUKTI merusak (berlaku satu baris penuh, memfilter scope
+# baca gudang — rincian di komentar matrix); di sini hanya pre-state baris
+# MR × Gudang Barang Jadi, di-snapshot sekali.
+# ---------------------------------------------------------------------------
+
+MR_DELETE_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu48c-mr-delete-pre.json")
+
+MR_PERM_FIELDS = [
+	"role", "permlevel", "read", "write", "create", "submit", "cancel", "amend", "delete", "if_owner",
+]
+
+
+def snapshot_mr_delete_perm():
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {"captured_at": frappe.utils.now()}
+	for kind, doctype in (("docperm", "DocPerm"), ("custom_docperm", "Custom DocPerm")):
+		data[kind] = frappe.get_all(
+			doctype,
+			filters={"parent": "Material Request", "role": HANDOVER_ROLE},
+			fields=MR_PERM_FIELDS,
+			order_by="permlevel",
+		)
+	with open(MR_DELETE_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return MR_DELETE_SNAPSHOT
+
+
 def apply():
 	"""Create/upgrade the workspace fields; migrate leader to Data. Idempotent."""
 	if not os.path.exists(T22_SNAPSHOT):
@@ -1077,6 +1291,8 @@ def apply():
 		snapshot_fu10()  # fields now exist; preserve any legacy values before conversion
 	if not os.path.exists(QC_PACKING_TEXT_SNAPSHOT):
 		snapshot_qc_packing_text()
+	if not os.path.exists(FO_SNAPSHOT):
+		snapshot_form_order()  # never change Form Order metadata without a pre-state
 
 	# T39: rename the count columns BEFORE the three-lane resync reads them
 	# (create_only above already created the new _qty fields)
@@ -1117,7 +1333,12 @@ def apply():
 	result["stock_user_batch_read"] = ensure_stock_user_batch_read()
 	result["warehouse_default_fields"] = ensure_warehouse_default_fields()
 	result["handover_mr_fields"] = ensure_handover_mr_fields()
+	if not os.path.exists(MR_DELETE_SNAPSHOT):
+		snapshot_mr_delete_perm()  # never change the delete perm without a pre-state
 	result["handover_permissions"] = ensure_handover_permissions()
+	result["form_order_fields"] = ensure_form_order_fields()
+	result["form_order_permissions"] = ensure_form_order_permissions()
+	result["mr_guard"] = retire_mr_guard()
 	frappe.clear_cache(doctype=DOCTYPE)
 	frappe.db.commit()
 	return result

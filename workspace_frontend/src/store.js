@@ -61,8 +61,7 @@ const ACTION_LABELS = {
   jobcard_complete: 'Selesaikan Operasi',
   confirm_prepacking: 'Pre-Packing',
   confirm_postpacking: 'Post-Packing',
-  finish: 'Finish',
-  create_request: 'Request Gudang'
+  finish: 'Finish'
 }
 
 function decodeErrorText(value) {
@@ -462,21 +461,9 @@ async function handoverAction(method, args) {
   }
 }
 
-// T35/T37/T39: form Request Gudang memvalidasi alokasi box (kg + jumlah
-// dalam satuan gudang item); validasi server tetap yang otoritatif — error
-// dilempar apa adanya agar dialog mempertahankan isian pengguna.
-export function createRequest(workOrder, v) {
-  return handoverAction('create_request', {
-    work_order: workOrder,
-    box_1: Number(v.box1),
-    box_1_qty: Number(v.box1Qty),
-    box_2: Number(v.box2),
-    box_2_qty: Number(v.box2Qty)
-  })
-}
-export function cancelRequest(materialRequest) {
-  return handoverAction('cancel_request', { material_request: materialRequest })
-}
+// FU48 produksi-only: create_request/cancel_request/fulfill_form_order tidak
+// lagi dipanggil SPA (UI gudang dihapus); endpoint server tetap hidup dan
+// bisa dipanggil via HTTP langsung bila kelak perlu.
 export function sendHandover(materialRequest) {
   return handoverAction('send_handover', { material_request: materialRequest })
 }
@@ -488,3 +475,76 @@ export function lotForWo(woId) {
 export const lotRemainingPcs = (lot) => lot?.physicalQty
 export const lotReservedPcs = (lot) => lot?.reservedQty ?? 0
 export const lotAvailablePcs = (lot) => lot?.availableQty
+
+// ============================================================================
+// FORM ORDER (FO 2026-09-18, TASKS.md section I) — produksi meminta barang
+// dari gudang via MR native. Status selalu dari server (menunggu/terkirim/
+// batal/draf); setelah tiap aksi, daftar diganti dari respons server.
+// ============================================================================
+
+export const formOrderState = reactive({ loading: false, error: null, loaded: false, pending: null })
+export const formOrders = reactive([])
+
+function mapFormOrder(o) {
+  return {
+    id: o.mr,
+    materialRequest: o.mr,
+    status: o.status,
+    docstatus: o.docstatus,
+    items: (o.items || []).map((i) => ({ code: i.item_code, name: i.item_name, qty: i.qty, uom: i.uom })),
+    note: o.note || null,
+    scheduleDate: o.schedule_date || null,
+    fromWarehouse: o.from_warehouse || null,
+    toWarehouse: o.to_warehouse || null,
+    stockEntry: o.stock_entry || null,
+    sentAt: o.sent_at || null,
+    owner: o.owner,
+    ownerName: o.owner_name || o.owner,
+    createdAt: o.creation
+  }
+}
+
+function applyFormOrders(orders) {
+  formOrders.splice(0, formOrders.length, ...(orders || []).map(mapFormOrder))
+}
+
+export async function loadFormOrders() {
+  formOrderState.loading = true
+  formOrderState.error = null
+  try {
+    applyFormOrders((await call('production_app.api.form_order.form_order_list')).orders)
+    formOrderState.loaded = true
+  } catch (e) {
+    formOrderState.error = e.message
+  } finally {
+    formOrderState.loading = false
+  }
+}
+
+async function formOrderAction(method, args) {
+  if (formOrderState.pending) return null
+  formOrderState.pending = method
+  try {
+    const res = await call(`production_app.api.form_order.${method}`, args)
+    applyFormOrders(res.orders) // server truth menggantikan seluruh daftar
+    return res
+  } finally {
+    formOrderState.pending = null
+  }
+}
+
+// error dilempar apa adanya — form/aksi mempertahankan isian pengguna (FU14)
+export function foItemInfo(itemCode) {
+  return call('production_app.api.form_order.item_info', { item_code: itemCode })
+}
+export function createFormOrder(rows, scheduleDate, note) {
+  return formOrderAction('create_form_order', {
+    // FU48c: satuan terpilih per baris (kosong → server pakai stock_uom)
+    items: rows.map((r) => ({ item_code: r.code, qty: Number(r.qty), uom: r.uom || null })),
+    schedule_date: scheduleDate || null,
+    note: note || null
+  })
+}
+export function cancelFormOrder(materialRequest) {
+  return formOrderAction('cancel_form_order', { material_request: materialRequest })
+}

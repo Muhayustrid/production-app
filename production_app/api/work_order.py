@@ -531,10 +531,17 @@ HANDOVER_WAREHOUSE_FIELD = "custom_default_handover_warehouse"
 # batchless pool source and the from_warehouse written by create_request.
 HANDOVER_SOURCE_FIELD = "custom_default_handover_source_warehouse"
 
+# FO 2026-09-18 (Form Order): rute default produksi minta barang dari gudang.
+# Settings-only seperti dua default serah terima — tidak pernah diisi ke WO.
+FORM_ORDER_SOURCE_FIELD = "custom_default_form_order_source_warehouse"
+FORM_ORDER_TARGET_FIELD = "custom_default_form_order_target_warehouse"
+
 SETTING_WAREHOUSE_FIELDS = {
 	**WAREHOUSE_DEFAULT_FIELDS,
 	"handover_warehouse": HANDOVER_WAREHOUSE_FIELD,
 	"handover_source_warehouse": HANDOVER_SOURCE_FIELD,
+	"form_order_source_warehouse": FORM_ORDER_SOURCE_FIELD,
+	"form_order_target_warehouse": FORM_ORDER_TARGET_FIELD,
 }
 
 
@@ -556,6 +563,7 @@ def warehouse_defaults():
 def warehouse_defaults_save(
 	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None,
 	handover_warehouse=None, handover_source_warehouse=None,
+	form_order_source_warehouse=None, form_order_target_warehouse=None,
 ):
 	"""Save the Production App warehouse defaults (empty string clears)."""
 	frappe.has_permission("Manufacturing Settings", "write", throw=True)
@@ -566,6 +574,8 @@ def warehouse_defaults_save(
 		"scrap_warehouse": scrap_warehouse,
 		"handover_warehouse": handover_warehouse,
 		"handover_source_warehouse": handover_source_warehouse,
+		"form_order_source_warehouse": form_order_source_warehouse,
+		"form_order_target_warehouse": form_order_target_warehouse,
 	}
 	for key, value in payload.items():
 		if value in (None, ""):

@@ -169,7 +169,7 @@ p { margin: 0; }
 }
 
 .maincol { min-width: 0; padding-top: 56px; }
-.content { max-width: 1200px; margin: 0 auto; padding: 24px 32px 48px; }
+.content { max-width: 1400px; margin: 0 auto; padding: 24px 32px 48px; }
 
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brandmark {
@@ -514,8 +514,12 @@ textarea.input { height: auto; padding: 8px 10px; }
   display: grid;
   /* FU22: kolom Gudang sendiri + lebar proporsional — Produk dan Rencana
      berbagi ruang sisa (1.25fr : 1fr), chip/badge kolom tetap muat isinya */
-  grid-template-columns: 132px 76px minmax(170px, 1.25fr) 76px 110px 118px 118px minmax(130px, 1fr) 16px;
-  gap: 12px;
+  /* FU56: sejak main content 1400px (FU55) ruang sisa numpuk di 2 kolom fr
+     (bolong Gudang↔Rencana & Produk↔Jadwal) — kolom tengah diberi porsi fr
+     kecil agar pertumbahan lebar tersebar; gap dilesukan 12→20 supaya
+     ruang sisa terbaca sebagai napas antar kolom, bukan lubang */
+  grid-template-columns: 132px 76px minmax(170px, 1.5fr) minmax(84px, 0.55fr) minmax(110px, 0.5fr) minmax(118px, 0.5fr) minmax(118px, 0.55fr) minmax(130px, 0.8fr) 16px;
+  gap: 20px;
   align-items: center;
   padding: 9px 16px;
 }
@@ -584,6 +588,96 @@ textarea.input { height: auto; padding: 8px 10px; }
 .c-date { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .c-arrow { color: var(--faint); display: grid; place-items: center; transition: color 0.14s ease, transform 0.14s ease; }
 .wo-row:hover .c-arrow { color: var(--brand-light); transform: translateX(1px); }
+
+/* FU49: tabel Stock Entry memakai pola baris Work Order (wo-body/wo-row) —
+   hanya kolom + area mobile milik Stock Entry, selebihnya reuse */
+.wo-body.se-queue .wo-thead,
+.wo-body.se-queue .wo-row {
+  grid-template-columns: minmax(118px, 132px) minmax(130px, 1.2fr) minmax(78px, 1fr) 134px 128px 92px 100px 16px;
+}
+.se-queue .wo-row:not(.rowlink), .fo-history .wo-row { cursor: default; }
+.se-queue .wo-row:not(.rowlink):hover, .fo-history .wo-row:hover {
+  background: transparent;
+  box-shadow: none;
+}
+.se-queue-row .c-doc { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.se-queue-row .c-doc small { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-queue-row .c-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-queue-row .c-wo, .se-queue-row .c-batch, .se-queue-row .c-owner {
+  font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (max-width: 1180px) {
+  .wo-body.se-queue .wo-thead,
+  .wo-body.se-queue .wo-row {
+    grid-template-columns: 116px minmax(122px, 1.2fr) minmax(74px, 1fr) 126px 122px 88px 96px 14px;
+  }
+}
+@media (max-width: 820px) {
+  .wo-body.se-queue .wo-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "doc status"
+      "item item"
+      "qty qty"
+      "wo batch"
+      "owner owner";
+  }
+  .se-queue-row .c-doc { grid-area: doc; }
+  .se-queue-row .c-item { grid-area: item; }
+  .se-queue-row .c-qty { grid-area: qty; }
+  .se-queue-row .c-wo { grid-area: wo; }
+  .se-queue-row .c-batch { grid-area: batch; text-align: right; }
+  .se-queue-row .c-owner { grid-area: owner; }
+  .se-queue-row .c-status { grid-area: status; text-align: right; }
+  .se-queue-row .c-arrow { display: none; }
+}
+
+/* FU51: Form Order on-demand — tombol aksi kanan; riwayat memakai pola
+   wo-body (baris tidak klikabel, aksi Batalkan di kolom akhir) */
+.toolbar.fo-actions { justify-content: flex-end; }
+.fo-saved { margin: 0; text-align: right; color: var(--ok-strong); }
+.wo-body.fo-history .wo-thead,
+.wo-body.fo-history .wo-row {
+  grid-template-columns: minmax(122px, 144px) minmax(170px, 1.4fr) 108px 104px 100px minmax(110px, 1fr) 100px;
+}
+.fo-hist-row .c-doc { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.fo-hist-row .c-doc small { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fo-hist-row .c-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fo-hist-row .c-date,
+.fo-hist-row .c-owner,
+.fo-hist-row .c-note {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fo-hist-row .c-act { display: flex; justify-content: flex-end; }
+@media (max-width: 1180px) {
+  .wo-body.fo-history .wo-thead,
+  .wo-body.fo-history .wo-row {
+    grid-template-columns: 122px minmax(150px, 1.4fr) 102px 96px 94px minmax(100px, 1fr) 94px;
+  }
+}
+@media (max-width: 820px) {
+  .toolbar.fo-actions { flex-wrap: wrap; }
+  .wo-body.fo-history .wo-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "doc status"
+      "item item"
+      "date owner"
+      "note note"
+      "act act";
+  }
+  .fo-hist-row .c-doc { grid-area: doc; }
+  .fo-hist-row .c-item { grid-area: item; }
+  .fo-hist-row .c-date { grid-area: date; }
+  .fo-hist-row .c-owner { grid-area: owner; text-align: right; }
+  .fo-hist-row .c-status { grid-area: status; text-align: right; }
+  .fo-hist-row .c-note { grid-area: note; white-space: normal; }
+  .fo-hist-row .c-act { grid-area: act; justify-content: flex-start; }
+}
 
 .empty-inset {
   display: flex;
@@ -1861,6 +1955,143 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 
 .stage-form { border: 0; margin: 0; padding: 0; min-width: 0; }
-.link-results { display: grid; gap: 4px; margin: 4px 0; max-height: 220px; overflow: auto; }
-.link-results button { text-align: left; display: block; height: auto; white-space: normal; }
+/* FU52: hasil pencarian LinkInput jadi overlay absolut — melayang di atas
+   elemen lain (pola popover filterpanel), tidak lagi menggeser baris tabel
+   di Form Order / bidang di Pengaturan */
+.linkinput { position: relative; }
+.link-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 21;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 6px;
+  max-height: 220px;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.94);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px -12px rgba(36, 48, 58, 0.18);
+}
+.link-results button { text-align: left; display: block; width: 100%; height: auto; white-space: normal; }
 .link-results small { display: block; }
+
+/* ============ FO 2026-09-18: tabel Serah Terima + Form Order ============ */
+
+.vtabs { margin: 2px 0 12px; }
+
+.tbl-panel .panel-body { padding-top: 0; }
+.tbl-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  -webkit-overflow-scrolling: touch;
+}
+.datatable {
+  width: 100%;
+  min-width: 720px; /* mobile: scroll horizontal aman, bukan kolom remuk */
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.datatable th, .datatable td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  white-space: nowrap;
+}
+.datatable td.tbl-note { white-space: normal; max-width: 220px; }
+.datatable tbody tr:last-child td { border-bottom: 0; }
+.datatable tbody tr:hover { background: var(--brand-softer); }
+/* FU47: baris tabel Serah Terima klikabel — semantik sama dengan kartu papan */
+.datatable tbody tr.rowlink { cursor: pointer; }
+/* header sticky semi-transparan — konten lewat di bawahnya (apple-design) */
+.datatable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.86);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  border-bottom: 1px solid var(--line2);
+}
+.tbl-doc { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; display: block; }
+.tbl-sub { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.tbl-empty { text-align: center; color: var(--muted); padding: 26px 12px !important; }
+.tbl-empty svg, .tbl-empty span { display: inline-block; vertical-align: middle; }
+.tbl-empty span { margin-left: 6px; }
+
+/* grid item Form Order — bentuk child table ERPNext: kolom input dalam sel,
+   "+ Tambah Baris" sebagai baris di dalam tabel */
+.fo-grid { min-width: 640px; }
+.fo-grid td { vertical-align: middle; }
+.fo-grid .input { width: 100%; }
+/* FU53b: baris diberi jarak — header mini ala wo-thead, pemisah dashed
+   tipis, sel lebih lapang sehingga input antar baris tidak menempel.
+   position:static — sticky milik .datatable membuat header grid FO yang
+   pendek menempel/menumpuk field Tanggal di rendering subpixel/zoom;
+   margin-top wrap memberi jarak eksplisit field → tabel. */
+.fo-grid-wrap { margin-top: 18px; }
+.fo-grid thead th {
+  position: static;
+  padding: 10px 12px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line2);
+}
+.fo-grid tbody tr:not(.fo-grid-addrow):not(.fo-grid-err) td {
+  padding: 13px 12px;
+  border-bottom: 1px dashed var(--line2);
+}
+/* FU52: wrapper grid FO tidak memotong dropdown overlay (scroll-x hanya
+   perlu di layar sempit) */
+.tbl-wrap.fo-grid-wrap { overflow: visible; }
+@media (max-width: 820px) { .tbl-wrap.fo-grid-wrap { overflow-x: auto; } }
+.fo-c-item { width: 46%; }
+.fo-c-qty { width: 130px; }
+.fo-c-uom { width: 90px; }
+.fo-c-act { width: 44px; }
+.fo-qty-input { min-width: 96px; }
+.fo-uom { color: var(--muted); }
+.fo-del { flex: none; }
+.fo-grid-addrow td {
+  padding: 10px 12px 0;
+  border-top: 0;
+}
+.fo-add {
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font-weight: 500;
+  height: 40px;
+  padding: 0 12px;
+  gap: 5px;
+}
+.fo-add:hover:not(:disabled) { background: var(--brand-softer); }
+.fo-grid-err td { padding-top: 0; padding-bottom: 8px; }
+.fo-grid-err .err { margin: 2px 0 0; }
+
+@media (max-width: 720px) {
+  .vtabs { margin-left: 0; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .datatable thead th {
+    background: #ffffff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
