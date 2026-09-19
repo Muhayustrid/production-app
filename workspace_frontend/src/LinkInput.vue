@@ -43,7 +43,7 @@ function description(row) {
 }
 </script>
 <template>
-  <div>
+  <div class="linkinput">
     <input :id="id" :value="query" @input="edit" @focus="search" class="input" :disabled="disabled"
       autocomplete="off" placeholder="Cari lalu pilih dari daftar" />
     <div v-if="!disabled && results.length" class="link-results" aria-label="Hasil pencarian">

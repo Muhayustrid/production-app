@@ -5,6 +5,7 @@ import Workspace from './Workspace.vue'
 import WarehouseSettings from './WarehouseSettings.vue'
 import HandoverBoard from './HandoverBoard.vue'
 import FormOrderPage from './FormOrderPage.vue'
+import FormOrderCreate from './FormOrderCreate.vue'
 import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState } from './store.js'
 import { ClipboardCheck, ClipboardList, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
 
@@ -32,6 +33,8 @@ const section = computed(() =>
       : hash.value.startsWith('#/form-order') ? 'form-order'
         : 'workorder'
 )
+// FU52: halaman buat Form Order terpisah dari riwayat
+const foCreate = computed(() => hash.value === '#/form-order/baru')
 
 // peran dari papan server (bukan simulasi) — untuk Pengaturan. FU48: user
 // gudang-only tidak pernah sampai sini lagi (dialihkan ke /app oleh server);
@@ -232,6 +235,7 @@ function onNavClick() {
         <div v-if="state.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ state.error }} — <a href="#" @click.prevent="loadList()">coba lagi</a></div>
         <WarehouseSettings v-else-if="section === 'settings'" />
         <HandoverBoard v-else-if="section === 'handover'" />
+        <FormOrderCreate v-else-if="foCreate" />
         <FormOrderPage v-else-if="section === 'form-order'" />
         <Workspace v-else-if="woId" :key="woId" :id="woId" />
         <WorkOrderList v-else />

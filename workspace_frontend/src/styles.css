@@ -1951,8 +1951,30 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 
 .stage-form { border: 0; margin: 0; padding: 0; min-width: 0; }
-.link-results { display: grid; gap: 4px; margin: 4px 0; max-height: 220px; overflow: auto; }
-.link-results button { text-align: left; display: block; height: auto; white-space: normal; }
+/* FU52: hasil pencarian LinkInput jadi overlay absolut — melayang di atas
+   elemen lain (pola popover filterpanel), tidak lagi menggeser baris tabel
+   di Form Order / bidang di Pengaturan */
+.linkinput { position: relative; }
+.link-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 21;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 6px;
+  max-height: 220px;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.94);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px -12px rgba(36, 48, 58, 0.18);
+}
+.link-results button { text-align: left; display: block; width: 100%; height: auto; white-space: normal; }
 .link-results small { display: block; }
 
 /* ============ FO 2026-09-18: tabel Serah Terima + Form Order ============ */
@@ -2010,7 +2032,10 @@ textarea.input { height: auto; padding: 8px 10px; }
 .fo-grid { min-width: 640px; }
 .fo-grid td { vertical-align: middle; }
 .fo-grid .input { width: 100%; }
-.fo-grid .link-results { margin: 4px 0 2px; }
+/* FU52: wrapper grid FO tidak memotong dropdown overlay (scroll-x hanya
+   perlu di layar sempit) */
+.tbl-wrap.fo-grid-wrap { overflow: visible; }
+@media (max-width: 820px) { .tbl-wrap.fo-grid-wrap { overflow-x: auto; } }
 .fo-c-item { width: 46%; }
 .fo-c-qty { width: 130px; }
 .fo-c-uom { width: 90px; }
