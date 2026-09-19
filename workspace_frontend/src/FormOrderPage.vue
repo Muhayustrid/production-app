@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { ClipboardList, Inbox, Plus, Trash2 } from 'lucide-vue-next'
+import { ClipboardList, Inbox, Plus, Trash2, X } from 'lucide-vue-next'
 import LinkInput from './LinkInput.vue'
 import { cancelFormOrder, createFormOrder, foItemInfo, formOrders, formOrderState, loadFormOrders, uiTopLoading } from './store.js'
 import { defaultUom, foItemsText, foStatusMeta, formCanSubmit, itemRowProblem, ITEM_PROBLEM_TEXT, uomOptions, uomProblem, validateFormRows } from './form-order.js'
@@ -21,7 +21,18 @@ const rows = reactive([{ code: '', qty: '', info: null, infoFor: '', uom: '' }])
 const scheduleDate = ref(tomorrow())
 const note = ref('')
 const error = ref('')
-const savedAt = ref('')
+// FU51: form dibuat on-demand — tersembunyi sampai tombol ditekan; pesan
+// sukses (ber-nama MR) tampil di toolbar setelah form menutup sendiri.
+const formOpen = ref(false)
+const savedMsg = ref('')
+
+function toggleForm() {
+  formOpen.value = !formOpen.value
+  if (formOpen.value) {
+    savedMsg.value = ''
+    nextTick(() => document.getElementById('fo-form-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
+}
 
 // ambil info item (satuan/nama) saat kode terpilih; ber-batch/non-stok
 // mendapat peringatan dini di barisnya — validasi server tetap otoritatif.
@@ -67,13 +78,16 @@ function removeRow(i) {
 async function submit() {
   if (!canSubmit.value) return
   error.value = ''
-  savedAt.value = ''
   try {
-    await createFormOrder(rows, scheduleDate.value, note.value)
-    // sukses: daftar sudah diganti server truth — reset form
+    const res = await createFormOrder(rows, scheduleDate.value, note.value)
+    // sukses: daftar sudah diganti server truth — reset form lalu tutup
+    // (FU51) dan umumkan nama MR di samping tombol
     rows.splice(0, rows.length, { code: '', qty: '', info: null, infoFor: '', uom: '' })
     note.value = ''
-    savedAt.value = new Date().toLocaleTimeString('id-ID')
+    formOpen.value = false
+    savedMsg.value = res?.material_request
+      ? `Form Order ${res.material_request} terkirim.`
+      : 'Form Order terkirim.'
   } catch (e) {
     error.value = e.message // seluruh isian dipertahankan (pola FU14)
   }
@@ -124,7 +138,20 @@ onMounted(async () => {
 
   <div v-if="formOrderState.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ formOrderState.error }} — <a href="#" @click.prevent="loadFormOrders()">coba lagi</a></div>
 
-  <section class="panel">
+  <!-- FU51: form on-demand — tombol toggle kanan (pola aksi halaman);
+       pesan sukses ber-nama MR tampil setelah form menutup sendiri -->
+  <div class="toolbar fo-actions">
+    <transition name="pop" mode="out-in">
+      <span v-if="savedMsg && !formOpen" class="why fo-saved" role="status">{{ savedMsg }}</span>
+    </transition>
+    <button class="btn btn-primary" :aria-expanded="formOpen" @click="toggleForm">
+      <Plus v-if="!formOpen" :size="14" :stroke-width="2" />
+      <X v-else :size="14" :stroke-width="2" />
+      {{ formOpen ? 'Tutup Form' : 'Buat Form Order' }}
+    </button>
+  </div>
+
+  <section v-if="formOpen" id="fo-form-panel" class="panel">
     <div class="panel-head">
       <span class="p-ico"><ClipboardList :size="15" :stroke-width="1.9" /></span>
       <h2>Buat Form Order</h2>
@@ -208,55 +235,47 @@ onMounted(async () => {
       <p v-if="formOrderState.pending === 'create_form_order'" role="status">Menyimpan…</p>
       <div class="panel-foot" style="padding-left: 0">
         <button class="btn btn-primary" :disabled="!canSubmit" @click="submit">Kirim Form Order</button>
-        <span v-if="savedAt" class="why">Tersimpan pada {{ savedAt }}.</span>
       </div>
     </div>
   </section>
 
-  <section class="panel">
-    <div class="panel-head">
-      <span class="p-ico"><Inbox :size="15" :stroke-width="1.9" /></span>
-      <h2>Riwayat Form Order</h2>
-      <span class="lead">Status dihitung server dari dokumen.</span>
+  <!-- FU51: riwayat memakai pola kartu Work Order (wo-body/wo-thead/wo-row,
+       reuse kelas FU49) — baris tidak klikabel, aksi Batalkan di kolom akhir -->
+  <div class="wo-body fo-history">
+    <div class="wo-thead" v-if="formOrders.length">
+      <span>Dokumen</span>
+      <span>Item</span>
+      <span>Dibutuhkan</span>
+      <span>Dibuat oleh</span>
+      <span>Status</span>
+      <span>Catatan</span>
+      <span></span>
     </div>
-    <div class="panel-body">
-      <div class="tbl-wrap">
-        <table class="datatable">
-          <thead>
-            <tr>
-              <th>Dokumen</th><th>Item</th><th>Dibutuhkan</th><th>Dibuat oleh</th>
-              <th>Status</th><th>Catatan</th><th v-if="formOrders.some((o) => o.status === 'menunggu')"></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="o in formOrders" :key="o.id">
-              <td>
-                <span class="tbl-doc">{{ o.materialRequest }}</span>
-                <span v-if="o.stockEntry" class="tbl-sub">{{ o.stockEntry }} · {{ o.sentAt }}</span>
-              </td>
-              <td>
-                <span>{{ foItemsText(o) }}</span>
-                <span class="tbl-sub">{{ o.fromWarehouse || '-' }} → {{ o.toWarehouse || '-' }}</span>
-              </td>
-              <td>{{ o.scheduleDate || '-' }}</td>
-              <td>{{ o.ownerName }}</td>
-              <td><span class="chip" :class="foStatusMeta(o.status).cls">{{ foStatusMeta(o.status).label }}</span></td>
-              <td class="tbl-note">{{ o.note || '-' }}</td>
-              <td v-if="formOrders.some((x) => x.status === 'menunggu')">
-                <button v-if="o.status === 'menunggu'" class="btn btn-sm" :disabled="!!formOrderState.pending" @click="openCancel(o.id)">Batalkan</button>
-              </td>
-            </tr>
-            <tr v-if="!formOrders.length">
-              <td :colspan="7" class="tbl-empty">
-                <Inbox :size="16" :stroke-width="1.8" aria-hidden="true" />
-                <span>Belum ada Form Order.</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+
+    <div v-for="o in formOrders" :key="o.id" class="wo-row fo-hist-row">
+      <span class="wo-id c-doc">
+        {{ o.materialRequest }}
+        <small v-if="o.stockEntry" class="mono">{{ o.stockEntry }}</small>
+      </span>
+      <span class="wo-prod c-item">
+        {{ foItemsText(o) }}
+        <small>{{ o.fromWarehouse || '-' }} → {{ o.toWarehouse || '-' }}</small>
+      </span>
+      <span class="c-date">{{ o.scheduleDate || '-' }}</span>
+      <span class="c-owner">{{ o.ownerName }}</span>
+      <span class="c-status"><span class="chip" :class="foStatusMeta(o.status).cls">{{ foStatusMeta(o.status).label }}</span></span>
+      <span class="c-note">{{ o.note || '-' }}</span>
+      <span class="c-act">
+        <button v-if="o.status === 'menunggu'" class="btn btn-sm" :disabled="!!formOrderState.pending" @click="openCancel(o.id)">Batalkan</button>
+      </span>
     </div>
-  </section>
+
+    <div v-if="!formOrders.length" class="empty-inset">
+      <span class="eico"><Inbox :size="19" :stroke-width="1.8" /></span>
+      <p class="etitle">Belum ada Form Order</p>
+      <p class="ehint">Klik "Buat Form Order" untuk meminta barang dari gudang.</p>
+    </div>
+  </div>
 
   <dialog ref="dlgCancel" class="dialog" @click.self="closeCancel">
     <template v-if="cancelTarget">

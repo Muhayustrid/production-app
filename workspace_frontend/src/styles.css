@@ -591,7 +591,11 @@ textarea.input { height: auto; padding: 8px 10px; }
 .wo-body.se-queue .wo-row {
   grid-template-columns: minmax(118px, 132px) minmax(130px, 1.2fr) minmax(78px, 1fr) 134px 128px 92px 100px 16px;
 }
-.se-queue .wo-row:not(.rowlink) { cursor: default; }
+.se-queue .wo-row:not(.rowlink), .fo-history .wo-row { cursor: default; }
+.se-queue .wo-row:not(.rowlink):hover, .fo-history .wo-row:hover {
+  background: transparent;
+  box-shadow: none;
+}
 .se-queue-row .c-doc { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
 .se-queue-row .c-doc small { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .se-queue-row .c-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -622,6 +626,53 @@ textarea.input { height: auto; padding: 8px 10px; }
   .se-queue-row .c-owner { grid-area: owner; }
   .se-queue-row .c-status { grid-area: status; text-align: right; }
   .se-queue-row .c-arrow { display: none; }
+}
+
+/* FU51: Form Order on-demand — tombol aksi kanan; riwayat memakai pola
+   wo-body (baris tidak klikabel, aksi Batalkan di kolom akhir) */
+.toolbar.fo-actions { justify-content: flex-end; }
+.fo-saved { margin: 0; text-align: right; color: var(--ok-strong); }
+.wo-body.fo-history .wo-thead,
+.wo-body.fo-history .wo-row {
+  grid-template-columns: minmax(122px, 144px) minmax(170px, 1.4fr) 108px 104px 100px minmax(110px, 1fr) 100px;
+}
+.fo-hist-row .c-doc { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.fo-hist-row .c-doc small { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fo-hist-row .c-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fo-hist-row .c-date,
+.fo-hist-row .c-owner,
+.fo-hist-row .c-note {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fo-hist-row .c-act { display: flex; justify-content: flex-end; }
+@media (max-width: 1180px) {
+  .wo-body.fo-history .wo-thead,
+  .wo-body.fo-history .wo-row {
+    grid-template-columns: 122px minmax(150px, 1.4fr) 102px 96px 94px minmax(100px, 1fr) 94px;
+  }
+}
+@media (max-width: 820px) {
+  .toolbar.fo-actions { flex-wrap: wrap; }
+  .wo-body.fo-history .wo-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "doc status"
+      "item item"
+      "date owner"
+      "note note"
+      "act act";
+  }
+  .fo-hist-row .c-doc { grid-area: doc; }
+  .fo-hist-row .c-item { grid-area: item; }
+  .fo-hist-row .c-date { grid-area: date; }
+  .fo-hist-row .c-owner { grid-area: owner; text-align: right; }
+  .fo-hist-row .c-status { grid-area: status; text-align: right; }
+  .fo-hist-row .c-note { grid-area: note; white-space: normal; }
+  .fo-hist-row .c-act { grid-area: act; justify-content: flex-start; }
 }
 
 .empty-inset {
