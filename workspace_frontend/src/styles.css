@@ -514,8 +514,12 @@ textarea.input { height: auto; padding: 8px 10px; }
   display: grid;
   /* FU22: kolom Gudang sendiri + lebar proporsional — Produk dan Rencana
      berbagi ruang sisa (1.25fr : 1fr), chip/badge kolom tetap muat isinya */
-  grid-template-columns: 132px 76px minmax(170px, 1.25fr) 76px 110px 118px 118px minmax(130px, 1fr) 16px;
-  gap: 12px;
+  /* FU56: sejak main content 1400px (FU55) ruang sisa numpuk di 2 kolom fr
+     (bolong Gudang↔Rencana & Produk↔Jadwal) — kolom tengah diberi porsi fr
+     kecil agar pertumbahan lebar tersebar; gap dilesukan 12→20 supaya
+     ruang sisa terbaca sebagai napas antar kolom, bukan lubang */
+  grid-template-columns: 132px 76px minmax(170px, 1.5fr) minmax(84px, 0.55fr) minmax(110px, 0.5fr) minmax(118px, 0.5fr) minmax(118px, 0.55fr) minmax(130px, 0.8fr) 16px;
+  gap: 20px;
   align-items: center;
   padding: 9px 16px;
 }
