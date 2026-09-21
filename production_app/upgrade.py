@@ -278,6 +278,16 @@ WAREHOUSE_DEFAULT_FIELDS = [
 		"options": "Warehouse",
 		"description": "Production App: gudang tujuan Form Order (mis. WIP produksi)",
 	},
+	# FU58 (2026-09-20): ke-8 default di atas hanya berlaku bagi company ini
+	# (kosong = semua company, perilaku lama). Dibaca oleh _company_allowed
+	# di api/work_order.py + konsumen handover/form order.
+	{
+		"fieldname": "custom_default_company",
+		"label": "Default Company (Production App)",
+		"fieldtype": "Link",
+		"options": "Company",
+		"description": "Production App: default gudang hanya berlaku untuk company ini; kosong = semua company",
+	},
 ]
 
 
@@ -324,6 +334,34 @@ def ensure_warehouse_default_fields():
 	if out:
 		frappe.clear_cache(doctype="Manufacturing Settings")
 	return out
+
+
+FU58_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu58-warehouse-company-pre.json")
+
+
+def snapshot_fu58():
+	"""FU58 pre-change snapshot: definisi Custom Field Manufacturing Settings +
+	nilai tersimpan singleton ke-8 field gudang (field company mulai kosong =
+	semua company = perilaku lama, tidak ada migrasi data). apply() hanya
+	menjalankan ini bila file belum ada (idempoten)."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"custom_fields": frappe.get_all(
+			"Custom Field",
+			filters={"dt": "Manufacturing Settings"},
+			fields=["fieldname", "label", "fieldtype", "options", "insert_after"],
+			order_by="idx",
+		),
+		"singleton_values": {
+			spec["fieldname"]: frappe.db.get_single_value("Manufacturing Settings", spec["fieldname"])
+			for spec in WAREHOUSE_DEFAULT_FIELDS
+			if spec["fieldname"] != "custom_default_company"
+		},
+	}
+	with open(FU58_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return FU58_SNAPSHOT
 
 
 def ensure_batch_permission():
@@ -1293,6 +1331,8 @@ def apply():
 		snapshot_qc_packing_text()
 	if not os.path.exists(FO_SNAPSHOT):
 		snapshot_form_order()  # never change Form Order metadata without a pre-state
+	if not os.path.exists(FU58_SNAPSHOT):
+		snapshot_fu58()  # never add the company gate without a pre-state
 
 	# T39: rename the count columns BEFORE the three-lane resync reads them
 	# (create_only above already created the new _qty fields)

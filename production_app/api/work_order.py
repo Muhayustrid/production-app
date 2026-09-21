@@ -545,11 +545,34 @@ SETTING_WAREHOUSE_FIELDS = {
 }
 
 
+# FU58 (2026-09-20): ke-8 default hanya berlaku bagi company terpilih
+# (kosong = semua company = perilaku lama).
+DEFAULT_COMPANY_FIELD = "custom_default_company"
+
+# Status yang TIDAK diperlakukan "berjalan" untuk propagasi/remediasi FU58 —
+# konsisten dengan semantik native get_status dan filter stage aplikasi
+# (docstatus < 2 sudah meng-exclude Cancelled; "Cancelled" dipertahankan di
+# sini sebagai pertahanan ganda terhadap data legacy).
+WO_TERMINAL_STATUSES = ("Completed", "Stopped", "Closed", "Cancelled")
+
+
+def _default_company():
+	return frappe.db.get_single_value("Manufacturing Settings", DEFAULT_COMPANY_FIELD) or None
+
+
+def _company_allowed(setting_company, doc_company):
+	"""FU58 §6.2: helper gating company tunggal — default settings hanya berlaku
+	bila kosong (semua company) atau cocok dengan company dokumen konsumen."""
+	return not setting_company or setting_company == doc_company
+
+
 def _warehouse_defaults():
-	return {
+	values = {
 		key: (frappe.db.get_single_value("Manufacturing Settings", fieldname) or None)
 		for key, fieldname in SETTING_WAREHOUSE_FIELDS.items()
 	}
+	values["company"] = _default_company()
+	return values
 
 
 @frappe.whitelist()
@@ -564,8 +587,14 @@ def warehouse_defaults_save(
 	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None,
 	handover_warehouse=None, handover_source_warehouse=None,
 	form_order_source_warehouse=None, form_order_target_warehouse=None,
+	company=None,
 ):
-	"""Save the Production App warehouse defaults (empty string clears)."""
+	"""Save the Production App warehouse defaults (empty string clears).
+
+	FU58 LIVE: perubahan lama->baru (keduanya non-kosong) pada 4 field Work
+	Order dipropagasikan ke WO berjalan yang kolomnya masih bernilai lama,
+	satu transaksi dengan simpanan pengaturan. Return TETAP flat 9 kunci
+	(backward-compatible) plus kunci baru propagated/skipped/failed."""
 	frappe.has_permission("Manufacturing Settings", "write", throw=True)
 	payload = {
 		"source_warehouse": source_warehouse,
@@ -582,18 +611,277 @@ def warehouse_defaults_save(
 			payload[key] = None
 		elif not frappe.db.exists("Warehouse", value):
 			frappe.throw(_("Gudang tidak ditemukan: {0}").format(value))
+	company = company or None
+	if company and not frappe.db.exists("Company", company):
+		frappe.throw(_("Company tidak ditemukan: {0}").format(company))
+	# FU58 §6.3: mirror validate_warehouse_company native — propagasi submitted
+	# lewat db_set melewati validasi ORM, jadi gudang lintas company ditolak di
+	# pintu simpan. Gudang tanpa company (shared) tetap boleh.
+	if company:
+		for value in payload.values():
+			if not value:
+				continue
+			wh_company = frappe.db.get_value("Warehouse", value, "company")
+			if wh_company and wh_company != company:
+				frappe.throw(
+					_("Gudang {0} milik company {1}, bukan {2}").format(value, wh_company, company)
+				)
+	# nilai lama DIBACA sebelum singleton disimpan (dasar diff propagasi)
+	old = _warehouse_defaults()
 	settings = frappe.get_doc("Manufacturing Settings")
 	for key, value in payload.items():
 		settings.set(SETTING_WAREHOUSE_FIELDS[key], value)
+	settings.set(DEFAULT_COMPANY_FIELD, company)
 	settings.save()
-	return _warehouse_defaults()
+	# FU58 §4.1: hanya 4 field yang hidup di Work Order; field settings-only
+	# (handover/form order) tidak dipropagasikan — konsumennya membaca nilai
+	# saat aksi terjadi.
+	changed = {
+		key: (old[key], payload[key])
+		for key in WAREHOUSE_DEFAULT_FIELDS
+		if old[key] and payload[key] and old[key] != payload[key]
+	}
+	values = _warehouse_defaults()
+	values.update(_propagate_warehouse_changes(changed))
+	return values
+
+
+def _propagate_warehouse_changes(changed):
+	"""FU58 §4.2: scan kandidat db-level (frappe.db.get_all — bukan frappe.get_all
+	yang terfilter permission sesi) per field yang berubah, lalu tulis per WO
+	melewat _apply_warehouse_changes. Return kontrak §8."""
+	propagated, skipped, failed = [], [], []
+	setting_company = _default_company()
+	per_wo = {}
+	for field, (old_value, new_value) in changed.items():
+		filters = [
+			["docstatus", "<", 2],
+			["status", "not in", list(WO_TERMINAL_STATUSES)],
+			[field, "=", old_value],
+		]
+		if setting_company:
+			filters.append(["company", "=", setting_company])
+		for name in frappe.db.get_all(DOCTYPE, filters=filters, pluck="name"):
+			per_wo.setdefault(name, {})[field] = (old_value, new_value)
+	for name in sorted(per_wo):
+		_apply_warehouse_changes_collect(
+			name, per_wo[name], setting_company, propagated, skipped, failed
+		)
+	return {"propagated": propagated, "skipped": skipped, "failed": failed}
+
+
+def _wo_error_message(error):
+	"""Pesan Indonesia untuk daftar failed FU58 (§4.5)."""
+	if isinstance(error, frappe.PermissionError):
+		return "Tidak ada izin mengubah Work Order"
+	return str(error)
+
+
+def _apply_warehouse_changes_collect(name, changes, setting_company, written, skipped, failed):
+	"""Jalankan _apply_warehouse_changes untuk satu WO dan kumpulkan hasilnya;
+	kegagalan per-WO tidak membatalkan pemanggilnya (settings tetap tersimpan)."""
+	try:
+		outcome = _apply_warehouse_changes(name, changes, setting_company)
+	except Exception as e:
+		frappe.log_error(f"FU58 warehouse propagation failed for {name}: {e!r}")
+		failed.append({"name": name, "error": _wo_error_message(e)})
+		return
+	if outcome["written"]:
+		written.append(outcome["written"])
+	skipped.extend({"name": name, "reason": reason} for reason in outcome["skipped"])
+	failed.extend({"name": name, "error": error} for error in outcome["failed"])
+
+
+def _apply_warehouse_changes(wo_name, changes, setting_company=None):
+	"""FU58 §4.3: terapkan perubahan gudang ke SATU Work Order berjalan.
+	Urutan sama untuk kedua jalur (draft dan submitted): lock baris ->
+	get_doc fresh -> re-verifikasi kandidat -> validasi warehouse-company ->
+	tulis. Dipakai propagasi (warehouse_defaults_save) dan remediasi
+	(sync_warehouse_defaults_to_running_work_orders).
+
+	`changes = {field: (old, new)}`; `setting_company` default dibaca dari
+	setting (bisa dipass eksplisit oleh pemanggil/uji). Return
+	{"written": entry|None, "skipped": [alasan], "failed": [alasan]} — tidak
+	pernah raise untuk kasus bisnis agar WO lain tetap diproses."""
+	if setting_company is None:
+		setting_company = _default_company()
+	# 1. lock baris dulu (pola prepare/transfer/finish) — menutup lost-update
+	#    terhadap tulisan operator yang bersamaan
+	frappe.db.get_value(DOCTYPE, wo_name, "name", for_update=True)
+	# 2. selalu fresh dari DB, tidak pernah salinan basi
+	wo = frappe.get_doc(DOCTYPE, wo_name)
+	# 3. re-verifikasi kandidat (menutup TOCTOU antara scan dan tulisan):
+	#    gagal salah satu -> skipped, TANPA tulisan apa pun
+	if wo.docstatus >= 2 or wo.status in WO_TERMINAL_STATUSES:
+		return {
+			"written": None,
+			"skipped": [f"sudah tidak berjalan (docstatus {wo.docstatus}, status {wo.status})"],
+			"failed": [],
+		}
+	if not _company_allowed(setting_company, wo.company):
+		return {
+			"written": None,
+			"skipped": [f"company {wo.company} di luar pengaturan company {setting_company}"],
+			"failed": [],
+		}
+	for field, (old_value, _new_value) in changes.items():
+		current = getattr(wo, field, None) or None
+		if current != (old_value or None):
+			return {
+				"written": None,
+				"skipped": [
+					f"kolom {field} sudah bernilai {current or 'kosong'}, "
+					f"bukan lagi {old_value}"
+				],
+				"failed": [],
+			}
+	applicable = {}
+	field_skips, field_failures = [], []
+	for field, (old_value, new_value) in changes.items():
+		# 5. guard skip_transfer: validate native selalu me-reset wip_warehouse
+		#    ke None pada WO skip_transfer — nilai yang ditulis hanya jadi data
+		#    basi yang menyesatkan. Field ini dilewati; field lain tetap jalan.
+		if field == "wip_warehouse" and wo.skip_transfer:
+			field_skips.append("wip_warehouse dilewati (Work Order skip_transfer)")
+			continue
+		# 4. validasi prapath (pengganti validate_warehouse_belongs_to_company
+		#    yang dilompati db_set): gudang milik company lain -> field itu
+		#    dilewati untuk WO ini dan dicatat di failed
+		wh_company = frappe.db.get_value("Warehouse", new_value, "company") if new_value else None
+		if wh_company and wh_company != wo.company:
+			field_failures.append(
+				f"gudang {new_value} milik company {wh_company}, bukan {wo.company}"
+			)
+			continue
+		applicable[field] = (old_value, new_value)
+	if not applicable:
+		return {"written": None, "skipped": field_skips, "failed": field_failures}
+	rows_updated = 0
+	if wo.docstatus == 0:
+		# 6. draft via save() — validate native tetap jalan (set_warehouses
+		#    mengisi baris kosong dari header yang baru)
+		for field, (_old_value, new_value) in applicable.items():
+			wo.set(field, new_value)
+		if "source_warehouse" in applicable:
+			old_value = applicable["source_warehouse"][0]
+			for row in wo.required_items:
+				if (row.source_warehouse or None) == (old_value or None):
+					row.source_warehouse = applicable["source_warehouse"][1]
+					rows_updated += 1
+		wo.save()
+	else:
+		# 7. submitted via db_set (pola native transferred_qty per baris);
+		#    db_set meng-update modified dan membersihkan cache dokumen
+		for field, (_old_value, new_value) in applicable.items():
+			if field == "source_warehouse":
+				continue
+			wo.db_set(field, new_value)
+		if "source_warehouse" in applicable:
+			old_value, new_value = applicable["source_warehouse"]
+			wo.db_set("source_warehouse", new_value)
+			for row in wo.required_items:
+				if (row.source_warehouse or None) == (old_value or None):
+					row.db_set("source_warehouse", new_value)
+					rows_updated += 1
+	entry = {
+		"name": wo.name,
+		"docstatus": wo.docstatus,
+		"status": wo.status,
+		"company": wo.company,
+		"changes": {
+			field: [old_value, new_value]
+			for field, (old_value, new_value) in applicable.items()
+		},
+		"rows_updated": rows_updated,
+	}
+	return {"written": entry, "skipped": field_skips, "failed": field_failures}
+
+
+@frappe.whitelist()
+def sync_warehouse_defaults_to_running_work_orders(dry_run=0):
+	"""FU58 §5: remediasi sekali-pakai — terapkan default SEKARANG (4 field WO,
+	company-gated) ke semua WO berjalan yang kolomnya berbeda dengan default
+	(termasuk kolom kosong -> diisi default). Default yang kosong TIDAK pernah
+	menghapus nilai WO (§4.4: baris tanpa gudang merusak transfer berikutnya).
+	dry_run=1 hanya mengembalikan rencana tanpa menulis apa pun; eksekusi kedua
+	mengembalikan daftar kosong (idempoten). Gate = write Manufacturing
+	Settings — satu sumber gate dengan simpan pengaturan."""
+	if not frappe.has_permission("Manufacturing Settings", "write"):
+		frappe.throw(
+			_(
+				"Hanya pemegang izin tulis Manufacturing Settings "
+				"(Manufacturing Manager) yang dapat menjalankan sinkronisasi gudang Work Order."
+			),
+			frappe.PermissionError,
+		)
+	dry = bool(cint(dry_run))
+	setting_company = _default_company()
+	defaults = {
+		key: (frappe.db.get_single_value("Manufacturing Settings", fieldname) or None)
+		for key, fieldname in WAREHOUSE_DEFAULT_FIELDS.items()
+	}
+	filters = [
+		["docstatus", "<", 2],
+		["status", "not in", list(WO_TERMINAL_STATUSES)],
+	]
+	if setting_company:
+		filters.append(["company", "=", setting_company])
+	wos = frappe.db.get_all(
+		DOCTYPE,
+		filters=filters,
+		fields=["name", "docstatus", "status", "company", *WAREHOUSE_DEFAULT_FIELDS],
+		order_by="name",
+	)
+	updated, skipped, failed = [], [], []
+	for row in wos:
+		changes = {
+			field: (getattr(row, field) or None, defaults[field])
+			for field in WAREHOUSE_DEFAULT_FIELDS
+			if defaults[field] and (getattr(row, field) or None) != defaults[field]
+		}
+		if not changes:
+			continue
+		if dry:
+			# Preview jujur terhadap eksekusi: baris HANYA ditulis lewat jalur
+			# source_warehouse (§4.3 langkah 6-7) — bila field itu tidak
+			# termasuk changes, eksekusi tidak menulis baris apa pun, jadi
+			# preview juga melaporkan 0 (review FU58: jangan menghitung baris
+			# bersource kosong yang memang tidak akan disentuh).
+			rows_updated = 0
+			if "source_warehouse" in changes:
+				old_source = changes["source_warehouse"][0]
+				row_filters = {"parent": row.name}
+				row_filters["source_warehouse"] = old_source if old_source else ("is", "not set")
+				rows_updated = frappe.db.count("Work Order Item", row_filters)
+			updated.append(
+				{
+					"name": row.name,
+					"docstatus": row.docstatus,
+					"status": row.status,
+					"company": row.company,
+					"changes": {
+						field: [old_value, new_value]
+						for field, (old_value, new_value) in changes.items()
+					},
+					"rows_updated": rows_updated,
+				}
+			)
+			continue
+		_apply_warehouse_changes_collect(
+			row.name, changes, setting_company, updated, skipped, failed
+		)
+	return {"updated": updated, "skipped": skipped, "failed": failed, "dry_run": dry}
 
 
 def _fill_warehouse_defaults(wo):
 	"""Fill EMPTY Work Order warehouses: Production App defaults
 	(Manufacturing Settings) first, then the production item's defaults.
-	Never overrides a value already on the document."""
+	Never overrides a value already on the document.
+	FU58: default settings hanya dipakai bila company WO cocok
+	custom_default_company; default Item tetap (scoped per item)."""
 	settings = _warehouse_defaults()
+	if not _company_allowed(settings.get("company"), wo.company):
+		settings = {}
 	item = frappe.db.get_value(
 		"Item",
 		wo.production_item,

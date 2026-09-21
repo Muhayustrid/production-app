@@ -31,6 +31,7 @@ from production_app.api.handover import (
 from production_app.api.work_order import (
 	FORM_ORDER_SOURCE_FIELD,
 	FORM_ORDER_TARGET_FIELD,
+	_default_company,
 )
 
 DOCTYPE = "Material Request"
@@ -139,9 +140,20 @@ def form_order_list():
 
 def _warehouses_or_throw():
 	"""Rute default dari Pengaturan — kosong = error jelas dengan arah ke
-	menu Pengaturan; Form Order tidak pernah menebak gudang."""
+	menu Pengaturan; Form Order tidak pernah menebak gudang.
+	FU58: bila Pengaturan menetapkan company, default hanya dipakai bila
+	company gudang asal cocok (company MR Form Order DIDERIVASI dari gudang
+	asal). Tidak cocok -> dianggap "belum diatur" -> error yang sama.
+	Gudang asal tanpa company (shared) tetap lolos — mirror
+	validate_warehouse_company native yang hanya menolak gudang ber-company
+	berbeda."""
 	source = frappe.db.get_single_value("Manufacturing Settings", FORM_ORDER_SOURCE_FIELD)
 	target = frappe.db.get_single_value("Manufacturing Settings", FORM_ORDER_TARGET_FIELD)
+	setting_company = _default_company()
+	if source and setting_company:
+		wh_company = frappe.db.get_value("Warehouse", source, "company")
+		if wh_company and wh_company != setting_company:
+			source = None
 	missing = [
 		label
 		for label, value in (

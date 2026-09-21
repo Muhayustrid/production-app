@@ -1,0 +1,71 @@
+{
+  "captured_at": "2026-09-20 22:45:21.954572",
+  "custom_fields": [
+    {
+      "fieldname": "custom_default_source_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "make_serial_no_batch_from_work_order",
+      "label": "Default Source Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "custom_default_wip_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_source_warehouse",
+      "label": "Default WIP Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "custom_default_fg_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_wip_warehouse",
+      "label": "Default Target Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "custom_default_scrap_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_fg_warehouse",
+      "label": "Default Scrap Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "custom_default_handover_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_scrap_warehouse",
+      "label": "Default Handover Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "custom_default_handover_source_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_handover_warehouse",
+      "label": "Default Handover Source Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "custom_default_form_order_source_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_handover_source_warehouse",
+      "label": "Default Form Order Source Warehouse (Production App)",
+      "options": "Warehouse"
+    },
+    {
+      "fieldname": "custom_default_form_order_target_warehouse",
+      "fieldtype": "Link",
+      "insert_after": "custom_default_form_order_source_warehouse",
+      "label": "Default Form Order Target Warehouse (Production App)",
+      "options": "Warehouse"
+    }
+  ],
+  "singleton_values": {
+    "custom_default_fg_warehouse": "Cold Storage Produksi - ROPI",
+    "custom_default_form_order_source_warehouse": "Gudang Bahan Baku - ROPI",
+    "custom_default_form_order_target_warehouse": "Gudang Produksi - ROPI",
+    "custom_default_handover_source_warehouse": "Cold Storage Produksi - ROPI",
+    "custom_default_handover_warehouse": "Gudang Barang Jadi - ROPI",
+    "custom_default_scrap_warehouse": "",
+    "custom_default_source_warehouse": "Gudang Produksi - ROPI",
+    "custom_default_wip_warehouse": "Work In Progress - ROPI"
+  }
+}
