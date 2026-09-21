@@ -7,7 +7,7 @@ import HandoverBoard from './HandoverBoard.vue'
 import FormOrderPage from './FormOrderPage.vue'
 import FormOrderCreate from './FormOrderCreate.vue'
 import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState } from './store.js'
-import { ClipboardCheck, ClipboardList, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
+import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
 
 // router hash minimal: '#/' + '#/wo/<id>' (work order), '#/handover' (stock entry)
 const hash = ref(window.location.hash)
@@ -56,6 +56,8 @@ const canFormOrder = computed(() =>
 
 // drawer ala YouTube: tutup default, burger di top bar membuka/menutup
 const navOpen = ref(false)
+// menu profil (2026-09-21): shortcut pulang ke Desk native (/app)
+const userMenu = ref(false)
 const errorDialog = ref(null)
 const errorClose = ref(null)
 const currentUser = window.workspace_user || 'Pengguna ERPNext'
@@ -112,11 +114,33 @@ function onNavClick() {
         </div>
       </div>
       <div class="topuser">
-        <span class="avatar">{{ initials }}</span>
-        <span class="uinfo">
-          <span class="uname">{{ currentUser }}</span>
-          <span class="urole">ERPNext</span>
-        </span>
+        <button
+          type="button"
+          class="userbtn"
+          :aria-expanded="userMenu"
+          aria-haspopup="menu"
+          aria-label="Menu pengguna"
+          @click="userMenu = !userMenu"
+          @keydown.esc="userMenu = false"
+        >
+          <span class="avatar">{{ initials }}</span>
+          <span class="uinfo">
+            <span class="uname">{{ currentUser }}</span>
+            <span class="urole">ERPNext</span>
+          </span>
+          <ChevronDown :size="14" :stroke-width="2" class="uchev" :class="{ open: userMenu }" />
+        </button>
+        <template v-if="userMenu">
+          <div class="usermenu-overlay" aria-hidden="true" @click="userMenu = false"></div>
+          <transition name="pop" appear>
+            <div class="usermenu" role="menu">
+              <a role="menuitem" class="usermenu-item" href="/app">
+                <LayoutGrid :size="16" :stroke-width="1.9" />
+                Buka ERPNext Desk
+              </a>
+            </div>
+          </transition>
+        </template>
       </div>
     </header>
 

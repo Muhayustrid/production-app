@@ -227,7 +227,7 @@ a.navitem.on .navbadge { background: rgba(102, 163, 191, 0.22); color: var(--bra
 .navitem.disabled { opacity: 0.5; cursor: default; }
 .navitem.disabled:hover { background: none; color: var(--muted); }
 
-.topuser { margin-left: auto; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.topuser { position: relative; margin-left: auto; min-width: 0; }
 .avatar {
   flex: none;
   width: 34px;
@@ -243,6 +243,52 @@ a.navitem.on .navbadge { background: rgba(102, 163, 191, 0.22); color: var(--bra
 .uinfo { display: flex; flex-direction: column; min-width: 0; }
 .uname { font-size: 13px; font-weight: 600; color: var(--ink); }
 .urole { font-size: 11px; color: var(--muted); }
+
+/* menu profil: klik avatar/nama → dropdown overlay absolut (pola filterpanel) */
+.userbtn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: -4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.userbtn:hover { background: var(--brand-soft); }
+.uchev { flex: none; color: var(--muted); transition: transform 0.15s ease; }
+.uchev.open { transform: rotate(180deg); }
+.usermenu-overlay { position: fixed; inset: 0; z-index: 40; }
+.usermenu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 42;
+  min-width: 208px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.94);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 48px -16px rgba(36, 48, 58, 0.2);
+  transform-origin: top right;
+}
+.usermenu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+.usermenu-item:hover { background: var(--brand-soft); color: var(--brand); }
 
 /* ---- grup form ---- */
 .fieldgroup + .fieldgroup { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
