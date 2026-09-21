@@ -47,7 +47,11 @@ from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle impor
 	update_available_batches,
 )
 
-from production_app.api.work_order import _enrich_units
+from production_app.api.work_order import (
+	_company_allowed,
+	_default_company,
+	_enrich_units,
+)
 
 # Sisi gudang serah terima: role kustom ATAU Stock User native (keputusan user
 # 2026-09-14: Manufacturing User + Stock User = dua sisi sekaligus; Stock User
@@ -80,17 +84,33 @@ def handover_board():
     return _build_board()
 
 
+def _board_company_gate(setting_company, wo_rows):
+    """FU58 §6.2 (review): nilai default settings pada payload board (label
+    rute) hanya ditampilkan bila berlaku untuk SELURUH Work Order yang
+    dipaparkan — setting company kosong (semua company), papan kosong, atau
+    semua WO satu company yang cocok dengan setting. Selain itu dianggap
+    "belum diatur" (None), konsisten dengan gate create_request dan
+    _pool_warehouse, agar label rute tidak menjanjikan gudang yang akan
+    ditolak saat aksi (mismatch tampilan vs perilaku tulis)."""
+    companies = {getattr(row, "company", None) for row in wo_rows}
+    companies.discard(None)
+    return not setting_company or not companies or companies == {setting_company}
+
+
 def _build_board():
-	"""Board payload; T24 actions return this as the refreshed board."""
-	wo_rows = _wo_lot_rows()
-	requests = _requests(wo_rows)
-	return {
-		"target_warehouse": _target_warehouse(),
-		"source_warehouse": _source_warehouse(),
-		"roles": _roles(),
-		"lots": _lots(wo_rows, requests),
-		"requests": requests,
-	}
+    """Board payload; T24 actions return this as the refreshed board."""
+    wo_rows = _wo_lot_rows()
+    requests = _requests(wo_rows)
+    # FU58: gate company untuk label rute papan — jalur tulis tetap ter-gate
+    # per dokumen di _target_warehouse_or_throw / _pool_warehouse
+    gate = _board_company_gate(_default_company(), wo_rows)
+    return {
+        "target_warehouse": _target_warehouse() if gate else None,
+        "source_warehouse": _source_warehouse() if gate else None,
+        "roles": _roles(),
+        "lots": _lots(wo_rows, requests),
+        "requests": requests,
+    }
 
 
 def _target_warehouse():
@@ -114,9 +134,16 @@ def _source_warehouse():
 
 
 def _pool_warehouse(lot_row):
-	"""The batchless pool source: the source setting overrides the SE-derived
-	lot warehouse; when unset the fallback keeps current behavior (R2)."""
-	return _source_warehouse() or lot_row.warehouse
+    """The batchless pool source: the source setting overrides the SE-derived
+    lot warehouse; when unset the fallback keeps current behavior (R2).
+    FU58: setting hanya dipakai bila company WO lot cocok — tidak cocok
+    berarti "belum diatur" -> fallback ke gudang lot SE-derived."""
+    source = _source_warehouse()
+    if source and not _company_allowed(
+        _default_company(), getattr(lot_row, "company", None)
+    ):
+        source = None
+    return source or lot_row.warehouse
 
 
 def _roles():
@@ -186,7 +213,7 @@ def _wo_lot_rows(wo_names=None):
 			filters=filters,
 			fields=[
 				"name", "production_item", "qty", "produced_qty", "custom_adonan_ke",
-				"fg_warehouse", "creation",
+				"fg_warehouse", "creation", "company",
 				# T35 summary block: bulk-loaded once, mapped onto request rows
 				"custom_handover_material_request",
 				"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
@@ -1047,8 +1074,12 @@ def _throw_unsupported(lot):
     frappe.throw(_("{0} ({1})").format(lot.unsupported_reason, links or "tanpa SE Manufacture"))
 
 
-def _target_warehouse_or_throw():
+def _target_warehouse_or_throw(company=None):
     target = _target_warehouse()
+    # FU58: setting hanya dipakai bila company dokumen konsumen (WO) cocok;
+    # tidak cocok -> dianggap "belum diatur" -> tolak dengan pesan existing
+    if target and not _company_allowed(_default_company(), company):
+        target = None
     if not target:
         frappe.throw(
             _("Gudang tujuan serah terima belum diatur; isi 'Gudang Serah Terima' di menu Pengaturan.")
@@ -1159,10 +1190,12 @@ def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0)
         _("Hanya peran gudang (Stock User / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
     )
     frappe.has_permission("Material Request", "create", throw=True)
-    target = _target_warehouse_or_throw()
 
     frappe.db.get_value("Work Order", work_order, "name", for_update=True)  # row lock
     wo = frappe.get_doc("Work Order", work_order)
+    # FU58: gate company (setting hanya berlaku bila cocok dengan WO konsumen);
+    # target masih dibaca SEBELUM tulisan pertama (mr.insert di bawah)
+    target = _target_warehouse_or_throw(wo.company)
     amount = flt(wo.produced_qty)
     if amount <= 0:
         frappe.throw(

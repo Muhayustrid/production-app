@@ -22,7 +22,23 @@ const formOrderFields = [
   { key: 'form_order_target_warehouse', label: 'Gudang Tujuan Form Order', desc: 'Tujuan pemindahan stok saat gudang memproses (mis. WIP).' }
 ]
 
+// FU58: 9 kunci flat kontrak API (§8) — payload simpan dikirim eksplisit dari
+// daftar ini dan hanya kunci ini yang disalin balik dari response, agar kunci
+// baru propagated/skipped/failed tidak pernah terkirim balik / menempel di form.
+const FLAT_KEYS = [
+  'source_warehouse',
+  'wip_warehouse',
+  'fg_warehouse',
+  'scrap_warehouse',
+  'handover_warehouse',
+  'handover_source_warehouse',
+  'form_order_source_warehouse',
+  'form_order_target_warehouse',
+  'company'
+]
+
 const form = reactive({
+  company: '',
   source_warehouse: '',
   wip_warehouse: '',
   fg_warehouse: '',
@@ -36,6 +52,8 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const savedAt = ref('')
+const savedInfo = ref('')
+const saveFailed = ref([])
 const suggestionSaving = ref(false)
 
 onMounted(async () => {
@@ -70,9 +88,24 @@ async function save() {
   saving.value = true
   error.value = ''
   savedAt.value = ''
+  savedInfo.value = ''
+  saveFailed.value = []
   try {
-    Object.assign(form, await call('production_app.api.work_order.warehouse_defaults_save', { ...form }))
+    // FU58 §9.4: payload eksplisit 9 field (bukan {...form}) — lihat FLAT_KEYS.
+    const payload = {}
+    for (const key of FLAT_KEYS) payload[key] = form[key]
+    const saved = await call('production_app.api.work_order.warehouse_defaults_save', payload)
+    for (const key of FLAT_KEYS) if (key in saved) form[key] = saved[key] ?? ''
     savedAt.value = new Date().toLocaleTimeString('id-ID')
+    const propagated = saved.propagated || []
+    if (propagated.length) {
+      const names = propagated.map(p => p.name).slice(0, 5).join(', ')
+      savedInfo.value = propagated.length > 5
+        ? `${propagated.length} Work Order berjalan diperbarui (${names} …)`
+        : `${propagated.length} Work Order berjalan diperbarui: ${names}`
+    }
+    // Kegagalan per-WO tidak menggagalkan tersimpannya pengaturan (§4.5).
+    saveFailed.value = (saved.failed || []).map(f => `${f.name}: ${f.error}`)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -86,7 +119,7 @@ async function save() {
     <div class="panel-head">
       <span class="p-ico"><Warehouse :size="15" :stroke-width="1.9" /></span>
       <h2>Pengaturan Gudang</h2>
-      <span class="lead">Gudang default untuk Work Order dan Stock Entry di workspace ini.</span>
+      <span class="lead">Gudang default untuk Work Order dan Stock Entry di workspace ini. Perubahan nilai default otomatis diterapkan ke Work Order yang sedang berjalan selama nilainya belum diubah manual.</span>
     </div>
 
     <div class="panel-body">
@@ -106,6 +139,20 @@ async function save() {
           </div>
         </div>
 
+        <!-- FU58: Company penerima default — kosong = semua company (perilaku lama). -->
+        <div class="settings-block">
+          <div class="settings-block-head">
+            <div>
+              <h3>Company</h3>
+            </div>
+          </div>
+          <div class="field" style="margin-top: 12px">
+            <label for="wh-company">Company</label>
+            <LinkInput id="wh-company" v-model="form.company" doctype="Company" />
+            <div class="hint">Default hanya berlaku untuk company ini — kosongkan untuk berlaku di semua company.</div>
+          </div>
+        </div>
+
         <div class="settings-block">
           <div class="settings-block-head">
             <div>
@@ -113,8 +160,12 @@ async function save() {
             </div>
           </div>
           <div class="callout ok" style="margin-bottom: 14px">
-            Dipakai Work Order yang kolom gudangnya masih kosong saat Persiapan
-            disimpan — nilai yang sudah terisi di Work Order tidak pernah ditimpa.
+            Dipakai Work Order yang kolom gudangnya masih kosong saat Persiapan disimpan.
+            Ubah nilai langsung ke nilai baru (jangan kosongkan dulu lalu isi belakangan):
+            perubahan langsung otomatis diterapkan ke Work Order yang sedang berjalan —
+            header dan baris bahan — selama nilainya masih sama dengan nilai lama.
+            Nilai yang sudah diubah manual di Work Order tidak ditimpa; kasus lain
+            (termasuk WO yang gagal diperbarui) perlu sinkronisasi oleh admin.
           </div>
           <div class="form-grid cols2">
             <div v-for="f in woFields" :key="f.key" class="field">
@@ -158,12 +209,17 @@ async function save() {
         </div>
 
         <p v-if="error" class="err" role="alert">{{ error }}</p>
+        <!-- FU58 §9.4: kegagalan per-WO saat propagasi — pengaturan tetap tersimpan. -->
+        <div v-if="saveFailed.length" class="err" role="alert">
+          <div>Pengaturan tersimpan, tetapi Work Order berikut gagal diperbarui:</div>
+          <div v-for="item in saveFailed" :key="item">{{ item }}</div>
+        </div>
 
         <div class="panel-foot" style="padding-left: 0">
           <button class="btn btn-primary" :disabled="saving" @click="save">
             {{ saving ? 'Menyimpan…' : 'Simpan Pengaturan' }}
           </button>
-          <span v-if="savedAt" class="why">Tersimpan pada {{ savedAt }}.</span>
+          <span v-if="savedAt" class="why">Tersimpan pada {{ savedAt }}<template v-if="savedInfo"> — {{ savedInfo }}</template>.</span>
         </div>
       </template>
     </div>

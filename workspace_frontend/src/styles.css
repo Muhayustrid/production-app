@@ -1957,11 +1957,14 @@ textarea.input { height: auto; padding: 8px 10px; }
 .stage-form { border: 0; margin: 0; padding: 0; min-width: 0; }
 /* FU52: hasil pencarian LinkInput jadi overlay absolut — melayang di atas
    elemen lain (pola popover filterpanel), tidak lagi menggeser baris tabel
-   di Form Order / bidang di Pengaturan */
+   di Form Order / bidang di Pengaturan.
+   FU58: dropdown membuka ke ATAS secara default, turun ke bawah hanya bila
+   ruang atas kurang. Arah + max-height diatur LinkInput.vue saat daftar
+   dibuka (ruang di-bounding viewport + clipping-ancestor terdekat), jadi
+   base di sini tidak punya `top`/`max-height` tetap. */
 .linkinput { position: relative; }
 .link-results {
   position: absolute;
-  top: calc(100% + 4px);
   left: 0;
   z-index: 21;
   width: min(360px, calc(100vw - 32px));
@@ -1969,7 +1972,6 @@ textarea.input { height: auto; padding: 8px 10px; }
   gap: 4px;
   margin: 0;
   padding: 6px;
-  max-height: 220px;
   overflow: auto;
   background: rgba(255, 255, 255, 0.94);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
@@ -1978,6 +1980,8 @@ textarea.input { height: auto; padding: 8px 10px; }
   border-radius: 12px;
   box-shadow: 0 12px 32px -12px rgba(36, 48, 58, 0.18);
 }
+.link-results.up { bottom: calc(100% + 4px); }
+.link-results.down { top: calc(100% + 4px); }
 .link-results button { text-align: left; display: block; width: 100%; height: auto; white-space: normal; }
 .link-results small { display: block; }
 
