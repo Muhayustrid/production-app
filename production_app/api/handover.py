@@ -48,8 +48,6 @@ from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle impor
 )
 
 from production_app.api.work_order import (
-	_company_allowed,
-	_default_company,
 	_enrich_units,
 )
 
@@ -84,29 +82,13 @@ def handover_board():
     return _build_board()
 
 
-def _board_company_gate(setting_company, wo_rows):
-    """FU58 §6.2 (review): nilai default settings pada payload board (label
-    rute) hanya ditampilkan bila berlaku untuk SELURUH Work Order yang
-    dipaparkan — setting company kosong (semua company), papan kosong, atau
-    semua WO satu company yang cocok dengan setting. Selain itu dianggap
-    "belum diatur" (None), konsisten dengan gate create_request dan
-    _pool_warehouse, agar label rute tidak menjanjikan gudang yang akan
-    ditolak saat aksi (mismatch tampilan vs perilaku tulis)."""
-    companies = {getattr(row, "company", None) for row in wo_rows}
-    companies.discard(None)
-    return not setting_company or not companies or companies == {setting_company}
-
-
 def _build_board():
     """Board payload; T24 actions return this as the refreshed board."""
     wo_rows = _wo_lot_rows()
     requests = _requests(wo_rows)
-    # FU58: gate company untuk label rute papan — jalur tulis tetap ter-gate
-    # per dokumen di _target_warehouse_or_throw / _pool_warehouse
-    gate = _board_company_gate(_default_company(), wo_rows)
     return {
-        "target_warehouse": _target_warehouse() if gate else None,
-        "source_warehouse": _source_warehouse() if gate else None,
+        "target_warehouse": _target_warehouse(),
+        "source_warehouse": _source_warehouse(),
         "roles": _roles(),
         "lots": _lots(wo_rows, requests),
         "requests": requests,
@@ -136,14 +118,8 @@ def _source_warehouse():
 def _pool_warehouse(lot_row):
     """The batchless pool source: the source setting overrides the SE-derived
     lot warehouse; when unset the fallback keeps current behavior (R2).
-    FU58: setting hanya dipakai bila company WO lot cocok — tidak cocok
-    berarti "belum diatur" -> fallback ke gudang lot SE-derived."""
-    source = _source_warehouse()
-    if source and not _company_allowed(
-        _default_company(), getattr(lot_row, "company", None)
-    ):
-        source = None
-    return source or lot_row.warehouse
+    FU61: gate company dipensiunkan — setting berlaku langsung."""
+    return _source_warehouse() or lot_row.warehouse
 
 
 def _roles():
@@ -1080,10 +1056,6 @@ def _throw_unsupported(lot):
 
 def _target_warehouse_or_throw(company=None):
     target = _target_warehouse()
-    # FU58: setting hanya dipakai bila company dokumen konsumen (WO) cocok;
-    # tidak cocok -> dianggap "belum diatur" -> tolak dengan pesan existing
-    if target and not _company_allowed(_default_company(), company):
-        target = None
     if not target:
         frappe.throw(
             _("Gudang tujuan serah terima belum diatur; isi 'Gudang Serah Terima' di menu Pengaturan.")

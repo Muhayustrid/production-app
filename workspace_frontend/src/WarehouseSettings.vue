@@ -22,9 +22,9 @@ const formOrderFields = [
   { key: 'form_order_target_warehouse', label: 'Gudang Tujuan Form Order', desc: 'Tujuan pemindahan stok saat gudang memproses (mis. WIP).' }
 ]
 
-// FU58: 9 kunci flat kontrak API (§8) — payload simpan dikirim eksplisit dari
+// FU61: 8 kunci flat kontrak API — payload simpan dikirim eksplisit dari
 // daftar ini dan hanya kunci ini yang disalin balik dari response, agar kunci
-// baru propagated/skipped/failed tidak pernah terkirim balik / menempel di form.
+// propagated/skipped/failed tidak pernah terkirim balik / menempel di form.
 const FLAT_KEYS = [
   'source_warehouse',
   'wip_warehouse',
@@ -33,12 +33,10 @@ const FLAT_KEYS = [
   'handover_warehouse',
   'handover_source_warehouse',
   'form_order_source_warehouse',
-  'form_order_target_warehouse',
-  'company'
+  'form_order_target_warehouse'
 ]
 
 const form = reactive({
-  company: '',
   source_warehouse: '',
   wip_warehouse: '',
   fg_warehouse: '',
@@ -136,20 +134,6 @@ async function save() {
               <input v-model="suggestionPreferences.enabled" type="checkbox" :disabled="suggestionSaving" @change="toggleSuggestions" />
               <span>{{ suggestionPreferences.enabled ? 'Aktif' : 'Nonaktif' }}</span>
             </label>
-          </div>
-        </div>
-
-        <!-- FU58: Company penerima default — kosong = semua company (perilaku lama). -->
-        <div class="settings-block">
-          <div class="settings-block-head">
-            <div>
-              <h3>Company</h3>
-            </div>
-          </div>
-          <div class="field" style="margin-top: 12px">
-            <label for="wh-company">Company</label>
-            <LinkInput id="wh-company" v-model="form.company" doctype="Company" />
-            <div class="hint">Default hanya berlaku untuk company ini — kosongkan untuk berlaku di semua company.</div>
           </div>
         </div>
 

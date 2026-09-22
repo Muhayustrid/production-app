@@ -545,50 +545,40 @@ SETTING_WAREHOUSE_FIELDS = {
 }
 
 
-# FU58 (2026-09-20): ke-8 default hanya berlaku bagi company terpilih
-# (kosong = semua company = perilaku lama).
-DEFAULT_COMPANY_FIELD = "custom_default_company"
-
 # Status yang TIDAK diperlakukan "berjalan" untuk propagasi/remediasi FU58 —
 # konsisten dengan semantik native get_status dan filter stage aplikasi
 # (docstatus < 2 sudah meng-exclude Cancelled; "Cancelled" dipertahankan di
 # sini sebagai pertahanan ganda terhadap data legacy).
 WO_TERMINAL_STATUSES = ("Completed", "Stopped", "Closed", "Cancelled")
 
+# FU61: scope company (FU58) DIPENSIUNKAN atas permintaan user 22 Sep — site
+# satu-company, gate hanya menambah kelas insiden tanpa manfaat. Field lama
+# dipensiunkan idempoten (dihapus bila ada).
+RETIRED_COMPANY_FIELD = "custom_default_company"
+
 
 def _ensure_settings_fields():
-	"""FU60: field default gudang normally dipasang by after_migrate; alur ops
-	produksi (update kode + restart tanpa migrate) bisa meninggalkan field
-	belum terpasang — get_single_value v16 melempar untuk field yang tak ada
-	di meta, mematikan board/Pengaturan/Form Order sekaligus. Self-heal di
-	titik sentral; sentinel = company (dibuat terakhir oleh ensure, jadi
-	hilangnya pasti berarti paket field belum terpasang; ensure idempoten
-	membuat semua yang kurang)."""
-	if frappe.get_meta("Manufacturing Settings").get_field(DEFAULT_COMPANY_FIELD):
+	"""FU60/FU61: konvergensi field default gudang di titik baca sentral.
+	Pasang yang kurang (update kode tanpa migrate pernah mematikan seluruh
+	bacaan settings di v16) dan pensiunkan field company FU61 bila masih ada.
+	Sentinel = field terakhir paket (dibuat paling akhir oleh ensure)."""
+	meta = frappe.get_meta("Manufacturing Settings")
+	if meta.get_field("custom_default_form_order_target_warehouse"):
+		if meta.get_field(RETIRED_COMPANY_FIELD):
+			from production_app.upgrade import retire_company_field
+			retire_company_field()
 		return
-	from production_app.upgrade import ensure_warehouse_default_fields
+	from production_app.upgrade import ensure_warehouse_default_fields, retire_company_field
 	ensure_warehouse_default_fields()
-
-
-def _default_company():
-	_ensure_settings_fields()
-	return frappe.db.get_single_value("Manufacturing Settings", DEFAULT_COMPANY_FIELD) or None
-
-
-def _company_allowed(setting_company, doc_company):
-	"""FU58 §6.2: helper gating company tunggal — default settings hanya berlaku
-	bila kosong (semua company) atau cocok dengan company dokumen konsumen."""
-	return not setting_company or setting_company == doc_company
+	retire_company_field()
 
 
 def _warehouse_defaults():
 	_ensure_settings_fields()
-	values = {
+	return {
 		key: (frappe.db.get_single_value("Manufacturing Settings", fieldname) or None)
 		for key, fieldname in SETTING_WAREHOUSE_FIELDS.items()
 	}
-	values["company"] = _default_company()
-	return values
 
 
 @frappe.whitelist()
@@ -603,14 +593,13 @@ def warehouse_defaults_save(
 	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None,
 	handover_warehouse=None, handover_source_warehouse=None,
 	form_order_source_warehouse=None, form_order_target_warehouse=None,
-	company=None,
 ):
 	"""Save the Production App warehouse defaults (empty string clears).
 
 	FU58 LIVE: perubahan lama->baru (keduanya non-kosong) pada 4 field Work
 	Order dipropagasikan ke WO berjalan yang kolomnya masih bernilai lama,
-	satu transaksi dengan simpanan pengaturan. Return TETAP flat 9 kunci
-	(backward-compatible) plus kunci baru propagated/skipped/failed."""
+	satu transaksi dengan simpanan pengaturan. Return flat 8 kunci plus
+	kunci propagated/skipped/failed."""
 	frappe.has_permission("Manufacturing Settings", "write", throw=True)
 	payload = {
 		"source_warehouse": source_warehouse,
@@ -627,27 +616,11 @@ def warehouse_defaults_save(
 			payload[key] = None
 		elif not frappe.db.exists("Warehouse", value):
 			frappe.throw(_("Gudang tidak ditemukan: {0}").format(value))
-	company = company or None
-	if company and not frappe.db.exists("Company", company):
-		frappe.throw(_("Company tidak ditemukan: {0}").format(company))
-	# FU58 §6.3: mirror validate_warehouse_company native — propagasi submitted
-	# lewat db_set melewati validasi ORM, jadi gudang lintas company ditolak di
-	# pintu simpan. Gudang tanpa company (shared) tetap boleh.
-	if company:
-		for value in payload.values():
-			if not value:
-				continue
-			wh_company = frappe.db.get_value("Warehouse", value, "company")
-			if wh_company and wh_company != company:
-				frappe.throw(
-					_("Gudang {0} milik company {1}, bukan {2}").format(value, wh_company, company)
-				)
 	# nilai lama DIBACA sebelum singleton disimpan (dasar diff propagasi)
 	old = _warehouse_defaults()
 	settings = frappe.get_doc("Manufacturing Settings")
 	for key, value in payload.items():
 		settings.set(SETTING_WAREHOUSE_FIELDS[key], value)
-	settings.set(DEFAULT_COMPANY_FIELD, company)
 	settings.save()
 	# FU58 §4.1: hanya 4 field yang hidup di Work Order; field settings-only
 	# (handover/form order) tidak dipropagasikan — konsumennya membaca nilai
@@ -667,7 +640,6 @@ def _propagate_warehouse_changes(changed):
 	yang terfilter permission sesi) per field yang berubah, lalu tulis per WO
 	melewat _apply_warehouse_changes. Return kontrak §8."""
 	propagated, skipped, failed = [], [], []
-	setting_company = _default_company()
 	per_wo = {}
 	for field, (old_value, new_value) in changed.items():
 		filters = [
@@ -675,13 +647,11 @@ def _propagate_warehouse_changes(changed):
 			["status", "not in", list(WO_TERMINAL_STATUSES)],
 			[field, "=", old_value],
 		]
-		if setting_company:
-			filters.append(["company", "=", setting_company])
 		for name in frappe.db.get_all(DOCTYPE, filters=filters, pluck="name"):
 			per_wo.setdefault(name, {})[field] = (old_value, new_value)
 	for name in sorted(per_wo):
 		_apply_warehouse_changes_collect(
-			name, per_wo[name], setting_company, propagated, skipped, failed
+			name, per_wo[name], propagated, skipped, failed
 		)
 	return {"propagated": propagated, "skipped": skipped, "failed": failed}
 
@@ -693,11 +663,11 @@ def _wo_error_message(error):
 	return str(error)
 
 
-def _apply_warehouse_changes_collect(name, changes, setting_company, written, skipped, failed):
+def _apply_warehouse_changes_collect(name, changes, written, skipped, failed):
 	"""Jalankan _apply_warehouse_changes untuk satu WO dan kumpulkan hasilnya;
 	kegagalan per-WO tidak membatalkan pemanggilnya (settings tetap tersimpan)."""
 	try:
-		outcome = _apply_warehouse_changes(name, changes, setting_company)
+		outcome = _apply_warehouse_changes(name, changes)
 	except Exception as e:
 		frappe.log_error(f"FU58 warehouse propagation failed for {name}: {e!r}")
 		failed.append({"name": name, "error": _wo_error_message(e)})
@@ -708,19 +678,16 @@ def _apply_warehouse_changes_collect(name, changes, setting_company, written, sk
 	failed.extend({"name": name, "error": error} for error in outcome["failed"])
 
 
-def _apply_warehouse_changes(wo_name, changes, setting_company=None):
+def _apply_warehouse_changes(wo_name, changes):
 	"""FU58 §4.3: terapkan perubahan gudang ke SATU Work Order berjalan.
 	Urutan sama untuk kedua jalur (draft dan submitted): lock baris ->
 	get_doc fresh -> re-verifikasi kandidat -> validasi warehouse-company ->
 	tulis. Dipakai propagasi (warehouse_defaults_save) dan remediasi
 	(sync_warehouse_defaults_to_running_work_orders).
 
-	`changes = {field: (old, new)}`; `setting_company` default dibaca dari
-	setting (bisa dipass eksplisit oleh pemanggil/uji). Return
+	`changes = {field: (old, new)}`. Return
 	{"written": entry|None, "skipped": [alasan], "failed": [alasan]} — tidak
 	pernah raise untuk kasus bisnis agar WO lain tetap diproses."""
-	if setting_company is None:
-		setting_company = _default_company()
 	# 1. lock baris dulu (pola prepare/transfer/finish) — menutup lost-update
 	#    terhadap tulisan operator yang bersamaan
 	frappe.db.get_value(DOCTYPE, wo_name, "name", for_update=True)
@@ -732,12 +699,6 @@ def _apply_warehouse_changes(wo_name, changes, setting_company=None):
 		return {
 			"written": None,
 			"skipped": [f"sudah tidak berjalan (docstatus {wo.docstatus}, status {wo.status})"],
-			"failed": [],
-		}
-	if not _company_allowed(setting_company, wo.company):
-		return {
-			"written": None,
-			"skipped": [f"company {wo.company} di luar pengaturan company {setting_company}"],
 			"failed": [],
 		}
 	for field, (old_value, _new_value) in changes.items():
@@ -831,7 +792,6 @@ def sync_warehouse_defaults_to_running_work_orders(dry_run=0):
 			frappe.PermissionError,
 		)
 	dry = bool(cint(dry_run))
-	setting_company = _default_company()
 	defaults = {
 		key: (frappe.db.get_single_value("Manufacturing Settings", fieldname) or None)
 		for key, fieldname in WAREHOUSE_DEFAULT_FIELDS.items()
@@ -840,8 +800,6 @@ def sync_warehouse_defaults_to_running_work_orders(dry_run=0):
 		["docstatus", "<", 2],
 		["status", "not in", list(WO_TERMINAL_STATUSES)],
 	]
-	if setting_company:
-		filters.append(["company", "=", setting_company])
 	wos = frappe.db.get_all(
 		DOCTYPE,
 		filters=filters,
@@ -884,7 +842,7 @@ def sync_warehouse_defaults_to_running_work_orders(dry_run=0):
 			)
 			continue
 		_apply_warehouse_changes_collect(
-			row.name, changes, setting_company, updated, skipped, failed
+			row.name, changes, updated, skipped, failed
 		)
 	return {"updated": updated, "skipped": skipped, "failed": failed, "dry_run": dry}
 
@@ -893,11 +851,9 @@ def _fill_warehouse_defaults(wo):
 	"""Fill EMPTY Work Order warehouses: Production App defaults
 	(Manufacturing Settings) first, then the production item's defaults.
 	Never overrides a value already on the document.
-	FU58: default settings hanya dipakai bila company WO cocok
-	custom_default_company; default Item tetap (scoped per item)."""
+	FU61: gate company dipensiunkan — default berlaku untuk semua WO;
+	default Item tetap (scoped per item)."""
 	settings = _warehouse_defaults()
-	if not _company_allowed(settings.get("company"), wo.company):
-		settings = {}
 	item = frappe.db.get_value(
 		"Item",
 		wo.production_item,

@@ -278,16 +278,9 @@ WAREHOUSE_DEFAULT_FIELDS = [
 		"options": "Warehouse",
 		"description": "Production App: gudang tujuan Form Order (mis. WIP produksi)",
 	},
-	# FU58 (2026-09-20): ke-8 default di atas hanya berlaku bagi company ini
-	# (kosong = semua company, perilaku lama). Dibaca oleh _company_allowed
-	# di api/work_order.py + konsumen handover/form order.
-	{
-		"fieldname": "custom_default_company",
-		"label": "Default Company (Production App)",
-		"fieldtype": "Link",
-		"options": "Company",
-		"description": "Production App: default gudang hanya berlaku untuk company ini; kosong = semua company",
-	},
+	# FU61 (2026-09-22): scope company (FU58) dipensiunkan atas permintaan
+	# user — site satu-company, gate hanya menambah kelas insiden. Field
+	# custom_default_company dihapus idempoten oleh retire_company_field().
 ]
 
 
@@ -341,6 +334,23 @@ def ensure_warehouse_default_fields():
 FU58_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu58-warehouse-company-pre.json")
 
 
+def retire_company_field():
+	"""FU61: pensiunkan scope company FU58 — hapus Custom Field
+	custom_default_company (dan nilai singletonsnya) bila masih ada.
+	Idempoten; dipanggil apply() dan konvergensi runtime FU60/FU61."""
+	name = frappe.db.get_value(
+		"Custom Field",
+		{"dt": "Manufacturing Settings", "fieldname": "custom_default_company"},
+		"name",
+	)
+	if not name:
+		return "unchanged"
+	frappe.db.delete("Singles", {"doctype": "Manufacturing Settings", "field": "custom_default_company"})
+	frappe.delete_doc("Custom Field", name, force=1, ignore_permissions=True)
+	frappe.clear_cache(doctype="Manufacturing Settings")
+	return f"deleted {name}"
+
+
 def snapshot_fu58():
 	"""FU58 pre-change snapshot: definisi Custom Field Manufacturing Settings +
 	nilai tersimpan singleton ke-8 field gudang (field company mulai kosong =
@@ -358,7 +368,6 @@ def snapshot_fu58():
 		"singleton_values": {
 			spec["fieldname"]: frappe.db.get_single_value("Manufacturing Settings", spec["fieldname"])
 			for spec in WAREHOUSE_DEFAULT_FIELDS
-			if spec["fieldname"] != "custom_default_company"
 		},
 	}
 	with open(FU58_SNAPSHOT, "w") as f:
@@ -1374,6 +1383,7 @@ def apply():
 	result["batch_permission"] = ensure_batch_permission()
 	result["stock_user_batch_read"] = ensure_stock_user_batch_read()
 	result["warehouse_default_fields"] = ensure_warehouse_default_fields()
+	result["retire_company_field"] = retire_company_field()
 	result["handover_mr_fields"] = ensure_handover_mr_fields()
 	if not os.path.exists(MR_DELETE_SNAPSHOT):
 		snapshot_mr_delete_perm()  # never change the delete perm without a pre-state
