@@ -556,7 +556,22 @@ DEFAULT_COMPANY_FIELD = "custom_default_company"
 WO_TERMINAL_STATUSES = ("Completed", "Stopped", "Closed", "Cancelled")
 
 
+def _ensure_settings_fields():
+	"""FU60: field default gudang normally dipasang by after_migrate; alur ops
+	produksi (update kode + restart tanpa migrate) bisa meninggalkan field
+	belum terpasang — get_single_value v16 melempar untuk field yang tak ada
+	di meta, mematikan board/Pengaturan/Form Order sekaligus. Self-heal di
+	titik sentral; sentinel = company (dibuat terakhir oleh ensure, jadi
+	hilangnya pasti berarti paket field belum terpasang; ensure idempoten
+	membuat semua yang kurang)."""
+	if frappe.get_meta("Manufacturing Settings").get_field(DEFAULT_COMPANY_FIELD):
+		return
+	from production_app.upgrade import ensure_warehouse_default_fields
+	ensure_warehouse_default_fields()
+
+
 def _default_company():
+	_ensure_settings_fields()
 	return frappe.db.get_single_value("Manufacturing Settings", DEFAULT_COMPANY_FIELD) or None
 
 
@@ -567,6 +582,7 @@ def _company_allowed(setting_company, doc_company):
 
 
 def _warehouse_defaults():
+	_ensure_settings_fields()
 	values = {
 		key: (frappe.db.get_single_value("Manufacturing Settings", fieldname) or None)
 		for key, fieldname in SETTING_WAREHOUSE_FIELDS.items()
