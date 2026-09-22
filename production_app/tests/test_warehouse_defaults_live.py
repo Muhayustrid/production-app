@@ -1,4 +1,4 @@
-# FU58 — warehouse defaults LIVE: propagasi ke WO berjalan + gate company +
+# FU58/FU61 — warehouse defaults LIVE: propagasi ke WO berjalan (gate company
 # remediasi (docs/superpowers/specs/2026-09-20-fu58-live-warehouse-settings-design.md §10.1).
 #
 # 16 skenario dieksekusi pada runtime terpasang. Fixtures ber-prefix FU58;
@@ -201,7 +201,6 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 			"handover_source_warehouse": None,
 			"form_order_source_warehouse": None,
 			"form_order_target_warehouse": None,
-			"company": None,
 		}
 		payload.update(overrides)
 		return warehouse_defaults_save(**payload)
@@ -339,49 +338,13 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		self.assertEqual(self._header(wo.name).source_warehouse, self.src_old)
 		self.assertEqual(self._rows(wo.name)[self.rm1], self.src_old)
 
-	# ------------------------------------- skenario 6: gate company _fill
-	def test_fu58_06_company_gate_on_fill_defaults(self):
-		wo = self._make_wo(bom=self.bom, company=self.company, source=None, wip=self.wip_wh, fg=self.fg_wh, submit=False)
-		wo2 = self._make_wo(bom=self.bom, company=self.company, source=None, wip=self.wip_wh, fg=self.fg_wh, submit=False)
-
-		# setting company = company lain -> default settings TIDAK berlaku
-		self._save_defaults(company=self.other_company, source_warehouse=self.shared_a)
-		prepare(wo.name, {})
-		self.assertIsNone(self._header(wo.name).source_warehouse)  # dibiarkan kosong
-
-		# default Item tetap dipakai walau gate company memblokir settings
-		frappe.db.set_value("Item", self.fg, "custom_default_source_warehouse", self.item_src_wh, update_modified=False)
-		prepare(wo2.name, {})
-		self.assertEqual(self._header(wo2.name).source_warehouse, self.item_src_wh)
-
-		# company kosong = semua company (perilaku lama) — gudang company utama
-		self._save_defaults(company=None, source_warehouse=self.src_old)
-		prepare(wo.name, {})
-		self.assertEqual(self._header(wo.name).source_warehouse, self.src_old)
-
-	# ------------------------------- skenario 7: gate company di propagasi
-	def test_fu58_07_company_gate_on_propagation(self):
-		# WO company kedua dengan kolom == old (gudang company utama tertulis
-		# via db bypass — satu-satunya cara membentuk data mismatch legacy;
-		# scan propagasi §4.2 memfilter company sehingga WO ini tak tersentuh)
-		wo = self._make_wo(bom=self.bom_ot, company=self.other_company, source=self.shared_a, wip=self.shared_wip, fg=self.shared_fg, submit=True)
-		frappe.db.set_value(DOCTYPE, wo.name, "source_warehouse", self.src_old, update_modified=False)
-		# baseline: setting company utama + old (transisi apa pun diserap di sini)
-		self._save_defaults(company=self.company, source_warehouse=self.src_old)
-		self.assertEqual(self._header(wo.name).source_warehouse, self.src_old)
-		saved = self._save_defaults(company=self.company, source_warehouse=self.src_new)
-		self.assertNotIn(wo.name, [e["name"] for e in saved["propagated"]])
-		self.assertEqual(self._header(wo.name).source_warehouse, self.src_old)  # tidak tersentuh
-		self.assertEqual(self._rows(wo.name)[self.rm1], self.shared_a)
-
 	# ------------------------------------------------ skenario 8: remediasi
 	def test_fu58_08_remediation_dry_run_idempotent_and_permission(self):
-		self._save_defaults(company=self.other_company)
+		self._save_defaults()
 		wo_sub = self._make_wo(bom=self.bom_ot, company=self.other_company, source=self.shared_a, wip=self.shared_wip, fg=self.shared_fg, submit=True)
 		wo_draft = self._make_wo(bom=self.bom_ot, company=self.other_company, source=self.shared_a, wip=self.shared_wip, fg=self.shared_fg, submit=False)
 		# default diisi DARI kondisi kosong (pola gap §4.4 — tanpa propagasi)
 		self._save_defaults(
-			company=self.other_company,
 			source_warehouse=self.shared_b,
 			wip_warehouse=self.shared_wip,
 			fg_warehouse=self.shared_fg,
@@ -405,8 +368,8 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 			self.assertEqual(self._rows(wo_name)[self.rm1], self.shared_b)
 			self.assertEqual(self._rows(wo_name)[self.rm2], self.shared_row)
 
-		# idempoten: eksekusi kedua tidak menulis apa pun (scan company-gated
-		# hanya melihat rantai company lain — fixture test ini sendiri)
+		# idempoten: eksekusi kedua tidak menulis apa pun (run pertama sudah
+		# mengonvergensi SEMUA WO berjalan in-transaction)
 		second = sync_warehouse_defaults_to_running_work_orders(dry_run=0)
 		self.assertEqual(second["updated"], [])
 
@@ -425,17 +388,9 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as ctx:
 			self._save_defaults(source_warehouse=f"{PREFIX}-Gudang-Tidak-Ada")
 		self.assertIn("Gudang tidak ditemukan", str(ctx.exception))
-		with self.assertRaises(frappe.ValidationError) as ctx:
-			self._save_defaults(company=f"{PREFIX}-Company-Tidak-Ada")
-		self.assertIn("Company tidak ditemukan", str(ctx.exception))
-		# gudang milik company lain saat setting company terisi -> throw
-		with self.assertRaises(frappe.ValidationError) as ctx:
-			self._save_defaults(company=self.company, source_warehouse=self.other_company_wh)
-		self.assertIn("bukan", str(ctx.exception))
-		# ketiga throw terjadi SEBELUM simpanan — settings tidak berubah
+		# throw terjadi SEBELUM simpanan — settings tidak berubah
 		values = warehouse_defaults()
 		self.assertEqual(values["source_warehouse"], self.src_old)
-		self.assertIsNone(values["company"])
 
 	# --------------------------------------- skenario 10: baris BOM tetap
 	def test_fu58_10_bom_rows_preserved(self):
@@ -465,7 +420,7 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 
 		with mock.patch.object(frappe.db, "get_value", side_effect=spy):
 			outcome = _apply_warehouse_changes(
-				wo.name, {"source_warehouse": (self.src_old, self.src_new)}, None
+				wo.name, {"source_warehouse": (self.src_old, self.src_new)}
 			)
 		self.assertTrue(
 			any(
@@ -486,9 +441,9 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 
 	# --------------------------------- skenario 12: builder baca default baru
 	def test_fu58_12_material_transfer_builder_uses_new_default(self):
-		self._save_defaults(company=self.other_company)
+		self._save_defaults()
 		wo = self._make_wo(bom=self.bom_ot, company=self.other_company, source=self.shared_a, wip=self.shared_wip, fg=self.shared_fg, submit=True)
-		self._save_defaults(company=self.other_company, source_warehouse=self.shared_b)
+		self._save_defaults(source_warehouse=self.shared_b)
 		result = sync_warehouse_defaults_to_running_work_orders(dry_run=0)
 		self.assertIn(wo.name, [e["name"] for e in result["updated"]])
 
@@ -508,7 +463,7 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		for key in (
 			"source_warehouse", "wip_warehouse", "fg_warehouse", "scrap_warehouse",
 			"handover_warehouse", "handover_source_warehouse",
-			"form_order_source_warehouse", "form_order_target_warehouse", "company",
+			"form_order_source_warehouse", "form_order_target_warehouse",
 		):
 			self.assertIn(key, saved)
 		self.assertEqual(saved["fg_warehouse"], None)  # kunci flat tetap valid dibaca
@@ -520,13 +475,13 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 
 	# ------------------------------------- skenario 14: gap clear -> set
 	def test_fu58_14_clear_then_set_gap_requires_remediation(self):
-		self._save_defaults(company=self.other_company)
+		self._save_defaults()
 		wo = self._make_wo(bom=self.bom_ot, company=self.other_company, source=self.shared_a, wip=self.shared_wip, fg=self.shared_fg, submit=True)
 		# simpan #1: kosongkan (old -> kosong: tidak propagasi)
-		first = self._save_defaults(company=self.other_company, source_warehouse=None)
+		first = self._save_defaults(source_warehouse=None)
 		self.assertEqual(first["propagated"], [])
 		# simpan #2: isi nilai baru (old kosong: tidak propagasi — gap §4.4)
-		second = self._save_defaults(company=self.other_company, source_warehouse=self.shared_b)
+		second = self._save_defaults(source_warehouse=self.shared_b)
 		self.assertEqual(second["propagated"], [])
 		self.assertEqual(self._header(wo.name).source_warehouse, self.shared_a)  # terkunci di nilai lama
 		# jalur pemulihan: remediasi
@@ -541,7 +496,7 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		wo = self._make_wo(bom=self.bom, company=self.company, source=self.manual_wh, wip=self.wip_wh, fg=self.fg_wh, submit=True)
 		# helper dipanggil dengan ekspektasi old basi (WO sudah berubah pasca-scan)
 		outcome = _apply_warehouse_changes(
-			wo.name, {"source_warehouse": (self.src_old, self.src_new)}, None
+			wo.name, {"source_warehouse": (self.src_old, self.src_new)}
 		)
 		self.assertIsNone(outcome["written"])
 		self.assertEqual(len(outcome["skipped"]), 1)
@@ -553,7 +508,7 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 
 	# -------------------------------- skenario 16: guard skip_transfer (wip)
 	def test_fu58_16_skip_transfer_wip_guarded_source_still_processed(self):
-		self._save_defaults(company=self.other_company)
+		self._save_defaults()
 		wo = self._make_wo(
 			bom=self.bom_ot, company=self.other_company, source=self.shared_a,
 			wip=self.shared_wip, fg=self.shared_fg, submit=True, skip_transfer=True,
@@ -561,7 +516,6 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		# validate native me-reset wip None pada WO skip_transfer
 		self.assertIsNone(self._header(wo.name).wip_warehouse)
 		self._save_defaults(
-			company=self.other_company,
 			source_warehouse=self.shared_b,
 			wip_warehouse=self.shared_wip,
 			fg_warehouse=self.shared_fg,
@@ -577,29 +531,11 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		self.assertEqual(self._header(wo.name).source_warehouse, self.shared_b)
 		self.assertEqual(self._rows(wo.name)[self.rm1], self.shared_b)
 
-	# --------------- skenario 17 (review FU58): gate company label rute papan
-	def test_fu58_17_board_warehouse_gate_by_company(self):
-		from production_app.api.handover import _board_company_gate
-
-		row_main = frappe._dict(company=self.company)
-		row_other = frappe._dict(company=self.other_company)
-		# setting company kosong = semua company (perilaku lama)
-		self.assertTrue(_board_company_gate(None, [row_main, row_other]))
-		# papan kosong: tidak ada konsumen yang bisa mismatch
-		self.assertTrue(_board_company_gate(self.other_company, []))
-		# papan satu company yang cocok dengan setting
-		self.assertTrue(_board_company_gate(self.other_company, [row_other, row_other]))
-		# lot company non-matching: label disembunyikan (dianggap belum diatur)
-		self.assertFalse(_board_company_gate(self.other_company, [row_main]))
-		# papan campur company: satu nilai board level tidak sah
-		self.assertFalse(_board_company_gate(self.other_company, [row_main, row_other]))
-
 	# ---------- skenario 18 (review FU58): preview dry_run jujur soal baris
 	def test_fu58_18_dry_run_rows_only_via_source_change(self):
 		# header source sudah == default; hanya fg yang beda -> WO masuk
 		# rencana TANPA perubahan source_warehouse
 		self._save_defaults(
-			company=self.other_company,
 			source_warehouse=self.shared_b,
 			fg_warehouse=self.shared_fg,
 		)
@@ -626,25 +562,22 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 
 
 class TestSettingsFieldsSelfHeal(IntegrationTestCase):
-	"""FU60 — regresi insiden produksi 22 Sep: update kode tanpa migrate
-	meninggalkan field settings tak terpasang; bacaan kini harus memasangnya
-	kembali sendiri (self-heal), bukan melempar UnknownFieldError."""
+	"""FU60/FU61 — regresi insiden produksi 22 Sep: update kode tanpa migrate
+	meninggalkan field settings tak terpasang; bacaan kini harus konvergen
+	sendiri — memasang yang kurang DAN memensiunkan field company FU61."""
 
-	def test_warehouse_defaults_self_heals_missing_company_field(self):
-		field = frappe.db.get_value(
+	def test_warehouse_defaults_converges_fields(self):
+		# (a) field paket hilang -> dipasang ulang oleh bacaan
+		target = frappe.db.get_value(
 			"Custom Field",
-			{"dt": "Manufacturing Settings", "fieldname": "custom_default_company"},
+			{"dt": "Manufacturing Settings", "fieldname": "custom_default_form_order_target_warehouse"},
 			"name",
 		)
-		self.assertTrue(field, "precondition: field terpasang oleh migrate")
-		company_value = frappe.db.get_single_value(
-			"Manufacturing Settings", "custom_default_company"
-		)
-		# nilai singleton di tabSingles TIDAK ikut terhapus bersama Custom Field
-		frappe.delete_doc("Custom Field", field, force=True)
+		self.assertTrue(target, "precondition: field terpasang oleh migrate")
+		frappe.delete_doc("Custom Field", target, force=True)
 		frappe.clear_cache(doctype="Manufacturing Settings")
 		self.assertFalse(
-			frappe.get_meta("Manufacturing Settings").get_field("custom_default_company")
+			frappe.get_meta("Manufacturing Settings").get_field("custom_default_form_order_target_warehouse")
 		)
 
 		values = warehouse_defaults()  # dulu: UnknownFieldError 500
@@ -652,9 +585,29 @@ class TestSettingsFieldsSelfHeal(IntegrationTestCase):
 		self.assertTrue(
 			frappe.db.get_value(
 				"Custom Field",
+				{"dt": "Manufacturing Settings", "fieldname": "custom_default_form_order_target_warehouse"},
+				"name",
+			),
+			"field harus terpasang ulang oleh konvergensi",
+		)
+		# (b) field company FU61 yang masih ada -> dipensiunkan oleh bacaan
+		frappe.get_doc({
+			"doctype": "Custom Field",
+			"dt": "Manufacturing Settings",
+			"fieldname": "custom_default_company",
+			"label": "Default Company (Production App)",
+			"fieldtype": "Link",
+			"options": "Company",
+			"insert_after": "custom_default_form_order_target_warehouse",
+		}).insert(ignore_permissions=True)
+		frappe.clear_cache(doctype="Manufacturing Settings")
+		warehouse_defaults()
+		self.assertFalse(
+			frappe.db.get_value(
+				"Custom Field",
 				{"dt": "Manufacturing Settings", "fieldname": "custom_default_company"},
 				"name",
 			),
-			"field harus terpasang ulang oleh self-heal",
+			"field company FU61 harus terpensiunkan",
 		)
-		self.assertEqual(values.get("company"), company_value or None)
+		self.assertNotIn("company", values)
