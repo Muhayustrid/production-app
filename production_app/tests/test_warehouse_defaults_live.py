@@ -623,3 +623,38 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		self.assertEqual(entry["rows_updated"], 0)
 		self.assertEqual(self._header(wo.name).fg_warehouse, self.shared_fg)
 		self.assertIsNone(self._rows(wo.name)[self.rm1])  # baris kosong tidak disentuh
+
+
+class TestSettingsFieldsSelfHeal(IntegrationTestCase):
+	"""FU60 — regresi insiden produksi 22 Sep: update kode tanpa migrate
+	meninggalkan field settings tak terpasang; bacaan kini harus memasangnya
+	kembali sendiri (self-heal), bukan melempar UnknownFieldError."""
+
+	def test_warehouse_defaults_self_heals_missing_company_field(self):
+		field = frappe.db.get_value(
+			"Custom Field",
+			{"dt": "Manufacturing Settings", "fieldname": "custom_default_company"},
+			"name",
+		)
+		self.assertTrue(field, "precondition: field terpasang oleh migrate")
+		company_value = frappe.db.get_single_value(
+			"Manufacturing Settings", "custom_default_company"
+		)
+		# nilai singleton di tabSingles TIDAK ikut terhapus bersama Custom Field
+		frappe.delete_doc("Custom Field", field, force=True)
+		frappe.clear_cache(doctype="Manufacturing Settings")
+		self.assertFalse(
+			frappe.get_meta("Manufacturing Settings").get_field("custom_default_company")
+		)
+
+		values = warehouse_defaults()  # dulu: UnknownFieldError 500
+
+		self.assertTrue(
+			frappe.db.get_value(
+				"Custom Field",
+				{"dt": "Manufacturing Settings", "fieldname": "custom_default_company"},
+				"name",
+			),
+			"field harus terpasang ulang oleh self-heal",
+		)
+		self.assertEqual(values.get("company"), company_value or None)

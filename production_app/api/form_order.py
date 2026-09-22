@@ -147,9 +147,11 @@ def _warehouses_or_throw():
 	Gudang asal tanpa company (shared) tetap lolos — mirror
 	validate_warehouse_company native yang hanya menolak gudang ber-company
 	berbeda."""
+	# FU60: _default_company() dulu — self-heal pemasangan field settings
+	# sebelum baris di bawah membacanya (ops update-kode-tanpa-migrate).
+	setting_company = _default_company()
 	source = frappe.db.get_single_value("Manufacturing Settings", FORM_ORDER_SOURCE_FIELD)
 	target = frappe.db.get_single_value("Manufacturing Settings", FORM_ORDER_TARGET_FIELD)
-	setting_company = _default_company()
 	if source and setting_company:
 		wh_company = frappe.db.get_value("Warehouse", source, "company")
 		if wh_company and wh_company != setting_company:

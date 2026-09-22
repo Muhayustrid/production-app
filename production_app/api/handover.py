@@ -312,6 +312,10 @@ def _wo_lot_rows(wo_names=None):
 				"batch": None,
 				"batchless": False,
 				"work_order": w.name,
+				# FU60: WAJIB ikut — gate company FU58 (_pool_warehouse dst.)
+				# membaca lot_row.company; tanpa ini selalu None dan setiap
+				# setting company non-kosong mematikan pool override.
+				"company": w.company,
 				"item_code": w.production_item,
 				"production_item": w.production_item,  # consumed by _enrich_units
 				"custom_uom": None,

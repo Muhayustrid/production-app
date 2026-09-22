@@ -328,7 +328,9 @@ def ensure_warehouse_default_fields():
 			"insert_after": anchor,
 			**spec,
 		})
-		doc.insert()
+		# FU60: dipanggil juga dari jalur web oleh operator (self-heal tanpa
+		# migrate) — insert Custom Field butuh role System Manager.
+		doc.insert(ignore_permissions=True)
 		anchor = spec["fieldname"]
 		out.append(f"{spec['fieldname']}: created")
 	if out:
