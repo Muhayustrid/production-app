@@ -534,7 +534,6 @@ textarea.input { height: auto; padding: 8px 10px; }
   cursor: pointer;
 }
 .linkbtn:hover { text-decoration: underline; }
-.filter-actions { align-items: center; padding-top: 4px; }
 .filter-clear { margin-top: 12px; color: var(--bad-ink); }
 .pagination-bar {
   display: flex;

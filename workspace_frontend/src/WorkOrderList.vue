@@ -102,12 +102,6 @@ function clearFilters() {
   filterOpen.value = false
   reload()
 }
-function allDates() { fFrom.value = ''; fTo.value = ''; scheduleReload() }
-function todayISO() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-function today() { fFrom.value = todayISO(); fTo.value = todayISO(); scheduleReload() }
 function goPage(page) { listState.page = page; loadList({ ...filterPayload(), start: (page - 1) * pageSize.value, pageLen: pageSize.value }) }
 const filtered = computed(() => workOrders
   .filter(w => fProduct.value === 'all' || w.itemCode === fProduct.value)
@@ -224,10 +218,6 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
             <label>Jadwal s.d.</label>
             <input v-model="fTo" class="input" type="date" />
           </div>
-        </div>
-        <div class="frow2 filter-actions">
-          <button class="linkbtn" type="button" @click="today">Hari ini</button>
-          <button class="linkbtn" type="button" @click="allDates">Semua tanggal</button>
         </div>
         <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
         </div>

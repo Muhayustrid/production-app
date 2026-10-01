@@ -140,10 +140,6 @@ function doneCard(r) {
 // stopped TANPA SE tetap terlihat di Request Gudang (kartu mati).
 
 // Filter only Cold Storage lots; work queues remain visible regardless of date.
-const todayISO = () => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 const lotFrom = ref('')
 const lotTo = ref('')
 const lotFilterOpen = ref(false)
@@ -190,14 +186,10 @@ watch([seStatus, seItem, seFrom, seTo], () => saveHandoverPreferences())
 watch(searchQ, () => { coldPage.value = 1 })
 // panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
 watch(lotFilterOpen, () => saveHandoverPreferences())
-function lotToday() { lotFrom.value = todayISO(); lotTo.value = todayISO() }
-function lotAllDates() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
 function lotReset() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
 
 // FU50: aksi cepat filter tabel (pola halaman WO — panel tetap terbuka)
 const seFilter = () => ({ status: seStatus.value, item: seItem.value, from: seFrom.value, to: seTo.value })
-const seToday = () => { seFrom.value = todayISO(); seTo.value = todayISO() }
-const seAllDates = () => { seFrom.value = ''; seTo.value = '' }
 const seReset = () => { seStatus.value = 'all'; seItem.value = 'all'; seFrom.value = ''; seTo.value = '' }
 const itemOptions = computed(() => distinctItems(handoverRequests))
 // opsi item tersimpan bisa basi (item tak lagi ada di papan) — tetap
@@ -409,10 +401,6 @@ onMounted(() => {
                 <input v-model="seTo" class="input" type="date" />
               </div>
             </div>
-            <div class="frow2 filter-actions">
-              <button class="linkbtn" type="button" @click="seToday">Hari ini</button>
-              <button class="linkbtn" type="button" @click="seAllDates">Semua tanggal</button>
-            </div>
             <button class="linkbtn filter-clear" type="button" @click="seReset">Hapus semua filter</button>
           </template>
           <template v-else>
@@ -425,10 +413,6 @@ onMounted(() => {
                 <label>Lot masuk s.d.</label>
                 <input v-model="lotTo" class="input" type="date" />
               </div>
-            </div>
-            <div class="frow2 filter-actions">
-              <button class="linkbtn" type="button" @click="lotToday">Hari ini</button>
-              <button class="linkbtn" type="button" @click="lotAllDates">Semua tanggal</button>
             </div>
             <button class="linkbtn filter-clear" type="button" @click="lotReset">Hapus semua filter</button>
           </template>
