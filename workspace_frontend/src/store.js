@@ -317,18 +317,20 @@ export const dashboardState = reactive({ summary: null, rows: [], total: 0, load
 // masuk preferensi tersimpan); from/to membatasi kartu "Selesai hari ini"
 export const pendingStageFilter = reactive({ stage: '', company: '', from: '', to: '' })
 
-export async function loadDashboard(company = '') {
+export async function loadDashboard(company = '', range = null) {
   dashboardState.loading = true
   dashboardState.error = ''
   uiTopLoading.active = true
   try {
+    // FU76: rentang {preset, dari?, sampai?} — server yang me-resolve preset
+    // (hari ini default); tanpa range = perilaku lama (hari ini)
     const summary = await call('production_app.api.dashboard.dashboard_summary',
-      company ? { company } : {})
+      { company: company || null, ...(range || {}) })
     dashboardState.summary = summary
-    // tanggal server-otoritatif untuk tabel WO hari ini (endpoint existing)
+    // tanggal resolved server untuk tabel WO dalam rentang (endpoint existing)
     const result = await call('production_app.api.work_order.wo_list', {
-      start_date: summary.today,
-      end_date: summary.today,
+      start_date: summary.dari || summary.today,
+      end_date: summary.sampai || summary.today,
       stage: null,
       start: 0,
       page_len: 20,

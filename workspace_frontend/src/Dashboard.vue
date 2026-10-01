@@ -1,9 +1,10 @@
 <script setup>
-// FU73: Dashboard "Hari Ini" — rombak tampilan dengan PrimeVue 4 (komponen
-// diimpor LOKAL di sini, tidak register global). Urutan layar: head + company,
-// ringkasan 3 angka, papan 7 tahap, grid panel "Hasil per produk" +
-// "Perlu perhatian", tabel WO hari ini. Perilaku klik tahap/tabel/seret
-// konteks (pendingStageFilter) tetap seperti FU72.
+// FU73/FU76: Dashboard — rombak tampilan dengan PrimeVue 4 (komponen diimpor
+// LOKAL di sini, tidak register global). Urutan layar: head + filter rentang
+// + company, ringkasan 3 angka, papan 7 tahap, grid panel "Hasil per produk"
+// + "Perlu perhatian", panel "Penggunaan bahan baku" (FU74), tabel WO dalam
+// rentang (FU76: preset tanggal server-resolved + kustom). Perilaku klik
+// tahap/tabel/seret konteks (pendingStageFilter) tetap seperti FU72.
 import { computed, onMounted, ref } from 'vue'
 import { ChevronRight, SearchX } from 'lucide-vue-next'
 import Button from 'primevue/button'
@@ -16,8 +17,9 @@ import Tag from 'primevue/tag'
 import { dashboardState, loadDashboard, pendingStageFilter, STAGE_LABELS } from './store.js'
 import { fmtId } from './format.js'
 import {
-  STAGES, YIELD_LEGEND, attentionText, bahanHref, materialRowText, materialSummaryText,
-  outputTotalsText, variancePctText, woQtyText, yieldPctText, yieldSegments
+  STAGES, YIELD_LEGEND, RANGE_PRESETS, attentionText, bahanHref, materialRowText, materialSummaryText,
+  outputTotalsText, variancePctText, woQtyText, yieldPctText, yieldSegments,
+  rangeParams, rangeLabel, selesaiTileLabel
 } from './dashboard.js'
 
 const summary = computed(() => dashboardState.summary)
@@ -33,17 +35,46 @@ const companyOptions = computed(() => [
 ])
 const companyParam = () => (company.value === 'ALL' ? '' : company.value)
 
-const dateLabel = computed(() => {
-  const iso = summary.value?.today
-  const d = iso ? new Date(iso + 'T00:00:00') : new Date() // server-otoritatif bila ada
-  return d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+// FU76: filter rentang — preset di-resolve server; kustom memakai 2 input
+// tanggal dan reload menunggu isian valid (dari≤sampai, ≤366 hari)
+const preset = ref('hari_ini')
+const customDari = ref('')
+const customSampai = ref('')
+const rangeOptions = RANGE_PRESETS
+const rangeInvalid = computed(() =>
+  preset.value === 'kustom' && customDari.value && customSampai.value &&
+  customDari.value > customSampai.value
+)
+const rangeTooLong = computed(() => {
+  if (preset.value !== 'kustom' || !customDari.value || !customSampai.value) return false
+  const span = (new Date(customSampai.value) - new Date(customDari.value)) / 86400000
+  return span > 366
 })
+const rangeReady = computed(() =>
+  preset.value !== 'kustom' ||
+  (customDari.value && customSampai.value && !rangeInvalid.value && !rangeTooLong.value)
+)
+
+const dateLabel = computed(() =>
+  rangeLabel(summary.value?.preset, summary.value?.dari, summary.value?.sampai)
+)
 const outputText = computed(() => outputTotalsText(summary.value?.output_today))
 const adonanText = computed(() => {
   const a = summary.value?.adonan_terakhir
   return a ? fmtId(a) : '-'
 })
-const stageList = computed(() => STAGES.map((s) => ({ ...s, count: Number(summary.value?.stages?.[s.key]) || 0 })))
+const stageList = computed(() => STAGES.map((s) => ({
+  ...s,
+  count: Number(summary.value?.stages?.[s.key]) || 0,
+  // tile terakhir ikut rentang terpilih (server); label dinamis
+  label: s.key === 'selesai_hari_ini'
+    ? selesaiTileLabel(summary.value?.preset)
+    : s.label
+})))
+// judul tabel & tombol "tampilkan semua" mengikuti rentang
+const rangeScoped = computed(() => summary.value?.preset && summary.value.preset !== 'hari_ini')
+const tableTitle = computed(() => (rangeScoped.value ? 'Work Order dalam rentang' : 'Work Order hari ini'))
+const showAllLabel = computed(() => (rangeScoped.value ? 'Tampilkan semua WO dalam rentang' : 'Tampilkan semua WO hari ini'))
 // tabel hari ini dibatasi 20 baris server; bila total lebih besar, tawarkan
 // daftar lengkap — angka ringkasan dan isi tabel tidak saling menyangkal
 const rowsTruncated = computed(() => (dashboardState.total || 0) > dashboardState.rows.length)
@@ -67,25 +98,36 @@ const muUsed = computed(() => muRows.value.some((r) => (Number(r?.consumed) || 0
 const muOver = computed(() => muRows.value.filter((r) => !!r?.over))
 const muOverExtra = computed(() => Math.max(0, muOver.value.length - 3))
 
-function reload() { loadDashboard(companyParam()) }
+function reload() {
+  if (!rangeReady.value) return // kustom belum lengkap/valid — hint tampil
+  loadDashboard(companyParam(), rangeParams(preset.value, customDari.value, customSampai.value))
+}
 function onCompany() { reload() }
+function onPreset() {
+  // kustom menunggu kedua tanggal terisi (watch di bawah yang memuat);
+  // preset lain langsung memuat ulang
+  if (preset.value === 'kustom' && !(customDari.value && customSampai.value)) return
+  reload()
+}
+// FU76: isian tanggal kustom memuat saat lengkap & valid
+function onCustomDate() { if (preset.value === 'kustom') reload() }
 // klik kartu tahap membawa konteks dashboard ke daftar WO (review FU72):
-// company terpilih, dan kartu "Selesai hari ini" dibatasi tanggal server
+// company terpilih, dan kartu "Selesai" dibatasi rentang resolved server
 function openStage(stage) {
   pendingStageFilter.stage = stage.key
   pendingStageFilter.company = companyParam()
   if (stage.key === 'selesai_hari_ini') {
-    pendingStageFilter.from = summary.value?.today || ''
-    pendingStageFilter.to = pendingStageFilter.from
+    pendingStageFilter.from = summary.value?.dari || summary.value?.today || ''
+    pendingStageFilter.to = summary.value?.sampai || pendingStageFilter.from
   }
   window.location.hash = '#/wo'
 }
-// tabel hari ini terpotong 20 baris — satu-shot "WO hari ini" tanpa tahap
+// tabel terpotong 20 baris — satu-shot seluruh WO rentang tanpa tahap
 function openAllToday() {
   pendingStageFilter.stage = ''
   pendingStageFilter.company = companyParam()
-  pendingStageFilter.from = summary.value?.today || ''
-  pendingStageFilter.to = pendingStageFilter.from
+  pendingStageFilter.from = summary.value?.dari || summary.value?.today || ''
+  pendingStageFilter.to = summary.value?.sampai || pendingStageFilter.from
   window.location.hash = '#/wo'
 }
 function open(id) { window.location.hash = '#/wo/' + id }
@@ -97,9 +139,19 @@ onMounted(reload)
   <div class="page-head">
     <div class="ph-left">
       <h1>Dashboard</h1>
-      <p class="sub">Ringkasan produksi hari ini.</p>
+      <p class="sub">Ringkasan produksi.</p>
     </div>
     <div class="ph-right">
+      <Select
+        v-model="preset"
+        :options="rangeOptions"
+        optionLabel="label"
+        optionValue="key"
+        inputId="dash-range"
+        aria-label="Filter rentang tanggal"
+        class="ph-pselect"
+        @change="onPreset"
+      />
       <Select
         v-if="showCompany"
         v-model="company"
@@ -113,6 +165,26 @@ onMounted(reload)
       />
       <div class="ph-date">{{ dateLabel }}</div>
     </div>
+  </div>
+
+  <div v-if="preset === 'kustom'" class="dash-custom-range">
+    <div class="ffield">
+      <label for="dash-dari">Dari</label>
+      <input id="dash-dari" v-model="customDari" class="input" type="date" @change="onCustomDate" />
+    </div>
+    <div class="ffield">
+      <label for="dash-sampai">s.d.</label>
+      <input id="dash-sampai" v-model="customSampai" class="input" type="date" @change="onCustomDate" />
+    </div>
+    <p v-if="rangeInvalid" class="dash-range-hint" role="status">
+      Tanggal tidak valid: "dari" melebihi "sampai".
+    </p>
+    <p v-else-if="rangeTooLong" class="dash-range-hint" role="status">
+      Rentang maksimal 366 hari.
+    </p>
+    <p v-else-if="!(customDari && customSampai)" class="dash-range-hint" role="status">
+      Pilih tanggal awal dan akhir untuk memuat data.
+    </p>
   </div>
 
   <div v-if="dashboardState.error" class="callout bad dash-error" role="alert">
@@ -193,7 +265,7 @@ onMounted(reload)
             </li>
           </ul>
           <p v-else class="dash-none">Belum ada hasil post-packing hari ini</p>
-          <p class="dash-foot">Hanya WO hari ini dengan post-packing terkonfirmasi. Yield bisa di atas 100% (overproduksi ERPNext).</p>
+          <p class="dash-foot">Hanya WO dengan post-packing terkonfirmasi dalam rentang terpilih. Yield bisa di atas 100% (overproduksi ERPNext).</p>
         </div>
       </section>
 
@@ -260,7 +332,7 @@ onMounted(reload)
     </section>
 
     <section aria-label="Work Order hari ini">
-      <h2 class="dash-sec-title">Work Order hari ini</h2>
+      <h2 class="dash-sec-title">{{ tableTitle }}</h2>
       <div class="panel dash-tablewrap">
         <DataTable :value="dashboardState.rows" dataKey="id" class="dash-table" @row-click="(e) => open(e.data.id)">
           <Column field="id" header="WO" style="width: 150px">
@@ -305,13 +377,13 @@ onMounted(reload)
           <template #empty>
             <div class="empty-inset">
               <span class="eico"><SearchX :size="19" :stroke-width="1.8" /></span>
-              <p class="etitle">Belum ada WO hari ini</p>
+              <p class="etitle">{{ rangeScoped ? 'Belum ada WO dalam rentang ini' : 'Belum ada WO hari ini' }}</p>
             </div>
           </template>
         </DataTable>
       </div>
       <p v-if="rowsTruncated" class="dash-more">
-        <Button label="Tampilkan semua WO hari ini" size="small" severity="secondary" variant="outlined" @click="openAllToday" />
+        <Button :label="showAllLabel" size="small" severity="secondary" variant="outlined" @click="openAllToday" />
       </p>
     </section>
   </template>

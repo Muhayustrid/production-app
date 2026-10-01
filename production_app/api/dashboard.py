@@ -21,11 +21,20 @@
 # FU74 menambah `material_usage` — agregat pemakaian bahan hari ini dari
 # api/material_usage.aggregate; tanpa izin baca WO/SE → None (panel
 # disembunyikan frontend, pola FU65/FU73).
+#
+# FU76 menambah filter rentang: preset server-resolved (hari_ini default =
+# perilaku lama, kemarin, bulan_ini MTD, bulan_kemarin, tahun_ini, kustom)
+# atau dari+sampai eksplisit. Semua bagian tanggal-sensitif mengikuti
+# rentang; papan tahap 1-6 TETAP kondisi live (backlog terbuka semua
+# tanggal — jangan sembunyikan yang tertahan), hanya tile "selesai" yang
+# ikut rentang (label dinamis di frontend). Nama kunci lama dipertahankan
+# (wo_planned_today/output_today/adonan_terakhir) — bermakna "dalam
+# rentang terpilih", bukan hanya hari ini.
 
 from datetime import timedelta
 
 import frappe
-from frappe.utils import cint, flt, get_datetime, now_datetime, today
+from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, today
 
 from production_app.api.handover import (
 	ROLE_MANAJER_PRODUKSI,
@@ -64,6 +73,24 @@ STAGNANT_HOURS = 4
 # attention `suhu`; field OPSIONAL — kosong/0 tidak pernah dihitung.
 SUHU_ADONAN_MAX = 32.0
 
+# FU76: preset rentang dashboard + batas rentangnya (lebih longgar dari
+# halaman bahan 92 hari — preset "tahun ini" wajib muat; tetap dibatasi
+# sebagai pelindung beban query SE).
+PRESET_HARI_INI = "hari_ini"
+PRESET_KEMARIN = "kemarin"
+PRESET_BULAN_INI = "bulan_ini"
+PRESET_BULAN_KEMARIN = "bulan_kemarin"
+PRESET_TAHUN_INI = "tahun_ini"
+PRESET_KUSTOM = "kustom"
+DASHBOARD_PRESETS = (
+	PRESET_HARI_INI,
+	PRESET_KEMARIN,
+	PRESET_BULAN_INI,
+	PRESET_BULAN_KEMARIN,
+	PRESET_TAHUN_INI,
+)
+DASHBOARD_MAX_DAYS = 366
+
 # Kolom baris WO papan — satu sumber untuk _stages dan attention FU73
 # (custom field lewat get_list + .get(), bukan db.get_value berdaftar kolom
 # custom, pelajaran InvalidColumnName FU58).
@@ -81,9 +108,10 @@ WO_ROW_FIELDS = (
 )
 
 
-# Kolom baris WO hari ini — satu query untuk yield, reject_over, suhu, dan
-# hitungan WO direncanakan (review FU73 #2: jangan scan berulang per request).
-TODAY_WO_FIELDS = (
+# Kolom baris WO dalam rentang — satu query untuk yield, reject_over, suhu,
+# dan hitungan WO direncanakan (review FU73 #2: jangan scan berulang per
+# request); FU76: lingkup generalized hari ini → rentang.
+RANGE_WO_FIELDS = (
 	"name",
 	"production_item",
 	"item_name",
@@ -98,37 +126,87 @@ TODAY_WO_FIELDS = (
 )
 
 
+def _rentang_preset(preset, dari, sampai):
+	"""(dari, sampai, preset) resolved ISO dari preset FU76 atau tanggal
+	kustom; default hari ini = perilaku lama. Tanggal server yang
+	otoritatif — preset di-resolve di sini, bukan di jam browser user.
+	dari>sampai / span > DASHBOARD_MAX_DAYS / kustom tanpa tanggal /
+	preset tak dikenal → ValidationError (HTTP 417 konvensi app)."""
+	hari = getdate(today())
+	if not preset or preset == PRESET_HARI_INI:
+		return str(hari), str(hari), PRESET_HARI_INI
+	if preset == PRESET_KUSTOM:
+		if not dari or not sampai:
+			frappe.throw(
+				"Rentang kustom butuh tanggal awal dan akhir.", exc=frappe.ValidationError
+			)
+		tgl_dari, tgl_sampai = getdate(dari), getdate(sampai)
+	elif preset == PRESET_KEMARIN:
+		kemarin = add_days(hari, -1)
+		tgl_dari, tgl_sampai = kemarin, kemarin
+	elif preset == PRESET_BULAN_INI:
+		tgl_dari, tgl_sampai = hari.replace(day=1), hari
+	elif preset == PRESET_BULAN_KEMARIN:
+		akhir_lalu = add_days(hari.replace(day=1), -1)
+		tgl_dari, tgl_sampai = akhir_lalu.replace(day=1), akhir_lalu
+	elif preset == PRESET_TAHUN_INI:
+		tgl_dari, tgl_sampai = hari.replace(month=1, day=1), hari
+	else:
+		frappe.throw("Preset rentang tidak dikenal.", exc=frappe.ValidationError)
+	if tgl_dari > tgl_sampai:
+		frappe.throw(
+			"Tanggal awal (dari) tidak boleh setelah tanggal akhir (sampai).",
+			exc=frappe.ValidationError,
+		)
+	if (tgl_sampai - tgl_dari).days > DASHBOARD_MAX_DAYS:
+		frappe.throw(
+			f"Rentang tanggal maksimal {DASHBOARD_MAX_DAYS} hari.",
+			exc=frappe.ValidationError,
+		)
+	return str(tgl_dari), str(tgl_sampai), preset
+
+
 @frappe.whitelist()
-def dashboard_summary(company=None):
-	"""Ringkasan "Hari Ini" untuk dashboard SPA (FU72/FU73). Read-only; `company`
-	opsional mempersempit semua angka ke satu company. Kontrak shape dipatok
-	oleh frontend (tests/test_dashboard.py). Baris WO dan MR dibaca SEKALI per
-	request lalu dibagikan ke semua bagian (review FU73 #2)."""
+def dashboard_summary(company=None, preset=None, dari=None, sampai=None):
+	"""Ringkasan produksi untuk dashboard SPA (FU72/FU73/FU76). Read-only;
+	`company` opsional mempersempit ke satu company; `preset`+`dari`+`sampai`
+	FU76 memilih rentang (default hari ini = perilaku lama). Kontrak shape
+	dipatok frontend (tests/test_dashboard.py); kunci bernama *_today
+	(wo_planned_today/output_today/adonan_terakhir) bermakna "dalam rentang
+	terpilih" — nama lama dipertahankan demi shape stabil. Baris WO dan MR
+	dibaca SEKALI per request lalu dibagikan ke semua bagian (review FU73)."""
 	day = today()
+	dari, sampai, preset = _rentang_preset(preset, dari, sampai)
 	rows = _wo_rows(company, extra_fields=("modified", "item_name"))
-	today_rows = _wo_today_rows(day, company)
+	range_rows = _wo_range_rows(dari, sampai, company)
 	handover = _handover_mrs(company)
 	form_orders = _form_order_mrs(company)
-	planned, adonan = _wo_today(today_rows)
-	# FU74: agregat pemakaian bahan hari ini. Tanpa izin baca WO/SE → None:
-	# frontend menyembunyikan panelnya (degradasi jujur, pola FU65/FU73),
-	# endpoint tetap hidup — PermissionError sengaja TIDAK ditelan di dalam
-	# aggregate sendiri.
+	planned, adonan = _wo_today(range_rows)
+	# FU74: agregat pemakaian bahan per rentang. Tanpa izin baca WO/SE →
+	# None: frontend menyembunyikan panelnya (degradasi jujur, pola
+	# FU65/FU73), endpoint tetap hidup — PermissionError sengaja TIDAK
+	# ditelan di dalam aggregate sendiri. max_days ikut batas dashboard
+	# (preset "tahun ini" melebihi batas 92 hari halaman bahan).
 	try:
-		material_usage = aggregate(company=company, dari=day, sampai=day)
+		material_usage = aggregate(
+			company=company, dari=dari, sampai=sampai, max_days=DASHBOARD_MAX_DAYS
+		)
 	except frappe.PermissionError:
 		material_usage = None
 	return {
 		"today": day,
+		"dari": dari,
+		"sampai": sampai,
+		"preset": preset,
 		"companies": _companies(),
 		"wo_planned_today": planned,
-		"output_today": _output_today(day, company),
+		"output_today": _output_range(dari, sampai, company),
 		"adonan_terakhir": adonan,
-		"stages": _stages(day, company, rows),
+		"stages": _stages(dari, sampai, company, rows),
 		"handover_menunggu": len(handover),
 		"form_order_menunggu": len(form_orders),
-		"product_yield": _product_yield(today_rows),
-		"attention": _attention(rows, today_rows, handover, form_orders),
+		"product_yield": _product_yield(range_rows),
+		"attention": _attention(rows, range_rows, handover, form_orders),
 		"material_usage": material_usage,
 	}
 
@@ -182,7 +260,7 @@ def _operations_by_parent(parents):
 	return operations
 
 
-def _stages(day, company, rows):
+def _stages(dari, sampai, company, rows):
 	"""Papan tahap per derive_stage (satu sumber aturan stage, tidak digandakan).
 	`rows` = baris WO docstatus < 2 hasil _wo_rows (sudah permission-filtered).
 
@@ -191,9 +269,10 @@ def _stages(day, company, rows):
 	  tanggal (sama dengan aktif);
 	- submitted aktif (status bukan Completed/Stopped/Closed) → derive per
 	  baris dengan operasi preload sekali (hindari N+1);
-	- WO selesai HARI INI (Manufacture SE posting hari ini, docstatus 1) →
-	  masuk selesai_hari_ini hanya bila derive_stage == selesai. WO selesai
-	  sebelum hari ini tidak pernah tampil di papan.
+	- WO selesai DALAM RENTANG (FU76; Manufacture SE posting dari..sampai,
+	  docstatus 1) → masuk tile terakhir hanya bila derive_stage == selesai.
+	  Tile 1-6 tetap kondisi live semua tanggal — jangan sembunyikan
+	  yang tertahan hanya karena filter rentang aktif.
 
 	Skala: memindai seluruh WO terbuka tanpa batas — hitungan papan tidak
 	boleh terpotong; batasi dengan tanggal bila backlog membengkak."""
@@ -226,7 +305,7 @@ def _stages(day, company, rows):
 		if stage in counts:
 			counts[stage] += 1
 
-	for row in _finished_today_rows(day, company):
+	for row in _finished_range_rows(dari, sampai, company):
 		# derive memotong di cek qty selesai sebelum menyentuh operasi, jadi
 		# daftar operasi kosong cukup untuk pembandingan terhadap "selesai"
 		if derive_stage(row, []) == STAGE_SELESAI:
@@ -234,13 +313,14 @@ def _stages(day, company, rows):
 	return counts
 
 
-def _finished_today_rows(day, company):
-	"""WO yang Manufacture SE-nya posting hari ini (docstatus 1) — kandidat
-	selesai_hari_ini; dibaca permission-filtered, dibatasi company param."""
+def _finished_range_rows(dari, sampai, company):
+	"""WO yang Manufacture SE-nya posting dalam rentang (docstatus 1) —
+	kandidat tile "selesai" papan; permission-filtered, dibatasi company."""
 	se_filters = [
 		["purpose", "=", "Manufacture"],
 		["docstatus", "=", 1],
-		["posting_date", "=", day],
+		["posting_date", ">=", dari],
+		["posting_date", "<=", sampai],
 	]
 	if company:
 		se_filters.append(["company", "=", company])
@@ -282,8 +362,8 @@ def _finished_today_rows(day, company):
 		return []
 
 
-def _output_today(day, company):
-	"""Total hasil Manufacture hari ini per satuan tampil gudang. Qty SED
+def _output_range(dari, sampai, company):
+	"""Total hasil Manufacture dalam rentang per satuan tampil gudang. Qty SED
 	dijumlah per item dalam stock UOM (transfer_qty = qty stock), lalu tiap
 	item dikonversi server-side ke Default Inventory UOM — rantai item-level:
 	W21 (custom_default_inventory_unit_of_measure) → stock_uom. Link tengah
@@ -295,7 +375,8 @@ def _output_today(day, company):
 	se_filters = [
 		["purpose", "=", "Manufacture"],
 		["docstatus", "=", 1],
-		["posting_date", "=", day],
+		["posting_date", ">=", dari],
+		["posting_date", "<=", sampai],
 	]
 	if company:
 		se_filters.append(["company", "=", company])
@@ -408,22 +489,22 @@ def _form_order_mrs(company):
 
 # ------------------------------------------------------------ FU73 yield
 
-def _wo_today_rows(day, company):
-	"""WO hari ini (docstatus < 2 — draft ikut, cancelled tidak;
-	planned_start_date hari ini, lingkup sama dengan "WO hari ini") dengan
-	kolom gabungan TODAY_WO_FIELDS — satu query untuk yield, reject_over,
-	suhu, dan hitungan WO direncanakan; PermissionError → kosong (endpoint
-	tetap hidup, pola FU65)."""
+def _wo_range_rows(dari, sampai, company):
+	"""WO dalam rentang (docstatus < 2 — draft ikut, cancelled tidak;
+	planned_start_date dari..sampai 23:59:59) dengan kolom gabungan
+	RANGE_WO_FIELDS — satu query untuk yield, reject_over, suhu, dan
+	hitungan WO direncanakan; PermissionError → kosong (endpoint tetap
+	hidup, pola FU65)."""
 	filters = [
 		["docstatus", "<", 2],
-		["planned_start_date", ">=", day],
-		["planned_start_date", "<=", f"{day} 23:59:59"],
+		["planned_start_date", ">=", dari],
+		["planned_start_date", "<=", f"{sampai} 23:59:59"],
 	]
 	if company:
 		filters.append(["company", "=", company])
 	try:
 		return frappe.get_list(
-			"Work Order", filters=filters, fields=list(TODAY_WO_FIELDS), limit_page_length=0
+			"Work Order", filters=filters, fields=list(RANGE_WO_FIELDS), limit_page_length=0
 		)
 	except frappe.PermissionError:
 		return []

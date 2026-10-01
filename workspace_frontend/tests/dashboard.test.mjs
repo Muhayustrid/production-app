@@ -3,7 +3,8 @@ import test from 'node:test'
 
 import {
   STAGES, activeTotal, attentionText, bahanHref, durationText, materialCounts, materialRowText,
-  materialSummaryText, outputTotalsText, variancePctText, yieldPctText, yieldSegments
+  materialSummaryText, outputTotalsText, rangeParams, rangeLabel, selesaiTileLabel,
+  variancePctText, yieldPctText, yieldSegments
 } from '../src/dashboard.js'
 
 test('outputTotalsText menggabungkan total per satuan', () => {
@@ -201,4 +202,31 @@ test('bahanHref: hash bahan dengan query ter-encode', () => {
   assert.equal(bahanHref('TERIGU-01'), '#/bahan?bahan=TERIGU-01')
   assert.equal(bahanHref('Tepung Terigu'), '#/bahan?bahan=Tepung%20Terigu')
   assert.equal(bahanHref('Gula & Sirup'), '#/bahan?bahan=Gula%20%26%20Sirup')
+})
+
+// ============================== FU76: filter rentang dashboard ==============================
+test('rangeParams: preset dikenal diteruskan, tak dikenal → hari_ini, kustom bawa tanggal', () => {
+  assert.deepEqual(rangeParams('kemarin'), { preset: 'kemarin' })
+  assert.deepEqual(rangeParams('bulan_ini'), { preset: 'bulan_ini' })
+  assert.deepEqual(rangeParams('tidak_ada'), { preset: 'hari_ini' })
+  assert.deepEqual(rangeParams(undefined), { preset: 'hari_ini' })
+  assert.deepEqual(rangeParams('kustom', '2026-10-01', '2026-10-05'), {
+    preset: 'kustom', dari: '2026-10-01', sampai: '2026-10-05'
+  })
+  assert.deepEqual(rangeParams('kustom', '', ''), { preset: 'kustom', dari: '', sampai: '' })
+})
+
+test('rangeLabel: satu hari = nama hari lengkap, rentang sesuai bulan/tahun', () => {
+  assert.equal(rangeLabel('hari_ini', '2026-10-02', '2026-10-02'), 'Jumat, 2 Oktober 2026')
+  assert.equal(rangeLabel('bulan_ini', '2026-10-01', '2026-10-31'), '1 – 31 Oktober 2026')
+  assert.equal(rangeLabel('kustom', '2026-09-25', '2026-10-05'), '25 September – 5 Oktober 2026')
+  assert.equal(rangeLabel('kustom', '2025-12-30', '2026-01-02'), '30 Desember 2025 – 2 Januari 2026')
+  assert.equal(rangeLabel('kustom', '', ''), '')
+  assert.equal(rangeLabel('kemarin', 'bukan-tanggal', '2026-10-02'), '')
+})
+
+test('selesaiTileLabel: hari ini berlabel harian, rentang lain berlabel rentang', () => {
+  assert.equal(selesaiTileLabel('hari_ini'), 'Selesai hari ini')
+  assert.equal(selesaiTileLabel('kemarin'), 'Selesai dalam rentang')
+  assert.equal(selesaiTileLabel('kustom'), 'Selesai dalam rentang')
 })

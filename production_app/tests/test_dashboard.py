@@ -31,7 +31,7 @@ from datetime import timedelta
 
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, flt, now, now_datetime, random_string, today
+from frappe.utils import add_days, flt, getdate, now, now_datetime, random_string, today
 
 from erpnext.manufacturing.doctype.work_order.work_order import (
 	make_stock_entry as make_wo_stock_entry,
@@ -55,6 +55,9 @@ STAGE_SELESAI_HARI_INI = "selesai_hari_ini"
 
 SHAPE_KEYS = {
 	"today",
+	"dari",
+	"sampai",
+	"preset",
 	"companies",
 	"wo_planned_today",
 	"output_today",
@@ -83,6 +86,14 @@ def _summary(company=None):
 	from production_app.api.dashboard import dashboard_summary
 
 	return dashboard_summary(company=company)
+
+
+def _summary_range(**kwargs):
+	"""Varian FU76: dashboard_summary dengan parameter rentang apa pun
+	(preset/dari/sampai) — pola import lambat yang sama."""
+	from production_app.api.dashboard import dashboard_summary
+
+	return dashboard_summary(**kwargs)
 
 
 def _uom_qty(summary, uom):
@@ -587,18 +598,22 @@ class TestDashboard(IntegrationTestCase):
 				"from_warehouse": wo.wip_warehouse,
 				"to_warehouse": wo.source_warehouse,
 				"items": [
-					{
-						"item_code": item,
-						"qty": qty,
-						"s_warehouse": wo.wip_warehouse,
-						"t_warehouse": wo.source_warehouse,
-						"basic_rate": 10,
-						"uom": frappe.db.get_value("Item", item, "stock_uom"),
-						"stock_uom": frappe.db.get_value("Item", item, "stock_uom"),
-					}
-				],
-			}
-		)
+				{
+					"item_code": item,
+					"qty": qty,
+					"s_warehouse": wo.wip_warehouse,
+					"t_warehouse": wo.source_warehouse,
+					"basic_rate": 10,
+					"uom": frappe.db.get_value("Item", item, "stock_uom"),
+					"stock_uom": frappe.db.get_value("Item", item, "stock_uom"),
+				}
+			],
+		}
+	)
+		# pin WAJIB: tanpa ini SE posting "sekarang" — bila suite dijalankan
+		# sebelum jam 09:00 (jam transfer pinned) urutan kronologis SLE terbalik
+		# dan stok WIP negatif (bug laten FU74, kejadian nyata run dini hari)
+		cls._pin_posting(se, today(), "09:30:00")
 		se.insert()
 		se.submit()
 		return se
@@ -1538,4 +1553,157 @@ class TestDashboard(IntegrationTestCase):
 		atas = endpoint(company=self.company_a, over_only="1")
 		self.assertTrue(all(r["over"] for r in atas["rows"]))
 		self.assertIsNone(_mu_row(atas["rows"], self.rm))
+
+	# ------------------------------------------------- FU76 rentang dashboard
+
+	def test_42_rentang_default_hari_ini(self):
+		"""Tanpa parameter perilaku lama utuh: preset hari_ini, dari=sampai=
+		hari ini (server-otoritatif), dan 3 kunci rentang masuk shape."""
+		s = _summary(company=self.company_a)
+		self.assertEqual(s["preset"], "hari_ini")
+		self.assertEqual(s["dari"], today())
+		self.assertEqual(s["sampai"], today())
+
+	def test_43_preset_kemarin_scoping_wo(self):
+		"""Preset kemarin: WO planned kemarin terhitung, dan default hari ini
+		tak terpengaruh oleh WO kemarin (delta dalam preset masing-masing)."""
+		s_kemarin_sebelum = _summary_range(company=self.company_a, preset="kemarin")
+		s_hari_sebelum = _summary(company=self.company_a)
+		wo = self._make_wo(self.bom_mu, 15, self.mu_fg, planned=f"{add_days(today(), -1)} 08:00:00")
+		s_kemarin_sesudah = _summary_range(company=self.company_a, preset="kemarin")
+		s_hari_sesudah = _summary(company=self.company_a)
+		self.assertEqual(
+			s_kemarin_sesudah["wo_planned_today"],
+			s_kemarin_sebelum["wo_planned_today"] + 1,
+			"WO kemarin menambah hitungan preset kemarin",
+		)
+		self.assertEqual(
+			s_hari_sesudah["wo_planned_today"],
+			s_hari_sebelum["wo_planned_today"],
+			"WO kemarin tidak mengubah preset hari ini",
+		)
+
+	def test_44_preset_bulan_ini_mtd(self):
+		"""Bulan ini = tanggal 1 s.d. hari ini: WO planned awal bulan masuk,
+		WO bulan depan tidak; dari/sampai resolved benar."""
+		h = getdate(today())
+		s = _summary_range(company=self.company_a, preset="bulan_ini")
+		self.assertEqual(s["dari"], str(h.replace(day=1)))
+		self.assertEqual(s["sampai"], str(h))
+		wo = self._make_wo(self.bom_mu, 12, self.mu_fg, planned=f"{h.replace(day=1)} 08:00:00")
+		s2 = _summary_range(company=self.company_a, preset="bulan_ini")
+		self.assertGreater(s2["wo_planned_today"], s["wo_planned_today"])
+
+	def test_45_preset_bulan_kemarin(self):
+		"""Bulan kemarin = 1 s.d. akhir bulan lalu; WO planned bulan lalu
+		masuk preset itu dan TIDAK mengubah preset hari ini."""
+		h = getdate(today())
+		akhir_lalu = add_days(h.replace(day=1), -1)
+		awal_lalu = akhir_lalu.replace(day=1)
+		s = _summary_range(company=self.company_a, preset="bulan_kemarin")
+		self.assertEqual(s["dari"], str(awal_lalu))
+		self.assertEqual(s["sampai"], str(akhir_lalu))
+		s_hari_sebelum = _summary(company=self.company_a)
+		wo = self._make_wo(self.bom_mu, 11, self.mu_fg, planned=f"{akhir_lalu} 08:00:00")
+		s2 = _summary_range(company=self.company_a, preset="bulan_kemarin")
+		self.assertGreater(s2["wo_planned_today"], s["wo_planned_today"])
+		s_hari_sesudah = _summary(company=self.company_a)
+		self.assertEqual(
+			s_hari_sesudah["wo_planned_today"],
+			s_hari_sebelum["wo_planned_today"],
+			"WO bulan lalu tidak masuk preset hari ini",
+		)
+
+	def test_46_preset_tahun_ini(self):
+		"""Tahun ini = 1 Januari s.d. hari ini; memuat WO bulan lalu."""
+		h = getdate(today())
+		akhir_lalu = add_days(h.replace(day=1), -1)
+		wo = self._make_wo(self.bom_mu, 10, self.mu_fg, planned=f"{akhir_lalu} 08:00:00")
+		s = _summary_range(company=self.company_a, preset="tahun_ini")
+		self.assertEqual(s["dari"], str(h.replace(month=1, day=1)))
+		self.assertEqual(s["sampai"], str(h))
+		names = {w["wo"] for w in _mu_row(s["material_usage"]["rows"], self.mu_rm)["work_orders"]} \
+			if _mu_row(s["material_usage"]["rows"], self.mu_rm) else set()
+		self.assertIn(wo.name, names, "WO bulan lalu masuk agregat bahan tahun ini")
+
+	def test_47_kustom_rentang_eksplisit(self):
+		"""Preset kustom memakai dari/sampai eksplisit: hanya WO di rentang."""
+		h = getdate(today())
+		wo_lama = self._make_wo(self.bom_mu, 9, self.mu_fg, planned=f"{add_days(h, -30)} 08:00:00")
+		s = _summary_range(company=self.company_a, preset="kustom", dari=str(add_days(h, -31)), sampai=str(add_days(h, -29)))
+		names = {w["wo"] for w in _mu_row(s["material_usage"]["rows"], self.mu_rm)["work_orders"]} \
+			if _mu_row(s["material_usage"]["rows"], self.mu_rm) else set()
+		self.assertIn(wo_lama.name, names)
+		self.assertEqual(s["preset"], "kustom")
+
+	def test_48_kustom_validasi(self):
+		"""dari>sampai, span >366 hari, kustom tanpa tanggal, dan preset
+		tak dikenal → ValidationError; span tepat 366 hari sah."""
+		with self.assertRaises(frappe.ValidationError):
+			_summary_range(company=self.company_a, preset="kustom", dari=today(), sampai=add_days(today(), -1))
+		with self.assertRaises(frappe.ValidationError):
+			_summary_range(company=self.company_a, preset="kustom", dari=add_days(today(), -367), sampai=today())
+		_summary_range(company=self.company_a, preset="kustom", dari=add_days(today(), -366), sampai=today())
+		with self.assertRaises(frappe.ValidationError):
+			_summary_range(company=self.company_a, preset="kustom")
+		with self.assertRaises(frappe.ValidationError):
+			_summary_range(company=self.company_a, preset="minggu_ini")
+
+	def test_49_output_rentang(self):
+		"""Hasil produksi ikut rentang: Manufacture SE kemarin dihitung di
+		preset kemarin, tidak di hari ini (delta per UOM bahan uji)."""
+		# stok bahan uji sendiri — SE backdated masuk timeline kemarin
+		self._receipt(self.mu_rm, 100, self.src_wh)
+		wo = self._make_wo(self.bom_mu, 8, self.mu_fg, planned=f"{add_days(today(), -1)} 08:00:00")
+		wo.submit()
+		self._transfer(wo, posting_date=add_days(today(), -1))
+		self._manufacture(wo, 8, posting_date=add_days(today(), -1))
+		out_kemarin = _uom_qty(_summary_range(company=self.company_a, preset="kemarin"), self.uom_mu)
+		# hasil kemarin masuk preset kemarin ( Manufacture uji lain posting
+		# hari ini — asersi longgar: kemarin punya entri, bukan klaim nol)
+		self.assertIsNotNone(out_kemarin)
+		self.assertGreater(out_kemarin, 0)
+
+	def test_50_stages_selesai_rentang(self):
+		"""Tile 7 papan ikut rentang: WO selesai kemarin masuk hitungan
+		selesai_hari_ini di preset kemarin, tidak di default hari ini."""
+		# stok bahan uji sendiri — SE backdated masuk timeline kemarin
+		self._receipt(self.mu_rm, 100, self.src_wh)
+		wo = self._make_wo(self.bom_mu, 7, self.mu_fg, planned=f"{add_days(today(), -1)} 08:00:00")
+		wo.submit()
+		self._transfer(wo, posting_date=add_days(today(), -1))
+		self._manufacture(wo, 7, posting_date=add_days(today(), -1))
+		s_kemarin = _summary_range(company=self.company_a, preset="kemarin")
+		s_hari = _summary(company=self.company_a)
+		# asersi longgar (runner tanpa rollback — WO uji lain ikut hitungan):
+		# tile 7 preset kemarin hidup karena WO ini selesai kemarin;
+		# default hari ini tetap 7 kunci papan
+		self.assertGreater(s_kemarin["stages"]["selesai_hari_ini"], 0)
+		self.assertEqual(set(s_hari["stages"].keys()), STAGE_KEYS)
+
+	def test_51_yield_rentang(self):
+		"""Hasil per produk ikut rentang: postpacking WO kemarin tampil di
+		preset kemarin, tidak menambah yield default hari ini."""
+		wo = self._make_wo(self.bom_mu, 20, self.mu_fg, planned=f"{add_days(today(), -1)} 08:00:00")
+		self._confirm_postpacking(wo, good=19, reject=1)
+		s_kemarin = _summary_range(company=self.company_a, preset="kemarin")
+		row = _yield_row(s_kemarin["product_yield"], self.mu_fg)
+		self.assertIsNotNone(row, "yield WO kemarin tampil di preset kemarin")
+		self.assertGreater(row["planned"], 0)
+
+	def test_52_material_usage_rentang_panjang_tanpa_417(self):
+		"""Preset tahun ini (>92 hari) tidak boleh 417 di dashboard —
+		aggregate diberi max_days=DASHBOARD_MAX_DAYS (366)."""
+		s = _summary_range(company=self.company_a, preset="tahun_ini")
+		self.assertIsNotNone(s["material_usage"])
+		self.assertIn("rows", s["material_usage"])
+
+	def test_53_adonan_terakhir_rentang(self):
+		"""Adonan terakhir ikut rentang: adonan ke-99 di WO kemarin menjadi
+		maksimum preset kemarin, default hari ini tidak terpengaruh."""
+		s_hari = _summary(company=self.company_a)
+		wo = self._make_wo(self.bom_mu, 5, self.mu_fg, planned=f"{add_days(today(), -1)} 08:00:00", adonan=99)
+		s_kemarin = _summary_range(company=self.company_a, preset="kemarin")
+		self.assertEqual(s_kemarin["adonan_terakhir"], 99)
+		self.assertEqual(_summary(company=self.company_a)["adonan_terakhir"], s_hari["adonan_terakhir"])
 

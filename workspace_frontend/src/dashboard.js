@@ -175,3 +175,54 @@ export function variancePctText(row) {
 export function bahanHref(itemCode) {
   return '#/bahan?bahan=' + encodeURIComponent(itemCode)
 }
+
+// ============================================================================
+// FU76: filter rentang tanggal dashboard — preset di-resolve SERVER
+// (tanggal server otoritatif); frontend hanya mengirim preset/dari/sampai.
+
+export const RANGE_PRESETS = [
+  { key: 'hari_ini', label: 'Hari ini' },
+  { key: 'kemarin', label: 'Kemarin' },
+  { key: 'bulan_ini', label: 'Bulan ini' },
+  { key: 'bulan_kemarin', label: 'Bulan kemarin' },
+  { key: 'tahun_ini', label: 'Tahun ini' },
+  { key: 'kustom', label: 'Kustom' }
+]
+
+// payload rentang utk dashboard_summary: preset selalu dikirim; tanggal
+// hanya utk kustom (server menolak kustom tanpa keduanya)
+export function rangeParams(preset, dari, sampai) {
+  const p = RANGE_PRESETS.some((r) => r.key === preset) ? preset : 'hari_ini'
+  if (p !== 'kustom') return { preset: p }
+  return { preset: p, dari: dari || '', sampai: sampai || '' }
+}
+
+// label rentang di page-head: satu hari → nama hari lengkap; rentang →
+// "1 – 31 Oktober 2026" / "1 Sep – 31 Okt 2026" / lintas tahun lengkap
+export function rangeLabel(preset, dari, sampai) {
+  if (!dari || !sampai) return ''
+  if (dari === sampai) {
+    const d = new Date(dari + 'T00:00:00')
+    return isNaN(d) ? '' : d.toLocaleDateString('id-ID', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    })
+  }
+  const a = new Date(dari + 'T00:00:00')
+  const b = new Date(sampai + 'T00:00:00')
+  if (isNaN(a) || isNaN(b)) return ''
+  const sameMonth = a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()
+  const sameYear = a.getFullYear() === b.getFullYear()
+  if (sameMonth) {
+    return `${a.getDate()} – ${b.getDate()} ${b.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`
+  }
+  if (sameYear) {
+    return `${a.getDate()} ${a.toLocaleDateString('id-ID', { month: 'long' })} – ${b.getDate()} ${b.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`
+  }
+  return `${a.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })} – ${b.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`
+}
+
+// label tile terakhir papan: ikut preset (server menghitung selesai dalam
+// rentang); hari ini tetap berlabel harian
+export function selesaiTileLabel(preset) {
+  return preset === 'hari_ini' ? 'Selesai hari ini' : 'Selesai dalam rentang'
+}

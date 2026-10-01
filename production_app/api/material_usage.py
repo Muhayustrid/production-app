@@ -74,10 +74,13 @@ def _companies():
 		return []
 
 
-def _validasi_rentang(dari, sampai):
+def _validasi_rentang(dari, sampai, max_days=None):
 	"""(dari, sampai) sebagai string ISO ter-validasi; default keduanya hari
-	ini. Tanggal rusak, terbalik, atau span > MAX_RANGE_DAYS → ValidationError
-	(HTTP 417 konvensi app) — jangan diam-diam memotong rentang."""
+	ini. Tanggal rusak, terbalik, atau span > batas → ValidationError (HTTP
+	417 konvensi app) — jangan diam-diam memotong rentang. `max_days`
+	menimpa batas default MAX_RANGE_DAYS (dashboard FU76 memakai 366 agar
+	preset "tahun ini" muat; halaman bahan tetap 92)."""
+	batas = MAX_RANGE_DAYS if max_days is None else cint(max_days)
 	try:
 		tgl_dari = getdate(dari or today())
 		tgl_sampai = getdate(sampai or today())
@@ -90,9 +93,9 @@ def _validasi_rentang(dari, sampai):
 			"Tanggal awal (dari) tidak boleh setelah tanggal akhir (sampai).",
 			exc=frappe.ValidationError,
 		)
-	if (tgl_sampai - tgl_dari).days > MAX_RANGE_DAYS:
+	if (tgl_sampai - tgl_dari).days > batas:
 		frappe.throw(
-			f"Rentang tanggal maksimal {MAX_RANGE_DAYS} hari.",
+			f"Rentang tanggal maksimal {batas} hari.",
 			exc=frappe.ValidationError,
 		)
 	return str(tgl_dari), str(tgl_sampai)
@@ -105,13 +108,15 @@ def _kunci_varian(pct, nama):
 
 
 def aggregate(
-	company=None, dari=None, sampai=None, production_item=None, search=None, over_only=False
+	company=None, dari=None, sampai=None, production_item=None, search=None, over_only=False,
+	max_days=None,
 ):
 	"""Inti FU74 — lihat docstring modul untuk semantik angka. WO scope:
 	docstatus < 2, planned_start_date dalam [dari, sampai 23:59:59], company
 	opsional (get_list, User Permission otomatis); production_item & search
-	& over_only meneruskan hasil agregasi (bukan query)."""
-	dari, sampai = _validasi_rentang(dari, sampai)
+	& over_only meneruskan hasil agregasi (bukan query). `max_days` (FU76)
+	menimpa batas rentang default 92 hari — dashboard memakai 366."""
+	dari, sampai = _validasi_rentang(dari, sampai, max_days)
 
 	filters = [
 		["docstatus", "<", 2],

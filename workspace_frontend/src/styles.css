@@ -2565,3 +2565,22 @@ textarea.input { height: auto; padding: 8px 10px; }
 @media (prefers-reduced-motion: reduce) {
   .dash-mu-row { transition: none; }
 }
+
+/* ============================== FU76: filter rentang dashboard ========= */
+.ph-right { flex-wrap: wrap; }
+.dash-custom-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin: 0 0 14px;
+}
+.dash-custom-range .ffield { display: flex; flex-direction: column; gap: 4px; }
+.dash-custom-range .ffield label { font-size: 12px; color: var(--muted); }
+.dash-custom-range .input { width: auto; }
+.dash-range-hint { margin: 0; width: 100%; font-size: 12.5px; color: var(--bad-ink); }
+
+@media (max-width: 620px) {
+  .dash-custom-range { gap: 10px; }
+  .dash-custom-range .ffield { flex: 1 1 46%; }
+}
