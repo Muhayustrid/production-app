@@ -40,3 +40,93 @@ export function woQtyText(qty, units) {
   const approx = Math.abs(value - Math.round(value)) > 1e-9
   return { main: `${approx ? '≈ ' : ''}${fmtId(value)} ${displayUom}`, sub: `${fmtId(qty)} ${stock}`.trim() }
 }
+
+// ============================================================================
+// FU73: panel "Hasil per produk" + "Perlu perhatian" — helper murni teruji.
+// ============================================================================
+
+// warna segmen meter (fill bar di atas permukaan putih, kontras >= 3:1
+// menurut cek WCAG: Good 5,79 · Reject 4,24 · Trial 3,25 · Sisa 3,44)
+export const YIELD_LEGEND = [
+  { key: 'good', label: 'Good', color: 'var(--brand)' },
+  { key: 'reject', label: 'Reject', color: '#c9583f' },
+  { key: 'trial', label: 'Trial', color: '#b8860b' },
+  { key: 'sisa', label: 'Sisa', color: '#7e8c99' }
+]
+
+// baris produk → segmen MeterGroup: persentase terhadap rencana, segmen 0
+// dibuang; max = max(100, total) supaya overproduksi tidak meluber track
+export function yieldSegments(row) {
+  const planned = Number(row?.planned) || 0
+  const segments = YIELD_LEGEND
+    .map((m) => ({
+      label: m.label,
+      color: m.color,
+      value: planned > 0 ? Math.round(((Number(row?.[m.key]) || 0) / planned) * 1000) / 10 : 0
+    }))
+    .filter((s) => s.value > 0)
+  const sum = segments.reduce((t, s) => t + s.value, 0)
+  return { segments, max: Math.max(100, sum) }
+}
+
+// menit → "45 menit" / "3 jam" / "5 jam 20 menit"; 0 → "0 menit";
+// null/undefined/tak-valid → "" (pemanggil menyembunyikan bagian tsb)
+export function durationText(minutes) {
+  if (minutes == null || minutes === '') return ''
+  const n = Number(minutes)
+  if (!Number.isFinite(n)) return ''
+  const m = Math.max(0, Math.round(n))
+  if (m < 60) return `${m} menit`
+  const h = Math.floor(m / 60)
+  const rest = m % 60
+  return rest ? `${h} jam ${rest} menit` : `${h} jam`
+}
+
+// item kontrak `attention` → {title, detail}; field per kind sesuai kontrak
+// server FU73. age_minutes bisa null → bagian durasi tak ditampilkan.
+export function attentionText(item) {
+  switch (item?.kind) {
+    case 'reject_over':
+      return {
+        title: `${item.item_name}: reject ${fmtId(item.reject_pct)}%`,
+        detail: `Di atas ambang ${fmtId(item.threshold)}% · ${item.wo}`
+      }
+    case 'stagnant': {
+      // STAGES tak memuat 'selesai' — derive bisa balas selesai di tepi
+      // presisi float (guard yang sama dipakai papan di server)
+      const stage = STAGES.find((s) => s.key === item.stage)?.label
+        || (item.stage === 'selesai' ? 'Selesai' : '') || item.stage
+      return {
+        title: `${item.wo} tertahan di ${stage}`,
+        detail: [item.item_name, item.age_minutes != null ? `tanpa perkembangan ${durationText(item.age_minutes)}` : '']
+          .filter(Boolean).join(' · ')
+      }
+    }
+    case 'handover_request':
+      return {
+        title: 'Request gudang menunggu dikirim',
+        detail: [item.mr, durationText(item.age_minutes)].filter(Boolean).join(' · ')
+      }
+    case 'form_order':
+      return {
+        title: 'Form order menunggu diproses',
+        detail: [item.mr, durationText(item.age_minutes)].filter(Boolean).join(' · ')
+      }
+    case 'suhu':
+      return {
+        title: item.adonan_ke
+          ? `Suhu adonan ke-${item.adonan_ke} tinggi: ${fmtId(item.suhu)}°C`
+          : `Suhu adonan tinggi: ${fmtId(item.suhu)}°C`,
+        detail: `${item.item_name} · batas ${fmtId(item.threshold)}°C`
+      }
+    case 'stopped':
+      return { title: `${item.wo} berstatus Stopped`, detail: item.item_name || '' }
+    default:
+      return { title: item?.kind ? String(item.kind) : '', detail: '' }
+  }
+}
+
+// angka % hasil bagus: "87,5%"; null/tak-valid → "-"
+export function yieldPctText(pct) {
+  return Number.isFinite(pct) ? `${fmtId(pct)}%` : '-'
+}

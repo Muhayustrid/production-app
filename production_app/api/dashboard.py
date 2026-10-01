@@ -13,9 +13,15 @@
 # → stock_uom. Link tengah `custom_uom` dari _enrich_units SENGAJA tidak
 # dipakai di sini: itu berlingkup baris WO, sedangkan agregat menjumlah
 # lintas WO per item — satu item satu satuan (keputusan review FU72).
+#
+# FU73 menambah `product_yield` (agregat hasil post-packing per produk,
+# konversi satuan display) dan `attention` (baris mentah per kind — judul
+# dan format angka DIRANGKAI FRONTEND, server hanya data terstruktur).
+
+from datetime import timedelta
 
 import frappe
-from frappe.utils import cint, flt, today
+from frappe.utils import cint, flt, get_datetime, now_datetime, today
 
 from production_app.api.handover import (
 	ROLE_MANAJER_PRODUKSI,
@@ -42,23 +48,74 @@ STAGE_SELESAI_HARI_INI = "selesai_hari_ini"
 # aplikasi di work_order._stage_filters); Stopped/Closed = jalur review Desk.
 ACTIVE_EXCLUDED_STATUSES = ("Completed", "Stopped", "Closed")
 
+# FU73 (keputusan owner via mockup): ambang % reject post-packing terhadap
+# planned — di atas ini produk ditandai `over` dan WO masuk attention
+# `reject_over`.
+REJECT_THRESHOLD_PCT = 3.0
+# FU73: WO aktif tanpa perubahan apa pun (modified) selama berjam-jam
+# dianggap mandek → attention `stagnant`.
+STAGNANT_HOURS = 4
+# FU73 (keputusan owner via mockup): suhu adonan (°C) di atas ini masuk
+# attention `suhu`; field OPSIONAL — kosong/0 tidak pernah dihitung.
+SUHU_ADONAN_MAX = 32.0
+
+# Kolom baris WO papan — satu sumber untuk _stages dan attention FU73
+# (custom field lewat get_list + .get(), bukan db.get_value berdaftar kolom
+# custom, pelajaran InvalidColumnName FU58).
+WO_ROW_FIELDS = (
+	"name",
+	"docstatus",
+	"status",
+	"qty",
+	"produced_qty",
+	"process_loss_qty",
+	"material_transferred_for_manufacturing",
+	"skip_transfer",
+	"custom_prepacking_confirmed",
+	"custom_postpacking_confirmed",
+)
+
+
+# Kolom baris WO hari ini — satu query untuk yield, reject_over, suhu, dan
+# hitungan WO direncanakan (review FU73 #2: jangan scan berulang per request).
+TODAY_WO_FIELDS = (
+	"name",
+	"production_item",
+	"item_name",
+	"qty",
+	"custom_adonan_ke",
+	"custom_postpacking_confirmed",
+	"custom_good_qty_postpacking",
+	"custom_reject_qty_postpacking",
+	"custom_trial_qty_postpacking",
+	"custom_sisa_qty_postpacking",
+	"custom_suhu_adonan",
+)
+
 
 @frappe.whitelist()
 def dashboard_summary(company=None):
-	"""Ringkasan "Hari Ini" untuk dashboard SPA (FU72). Read-only; `company`
+	"""Ringkasan "Hari Ini" untuk dashboard SPA (FU72/FU73). Read-only; `company`
 	opsional mempersempit semua angka ke satu company. Kontrak shape dipatok
-	oleh frontend (tests/test_dashboard.py)."""
+	oleh frontend (tests/test_dashboard.py). Baris WO dan MR dibaca SEKALI per
+	request lalu dibagikan ke semua bagian (review FU73 #2)."""
 	day = today()
-	planned, adonan = _wo_today(day, company)
+	rows = _wo_rows(company, extra_fields=("modified", "item_name"))
+	today_rows = _wo_today_rows(day, company)
+	handover = _handover_mrs(company)
+	form_orders = _form_order_mrs(company)
+	planned, adonan = _wo_today(today_rows)
 	return {
 		"today": day,
 		"companies": _companies(),
 		"wo_planned_today": planned,
 		"output_today": _output_today(day, company),
 		"adonan_terakhir": adonan,
-		"stages": _stages(day, company),
-		"handover_menunggu": _handover_menunggu(company),
-		"form_order_menunggu": _form_order_menunggu(company),
+		"stages": _stages(day, company, rows),
+		"handover_menunggu": len(handover),
+		"form_order_menunggu": len(form_orders),
+		"product_yield": _product_yield(today_rows),
+		"attention": _attention(rows, today_rows, handover, form_orders),
 	}
 
 
@@ -71,31 +128,49 @@ def _companies():
 		return []
 
 
-def _wo_today(day, company):
-	"""(jumlah WO planned hari ini, adonan terakhir) — satu query; docstatus
-	< 2 (draft ikut direncanakan, cancelled tidak)."""
-	filters = [
-		["docstatus", "<", 2],
-		["planned_start_date", ">=", day],
-		["planned_start_date", "<=", f"{day} 23:59:59"],
-	]
+def _wo_today(today_rows):
+	"""(jumlah WO planned hari ini, adonan terakhir) dari baris yang sudah
+	dibaca dashboard_summary; docstatus < 2 (draft ikut direncanakan,
+	cancelled tidak)."""
+	adonan = max([cint(r.get("custom_adonan_ke")) for r in today_rows] or [0])
+	return len(today_rows), adonan
+
+
+def _wo_rows(company, extra_fields=()):
+	"""Baris WO docstatus < 2 (seluruh backlog terlihat user, User Permission
+	otomatis lewat get_list); PermissionError → kosong, papan tetap hidup.
+	Satu sumber baris untuk _stages dan attention FU73."""
+	filters = [["docstatus", "<", 2]]
 	if company:
 		filters.append(["company", "=", company])
 	try:
-		rows = frappe.get_list(
+		return frappe.get_list(
 			"Work Order",
 			filters=filters,
-			fields=["name", "custom_adonan_ke"],
+			fields=list(WO_ROW_FIELDS) + list(extra_fields),
 			limit_page_length=0,
 		)
 	except frappe.PermissionError:
-		return 0, 0
-	adonan = max([cint(r.get("custom_adonan_ke")) for r in rows] or [0])
-	return len(rows), adonan
+		return []
 
 
-def _stages(day, company):
+def _operations_by_parent(parents):
+	"""Operasi WO dikelompokkan per parent — preload SEKALI untuk seluruh
+	baris (hindari N+1); dipakai _stages dan attention `stagnant`."""
+	operations = {}
+	if parents:
+		for op in frappe.get_all(
+			"Work Order Operation",
+			filters={"parent": ("in", parents)},
+			fields=["parent", "completed_qty", "process_loss_qty", "status"],
+		):
+			operations.setdefault(op.parent, []).append(op)
+	return operations
+
+
+def _stages(day, company, rows):
 	"""Papan tahap per derive_stage (satu sumber aturan stage, tidak digandakan).
+	`rows` = baris WO docstatus < 2 hasil _wo_rows (sudah permission-filtered).
 
 	Baris yang dihitung:
 	- draft (docstatus 0) → persiapan — antrian yang tertahan, tanpa batas
@@ -117,29 +192,6 @@ def _stages(day, company):
 		STAGE_FINISH: 0,
 		STAGE_SELESAI_HARI_INI: 0,
 	}
-	filters = [["docstatus", "<", 2]]
-	if company:
-		filters.append(["company", "=", company])
-	try:
-		rows = frappe.get_list(
-			"Work Order",
-			filters=filters,
-			fields=[
-				"name",
-				"docstatus",
-				"status",
-				"qty",
-				"produced_qty",
-				"process_loss_qty",
-				"material_transferred_for_manufacturing",
-				"skip_transfer",
-				"custom_prepacking_confirmed",
-				"custom_postpacking_confirmed",
-			],
-			limit_page_length=0,
-		)
-	except frappe.PermissionError:
-		return counts
 
 	drafts, actives = [], []
 	for row in rows:
@@ -148,16 +200,7 @@ def _stages(day, company):
 		elif row.status not in ACTIVE_EXCLUDED_STATUSES:
 			actives.append(row)
 
-	# preload operasi SEKALI untuk seluruh baris aktif, dikelompokkan per parent
-	operations = {}
-	parents = [r.name for r in actives]
-	if parents:
-		for op in frappe.get_all(
-			"Work Order Operation",
-			filters={"parent": ("in", parents)},
-			fields=["parent", "completed_qty", "process_loss_qty", "status"],
-		):
-			operations.setdefault(op.parent, []).append(op)
+	operations = _operations_by_parent([r.name for r in actives])
 
 	for _row in drafts:
 		counts[STAGE_PERSIAPAN] += 1
@@ -201,23 +244,28 @@ def _finished_today_rows(day, company):
 	wo_filters = [["name", "in", sorted(wo_names)]]
 	if company:
 		wo_filters.append(["company", "=", company])
-	return frappe.get_list(
-		"Work Order",
-		filters=wo_filters,
-		fields=[
-			"name",
-			"docstatus",
-			"status",
-			"qty",
-			"produced_qty",
-			"process_loss_qty",
-			"material_transferred_for_manufacturing",
-			"skip_transfer",
-			"custom_prepacking_confirmed",
-			"custom_postpacking_confirmed",
-		],
-		limit_page_length=0,
-	)
+	try:
+		return frappe.get_list(
+			"Work Order",
+			filters=wo_filters,
+			fields=[
+				"name",
+				"docstatus",
+				"status",
+				"qty",
+				"produced_qty",
+				"process_loss_qty",
+				"material_transferred_for_manufacturing",
+				"skip_transfer",
+				"custom_prepacking_confirmed",
+				"custom_postpacking_confirmed",
+			],
+			limit_page_length=0,
+		)
+	except frappe.PermissionError:
+		# tanpa izin baca WO papan tetap hidup (perilaku _stages di HEAD —
+		# review FU73 MAJOR-1: jalur ini tak lagi tertutup early-return _wo_rows)
+		return []
 
 
 def _output_today(day, company):
@@ -275,12 +323,32 @@ def _output_today(day, company):
 	)
 
 
-def _handover_menunggu(company):
-	"""Jumlah permintaan serah terima menunggu — kondisi PERSIS lane "request"
-	aktif handover_board (api/handover.py): MR Material Transfer docstatus 1,
-	bukan Stopped (cancelled = docstatus 2), terikat Work Order lewat
-	Material Request Item.custom_work_order, tanpa bukti Stock Entry. Tanpa
-	izin baca MR/SE angkanya 0 — papan tetap hidup (pola yang sama)."""
+def _mr_menunggu_rows(filters, butuh_se=False):
+	"""(name, creation) MR submitted sesuai `filters` yang belum ada bukti SE
+	terkirim (_sent_se_by_mr). Satu kondisi untuk angka papan dan item
+	attention FU73 — hitungan lama tidak berubah. `butuh_se`: lane serah
+	terima menuntut izin baca SE agar bisa diturunkan jujur (tanpa izin →
+	kosong); Form Order justru tetap dihitung tanpa izin SE (persis _orders)."""
+	try:
+		rows = frappe.get_list(
+			"Material Request", filters=filters, fields=["name", "creation"], limit_page_length=0
+		)
+	except frappe.PermissionError:
+		return []
+	if not rows:
+		return []
+	se_ok = frappe.has_permission("Stock Entry", "read")
+	if butuh_se and not se_ok:
+		return []
+	sent = _sent_se_by_mr([r.name for r in rows]) if se_ok else {}
+	return [r for r in rows if r.name not in sent]
+
+
+def _handover_mrs(company):
+	"""(name, creation) MR lane "request" menunggu — kondisi PERSIS lane aktif
+	handover_board (api/handover.py): MR Material Transfer docstatus 1, bukan
+	Stopped (cancelled = docstatus 2), terikat Work Order lewat
+	Material Request Item.custom_work_order, tanpa bukti Stock Entry."""
 	try:
 		mr_names = sorted(
 			set(
@@ -291,34 +359,29 @@ def _handover_menunggu(company):
 				)
 			)
 		)
-		if not mr_names:
-			return 0
-		filters = {
-			"name": ("in", mr_names),
-			"material_request_type": "Material Transfer",
-			"docstatus": 1,
-			"status": ("!=", "Stopped"),
-		}
-		if company:
-			filters["company"] = company
-		mrs = frappe.get_list("Material Request", filters=filters, pluck="name", limit_page_length=0)
 	except frappe.PermissionError:
-		return 0
-	if not mrs or not frappe.has_permission("Stock Entry", "read"):
-		return 0  # lane tak bisa diturunkan jujur tanpa visibilitas SE
-	sent = _sent_se_by_mr(mrs)
-	return sum(1 for name in mrs if name not in sent)
+		return []
+	if not mr_names:
+		return []
+	filters = {
+		"name": ("in", mr_names),
+		"material_request_type": "Material Transfer",
+		"docstatus": 1,
+		"status": ("!=", "Stopped"),
+	}
+	if company:
+		filters["company"] = company
+	return _mr_menunggu_rows(filters, butuh_se=True)
 
 
-def _form_order_menunggu(company):
-	"""Jumlah Form Order menunggu — kondisi status "menunggu" PERSIS
+def _form_order_mrs(company):
+	"""(name, creation) Form Order menunggu — kondisi status "menunggu" PERSIS
 	form_order_list (api/form_order.py): MR custom_is_form_order submitted
-	yang belum punya SE pengiriman (sumber bukti sama: _sent_se_by_mr;
-	tanpa izin baca SE daftar tetap menghitung, persis _orders). Scope lihat
-	juga PERSIS _orders: gudang & manajer produksi melihat semua, produksi
-	biasa hanya buatannya sendiri — angka papan harus sama dengan isi
-	halaman Form Order (angka global untuk user yang dibatasi owner =
-	mismatch, review FU72)."""
+	yang belum punya SE pengiriman (sumber bukti sama: _sent_se_by_mr).
+	Scope lihat PERSIS _orders: gudang & manajer produksi melihat semua,
+	produksi biasa hanya buatannya sendiri. Angka papan = len(...) harus sama
+	dengan isi halaman Form Order (angka global untuk user yang dibatasi
+	owner = mismatch, review FU72)."""
 	roles = frappe.get_roles()
 	scoped = any(r in roles for r in ROLES_GUDANG) or ROLE_MANAJER_PRODUKSI in roles
 	filters = {"custom_is_form_order": 1, "docstatus": 1}
@@ -326,15 +389,244 @@ def _form_order_menunggu(company):
 		filters["owner"] = frappe.session.user
 	if company:
 		filters["company"] = company
+	return _mr_menunggu_rows(filters)
+
+
+# ------------------------------------------------------------ FU73 yield
+
+def _wo_today_rows(day, company):
+	"""WO hari ini (docstatus < 2 — draft ikut, cancelled tidak;
+	planned_start_date hari ini, lingkup sama dengan "WO hari ini") dengan
+	kolom gabungan TODAY_WO_FIELDS — satu query untuk yield, reject_over,
+	suhu, dan hitungan WO direncanakan; PermissionError → kosong (endpoint
+	tetap hidup, pola FU65)."""
+	filters = [
+		["docstatus", "<", 2],
+		["planned_start_date", ">=", day],
+		["planned_start_date", "<=", f"{day} 23:59:59"],
+	]
+	if company:
+		filters.append(["company", "=", company])
 	try:
-		mrs = frappe.get_list("Material Request", filters=filters, pluck="name", limit_page_length=0)
+		return frappe.get_list(
+			"Work Order", filters=filters, fields=list(TODAY_WO_FIELDS), limit_page_length=0
+		)
 	except frappe.PermissionError:
-		return 0
-	if not mrs:
-		return 0
-	sent = (
-		_sent_se_by_mr(mrs)
-		if frappe.has_permission("Stock Entry", "read")
-		else {}
-	)
-	return sum(1 for name in mrs if name not in sent)
+		return []
+
+
+def _product_yield(today_rows):
+	"""Agregat hasil per produk (FU73): WO hari ini dengan post-packing
+	terkonfirmasi, dijumlah lintas WO per item lalu dikonversi ke satuan
+	display rantai item-level W21 → stock_uom (pola _output_today; item beda
+	UOM TIDAK pernah dijumlahkan). Item master terhapus / faktor invalid →
+	skip baris WO itu saja. yield_pct terbesar dulu; angka float mentah —
+	frontend yang memformat."""
+	per_item = {}
+	for row in today_rows:
+		if not row.get("custom_postpacking_confirmed"):
+			continue
+		try:
+			item = frappe.get_cached_doc("Item", row.production_item)
+		except frappe.DoesNotExistError:
+			continue  # WO memegang item master terhapus — skip baris WO itu saja
+		alternate = item.get("custom_default_inventory_unit_of_measure") or item.stock_uom
+		factor = _conversion_factor(item, alternate)
+		if not factor:
+			continue  # tanpa konversi valid: skip, jangan mengarang faktor
+		acc = per_item.setdefault(
+			row.production_item,
+			{
+				"item_code": row.production_item,
+				"item_name": item.get("item_name") or row.production_item,
+				"uom": alternate,
+				"planned": 0.0,
+				"good": 0.0,
+				"reject": 0.0,
+				"trial": 0.0,
+				"sisa": 0.0,
+			},
+		)
+		acc["planned"] += flt(row.qty) / factor
+		for key in ("good", "reject", "trial", "sisa"):
+			acc[key] += flt(row.get(f"custom_{key}_qty_postpacking")) / factor
+	out = []
+	for acc in per_item.values():
+		planned = acc["planned"]
+		yield_pct = round(acc["good"] / planned * 100, 6) if planned > 0 else 0.0
+		reject_pct = round(acc["reject"] / planned * 100, 6) if planned > 0 else 0.0
+		out.append(
+			{
+				**acc,
+				"yield_pct": yield_pct,
+				"reject_pct": reject_pct,
+				"over": reject_pct > REJECT_THRESHOLD_PCT,
+			}
+		)
+	return sorted(out, key=lambda e: e["yield_pct"], reverse=True)
+
+
+# --------------------------------------------------------- FU73 attention
+
+def _age_minutes(creation):
+	"""Umur dokumen dalam menit, dibulatkan ke bawah."""
+	return int((now_datetime() - get_datetime(creation)).total_seconds() // 60)
+
+
+def _attention_reject_over(today_rows):
+	"""Per-WO (BUKAN gabungan per produk): WO hari ini terkonfirmasi post-
+	packing dengan reject_pct melewati REJECT_THRESHOLD_PCT. Rasio % kebal
+	konversi satuan (pembilang & penyebut sama-sama stock UOM). Cap 10."""
+	out = []
+	for row in today_rows:
+		if not row.get("custom_postpacking_confirmed"):
+			continue
+		planned = flt(row.qty)
+		reject_pct = round(flt(row.get("custom_reject_qty_postpacking")) / planned * 100, 6) if planned > 0 else 0.0
+		if reject_pct <= REJECT_THRESHOLD_PCT:
+			continue
+		out.append(
+			{
+				"kind": "reject_over",
+				"severity": "bad",
+				"link": f"#/wo/{row.name}",
+				"wo": row.name,
+				"item_name": row.item_name,
+				"reject_pct": reject_pct,
+				"threshold": REJECT_THRESHOLD_PCT,
+			}
+		)
+	out.sort(key=lambda e: e["reject_pct"], reverse=True)
+	return out[:10]
+
+
+def _attention_stagnant(rows):
+	"""WO submitted aktif yang modified-nya lebih tua dari STAGNANT_HOURS —
+	stage dari derive_stage (operasi preload, aturan sama dengan papan).
+	Umur paling lama dulu. Cap 5. `rows` = baris _wo_rows dengan kolom
+	tambahan modified + item_name."""
+	cutoff = now_datetime() - timedelta(hours=STAGNANT_HOURS)
+	stagnant = [
+		r
+		for r in rows
+		if r.docstatus == 1
+		and r.status not in ACTIVE_EXCLUDED_STATUSES
+		and get_datetime(r.modified) < cutoff
+	]
+	operations = _operations_by_parent([r.name for r in stagnant])
+	out = [
+		{
+			"kind": "stagnant",
+			"severity": "warn",
+			"link": f"#/wo/{row.name}",
+			"wo": row.name,
+			"item_name": row.item_name,
+			"stage": derive_stage(row, operations.get(row.name, [])),
+			"age_minutes": _age_minutes(row.modified),
+		}
+		for row in sorted(stagnant, key=lambda r: get_datetime(r.modified))
+	]
+	return out[:5]
+
+
+def _attention_handover(handover_rows):
+	"""MR lane request menunggu (kondisi PERSIS _handover_menunggu). Cap 5."""
+	out = [
+		{
+			"kind": "handover_request",
+			"severity": "warn",
+			"link": "#/handover",
+			"mr": mr.name,
+			"age_minutes": _age_minutes(mr.creation),
+		}
+		for mr in handover_rows
+	]
+	out.sort(key=lambda e: e["age_minutes"], reverse=True)
+	return out[:5]
+
+
+def _attention_form_order(form_rows):
+	"""Form Order menunggu (kondisi PERSIS _form_order_menunggu, termasuk
+	scope owner untuk non-gudang/non-manajer). Cap 5."""
+	out = [
+		{
+			"kind": "form_order",
+			"severity": "warn",
+			"link": "#/form-order",
+			"mr": mr.name,
+			"age_minutes": _age_minutes(mr.creation),
+		}
+		for mr in form_rows
+	]
+	out.sort(key=lambda e: e["age_minutes"], reverse=True)
+	return out[:5]
+
+
+def _attention_suhu(today_rows):
+	"""WO hari ini (draft boleh) dengan suhu adonan terisi di atas
+	SUHU_ADONAN_MAX; adonan_ke boleh 0/None — dikirim apa adanya. Urut suhu
+	terbesar dulu. Cap 5."""
+	out = []
+	for row in today_rows:
+		suhu = row.get("custom_suhu_adonan")
+		if suhu in (None, "") or flt(suhu) <= SUHU_ADONAN_MAX:
+			continue
+		out.append(
+			{
+				"kind": "suhu",
+				"severity": "warn",
+				"link": f"#/wo/{row.name}",
+				"wo": row.name,
+				"item_name": row.item_name,
+				"adonan_ke": row.get("custom_adonan_ke"),
+				"suhu": flt(suhu),
+				"threshold": SUHU_ADONAN_MAX,
+			}
+		)
+	out.sort(key=lambda e: e["suhu"], reverse=True)
+	return out[:5]
+
+
+def _attention_stopped(rows):
+	"""WO dihentikan (docstatus 1, status Stopped). Tanpa field umur: tidak
+	ada timestamp stop native — jangan mengarang. Cap 10."""
+	out = [
+		{
+			"kind": "stopped",
+			"severity": "bad",
+			"link": f"#/wo/{row.name}",
+			"wo": row.name,
+			"item_name": row.item_name,
+		}
+		for row in rows
+		if row.docstatus == 1 and row.status == "Stopped"
+	]
+	return out[:10]
+
+
+def _attention(rows, today_rows, handover_rows, form_rows):
+	"""Baris attention FU73 — data mentah terstruktur per kind; judul/detail
+	berbahasa Indonesia DIRANGKAI FRONTEND. Semua baris dibaca sekali di
+	dashboard_summary (review FU73 #2). Urutan: severity `bad` dulu lalu
+	`warn`; dalam satu severity umur terlama dulu (tanpa umur paling
+	belakang); tie-break deterministik kind lalu link."""
+	items = [
+		*_attention_reject_over(today_rows),
+		*_attention_stagnant(rows),
+		*_attention_handover(handover_rows),
+		*_attention_form_order(form_rows),
+		*_attention_suhu(today_rows),
+		*_attention_stopped(rows),
+	]
+
+	def order(entry):
+		age = entry.get("age_minutes")
+		return (
+			entry["severity"] != "bad",
+			age is None,
+			-(age or 0),
+			entry["kind"],
+			entry.get("link") or "",
+		)
+
+	return sorted(items, key=order)

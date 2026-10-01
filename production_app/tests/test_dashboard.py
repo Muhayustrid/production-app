@@ -12,15 +12,25 @@
 #   hari ini → selesai_hari_ini; selesai kemarin → TIDAK masuk papan), dan
 #   handover_menunggu / form_order_menunggu dari MR nyata + filter company.
 #
+# FU73 menambah dua kunci: product_yield (agregat hasil post-packing per
+# produk, konversi satuan display) dan attention (baris mentah per kind —
+# reject_over/stagnant/handover_request/form_order/suhu/stopped — dirangkai
+# judulnya oleh frontend).
+#
 # Semua record test berprefix FU72; framework test me-rollback tiap run
 # (tanpa commit — tearDownClass hanya sapu defensif ala test_form_order).
 
+from datetime import timedelta
+
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, flt, now, random_string, today
+from frappe.utils import add_days, flt, now, now_datetime, random_string, today
 
 from erpnext.manufacturing.doctype.work_order.work_order import (
 	make_stock_entry as make_wo_stock_entry,
+)
+from erpnext.stock.doctype.material_request.material_request import (
+	make_stock_entry as make_mr_stock_entry,
 )
 
 from production_app.api.work_order import (
@@ -45,6 +55,8 @@ SHAPE_KEYS = {
 	"stages",
 	"handover_menunggu",
 	"form_order_menunggu",
+	"product_yield",
+	"attention",
 }
 STAGE_KEYS = {
 	STAGE_PERSIAPAN,
@@ -68,6 +80,25 @@ def _summary(company=None):
 def _uom_qty(summary, uom):
 	"""Qty hasil hari ini untuk satu UOM (None bila tidak ada entri)."""
 	return next((e["qty"] for e in summary["output_today"] if e["uom"] == uom), None)
+
+
+def _yield_row(rows, item_code):
+	"""Baris product_yield satu produk dari daftar baris (None bila kosong)."""
+	return next((r for r in rows if r["item_code"] == item_code), None)
+
+
+def _yield_base(rows, item_code):
+	"""Nilai dasar yield satu produk sebelum penambahan uji (0 bila belum ada
+	barisnya) — runner frappe v16 TIDAK rollback antar test method (rollback
+	hanya setelah seluruh class), jadi asersi yield memakai delta, pola yang
+	sama dengan test_03-test_09."""
+	row = _yield_row(rows, item_code) or {}
+	return {k: flt(row.get(k)) for k in ("planned", "good", "reject", "trial", "sisa")}
+
+
+def _attention_kinds(summary, kind):
+	"""Semua baris attention satu kind."""
+	return [e for e in summary["attention"] if e["kind"] == kind]
 
 
 class TestDashboard(IntegrationTestCase):
@@ -210,6 +241,24 @@ class TestDashboard(IntegrationTestCase):
 			}
 		).insert()
 
+		# ---- user produksi biasa (Manufacturing User, TANPA User Permission)
+		# persona scope owner Form Order (FU73): bukan gudang, bukan manajer
+		cls.user_prod = (
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": f"fu72.prod.{cls.suffix.lower()}@prodapp.example.com",
+					"first_name": f"FU72 PROD {cls.suffix}",
+					"send_welcome_email": 0,
+				}
+			)
+			.insert()
+			.name
+		)
+		user_prod = frappe.get_doc("User", cls.user_prod)
+		user_prod.append("roles", {"role": "Manufacturing User"})
+		user_prod.save()
+
 	@classmethod
 	def tearDownClass(cls):
 		"""Sapu defensif EXACT-NAME (semua doc sebenarnya ikut rollback
@@ -222,7 +271,7 @@ class TestDashboard(IntegrationTestCase):
 		warehouses = (cls.src_wh, cls.wip_wh, cls.fg_wh, cls.b_src_wh, cls.b_wip_wh, cls.b_fg_wh)
 		for doctype, field, names in (
 			("User Permission", "user", [cls.user_up]),
-			("User", "name", [cls.user_up]),
+			("User", "name", [cls.user_up, cls.user_prod]),
 			("Item", "name", items),
 			("Warehouse", "name", warehouses),
 			("Company", "name", [cls.company_b]),
@@ -384,6 +433,21 @@ class TestDashboard(IntegrationTestCase):
 		return se
 
 	@classmethod
+	def _confirm_postpacking(cls, wo, good=0.0, reject=0.0, trial=0.0, sisa=0.0):
+		"""Tandai post-packing terkonfirmasi langsung di DB — dokumen audit
+		konfirmasi T27 diuji di modulnya; dashboard cukup membaca state."""
+		wo.db_set(
+			{
+				"custom_good_qty_postpacking": good,
+				"custom_reject_qty_postpacking": reject,
+				"custom_trial_qty_postpacking": trial,
+				"custom_sisa_qty_postpacking": sisa,
+				"custom_postpacking_confirmed": 1,
+			}
+		)
+		return wo
+
+	@classmethod
 	def _make_mr(cls, wo, form_order=False):
 		"""MR Material Transfer nyata: serah terima (row.custom_work_order) atau
 		Form Order (custom_is_form_order) — bentuk fixture T23/test_form_order."""
@@ -449,6 +513,8 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(s["adonan_terakhir"], 0)
 		self.assertEqual(s["handover_menunggu"], 0)
 		self.assertEqual(s["form_order_menunggu"], 0)
+		self.assertEqual(s["product_yield"], [])
+		self.assertEqual(s["attention"], [])
 		for key in STAGE_KEYS:
 			self.assertEqual(s["stages"][key], 0, key)
 
@@ -615,3 +681,315 @@ class TestDashboard(IntegrationTestCase):
 		# filter company: company B tidak menghitung MR company A
 		self.assertEqual(_summary(company=self.company_b)["handover_menunggu"], 0)
 		self.assertEqual(_summary(company=self.company_b)["form_order_menunggu"], 0)
+
+	# ------------------------------------ FU73: product_yield per produk
+	# Runner frappe v16 TIDAK rollback antar test method (hanya setelah
+	# seluruh class) — semua asersi FU73 delta (snapshot before → after),
+	# disiplin yang sama dengan test lama.
+
+	def test_10_yield_dasar_per_produk(self):
+		"""WO post-packing terkonfirmasi → baris produk: planned/good/reject/
+		trial/sisa mentah (frontend memformat), yield_pct & reject_pct persen,
+		over mengikuti ambang."""
+		base = _yield_base(_summary(company=self.company_a)["product_yield"], self.fg_plain)
+		wo = self._make_wo(self.bom_plain, 40, self.fg_plain)
+		self._confirm_postpacking(wo, good=30, reject=3, trial=1, sisa=2)
+		row = _yield_row(_summary(company=self.company_a)["product_yield"], self.fg_plain)
+		self.assertIsNotNone(row)
+		self.assertEqual(row["item_name"], f"{PREFIX} FGPlain {self.suffix}")
+		self.assertEqual(row["uom"], self.uom_base)
+		planned, good, reject = base["planned"] + 40, base["good"] + 30, base["reject"] + 3
+		self.assertAlmostEqual(row["planned"], planned, places=6)
+		self.assertAlmostEqual(row["good"], good, places=6)
+		self.assertAlmostEqual(row["reject"], reject, places=6)
+		self.assertAlmostEqual(row["trial"], base["trial"] + 1, places=6)
+		self.assertAlmostEqual(row["sisa"], base["sisa"] + 2, places=6)
+		self.assertAlmostEqual(row["yield_pct"], round(good / planned * 100, 6), places=6)
+		self.assertAlmostEqual(row["reject_pct"], round(reject / planned * 100, 6), places=6)
+		self.assertEqual(row["over"], reject / planned * 100 > 3.0)  # 7.5% > ambang
+
+	def test_11_yield_faktor_pack_12(self):
+		"""120 Pcs dengan Default Inventory UOM faktor 12 → nilai tampil
+		dikonversi (+10 Pack), yield gabungan 100%, tidak over."""
+		base = _yield_base(_summary(company=self.company_a)["product_yield"], self.fg_pack)
+		wo = self._make_wo(self.bom_pack, 120, self.fg_pack)
+		self._confirm_postpacking(wo, good=120)
+		row = _yield_row(_summary(company=self.company_a)["product_yield"], self.fg_pack)
+		self.assertIsNotNone(row)
+		self.assertEqual(row["uom"], self.uom_pack)
+		planned, good = base["planned"] + 10.0, base["good"] + 10.0  # 120/12
+		self.assertAlmostEqual(row["planned"], planned, places=6)
+		self.assertAlmostEqual(row["good"], good, places=6)
+		self.assertAlmostEqual(row["yield_pct"], good / planned * 100, places=6)
+		self.assertEqual(row["over"], base["reject"] / planned * 100 > 3.0)
+
+	def test_12_yield_lebih_dari_rencana(self):
+		"""Hasil melebihi rencana → yield_pct di atas 100 (tidak pernah di-
+		cap); pakai produk lain (fg_yest) agar penggabungan lintas test tidak
+		mengaburkan rasio."""
+		wo = self._make_wo(self.bom_yest, 100, self.fg_yest)
+		self._confirm_postpacking(wo, good=110)
+		row = _yield_row(_summary(company=self.company_a)["product_yield"], self.fg_yest)
+		self.assertIsNotNone(row)
+		self.assertEqual(row["uom"], self.uom_yest)
+		self.assertAlmostEqual(row["planned"], 20.0, places=6)  # 100/5
+		self.assertAlmostEqual(row["good"], 22.0, places=6)  # 110/5
+		self.assertAlmostEqual(row["yield_pct"], 110.0, places=6)
+
+	def test_13_yield_uom_beda_tidak_dijumlahkan(self):
+		"""Dua produk beda satuan tampil → dua baris terpisah, nilai masing-
+		masing dikonversi dengan faktornya sendiri."""
+		before = _summary(company=self.company_a)["product_yield"]
+		base_pack = _yield_base(before, self.fg_pack)
+		base_plain = _yield_base(before, self.fg_plain)
+		wo1 = self._make_wo(self.bom_pack, 120, self.fg_pack)
+		self._confirm_postpacking(wo1, good=120)
+		wo2 = self._make_wo(self.bom_plain, 60, self.fg_plain)
+		self._confirm_postpacking(wo2, good=60)
+		rows = _summary(company=self.company_a)["product_yield"]
+		pack = _yield_row(rows, self.fg_pack)
+		plain = _yield_row(rows, self.fg_plain)
+		self.assertIsNotNone(pack)
+		self.assertIsNotNone(plain)
+		self.assertEqual({pack["uom"], plain["uom"]}, {self.uom_pack, self.uom_base})
+		self.assertAlmostEqual(pack["planned"], base_pack["planned"] + 10.0, places=6)  # 120/12
+		self.assertAlmostEqual(plain["planned"], base_plain["planned"] + 60.0, places=6)
+
+	def test_14_yield_item_master_terhapus(self):
+		"""Item master hilang dari WO → baris produk itu hilang, produk lain
+		tetap dihitung, bentuk endpoint tetap utuh (pola FU65)."""
+		summary = _summary(company=self.company_a)
+		self.assertIsNone(_yield_row(summary["product_yield"], self.fg_del))
+		base_plain = _yield_base(summary["product_yield"], self.fg_plain)
+		wo_del = self._make_wo(self.bom_del, 90, self.fg_del)
+		self._confirm_postpacking(wo_del, good=90)
+		wo_ok = self._make_wo(self.bom_plain, 50, self.fg_plain)
+		self._confirm_postpacking(wo_ok, good=50)
+		before = _summary(company=self.company_a)
+		self.assertAlmostEqual(
+			_yield_row(before["product_yield"], self.fg_del)["planned"], 30.0, places=6
+		)  # 90/3
+		# simulate admin deletion: rewrite referensi item di WO (pola FU65)
+		frappe.db.set_value(
+			"Work Order", wo_del.name, "production_item", f"{PREFIX}-DELETED-{self.suffix}"
+		)
+		after = _summary(company=self.company_a)
+		self._assert_full_shape(after)
+		self.assertIsNone(_yield_row(after["product_yield"], self.fg_del))
+		self.assertAlmostEqual(
+			_yield_row(after["product_yield"], self.fg_plain)["planned"],
+			base_plain["planned"] + 50.0,
+			places=6,
+		)
+
+	def test_15_yield_wo_tanpa_postpacking(self):
+		"""WO hari ini TANPA konfirmasi post-packing tidak masuk yield; yang
+		terkonfirmasi tetap dihitung, dan satu produk tetap SATU baris walau
+		beberapa WO menumpuk."""
+		summary = _summary(company=self.company_a)
+		base = _yield_base(summary["product_yield"], self.fg_plain)
+		self._make_wo(self.bom_plain, 30, self.fg_plain)  # tanpa konfirmasi
+		wo_yes = self._make_wo(self.bom_plain, 20, self.fg_plain)
+		self._confirm_postpacking(wo_yes, good=20)
+		rows = _summary(company=self.company_a)["product_yield"]
+		hit = [r for r in rows if r["item_code"] == self.fg_plain]
+		self.assertEqual(len(hit), 1)  # agregat per item, bukan per WO
+		self.assertAlmostEqual(hit[0]["planned"], base["planned"] + 20.0, places=6)
+
+	# ------------------------------------ FU73: attention per kind
+
+	def test_16_attention_reject_over(self):
+		"""reject per-WO di atas ambang → kind reject_over (bad) membawa
+		reject_pct + threshold; WO lain di bawah ambang → tidak muncul."""
+		before = {e["wo"] for e in _attention_kinds(_summary(company=self.company_a), "reject_over")}
+		wo_hi = self._make_wo(self.bom_plain, 40, self.fg_plain)
+		self._confirm_postpacking(wo_hi, good=30, reject=3)  # 7.5% > 3%
+		wo_lo = self._make_wo(self.bom_plain, 100, self.fg_plain)
+		self._confirm_postpacking(wo_lo, good=100, reject=2)  # 2% <= 3%
+		rows = _attention_kinds(_summary(company=self.company_a), "reject_over")
+		self.assertEqual({e["wo"] for e in rows} - before, {wo_hi.name})
+		self.assertNotIn(wo_lo.name, {e["wo"] for e in rows})
+		row = next(e for e in rows if e["wo"] == wo_hi.name)
+		self.assertEqual(row["severity"], "bad")
+		self.assertEqual(row["link"], f"#/wo/{wo_hi.name}")
+		self.assertEqual(row["item_name"], f"{PREFIX} FGPlain {self.suffix}")
+		self.assertAlmostEqual(row["reject_pct"], 7.5, places=6)
+		self.assertEqual(row["threshold"], 3.0)
+
+	def test_17_attention_stagnant(self):
+		"""WO submitted aktif yang modified-nya lebih tua dari ambang → kind
+		stagnant (warn, stage derive, umur menit); WO segar tidak stagnant."""
+		before = {e["wo"] for e in _attention_kinds(_summary(company=self.company_a), "stagnant")}
+		wo_old = self._make_wo(self.bom_plain, 40, self.fg_plain)
+		wo_old.submit()
+		frappe.db.set_value(
+			"Work Order",
+			wo_old.name,
+			"modified",
+			now_datetime() - timedelta(hours=5),
+			update_modified=False,
+		)
+		wo_fresh = self._make_wo(self.bom_plain, 41, self.fg_plain)
+		wo_fresh.submit()
+		rows = _attention_kinds(_summary(company=self.company_a), "stagnant")
+		self.assertEqual({e["wo"] for e in rows} - before, {wo_old.name})
+		self.assertNotIn(wo_fresh.name, {e["wo"] for e in rows})
+		row = next(e for e in rows if e["wo"] == wo_old.name)
+		self.assertEqual(row["severity"], "warn")
+		self.assertEqual(row["link"], f"#/wo/{wo_old.name}")
+		self.assertEqual(row["stage"], STAGE_MATERIAL)
+		self.assertEqual(row["item_name"], f"{PREFIX} FGPlain {self.suffix}")
+		self.assertGreaterEqual(row["age_minutes"], 4 * 60)
+
+	def test_18_attention_handover_request(self):
+		"""MR serah terima menunggu → kind handover_request dengan umur dari
+		creation; setelah SE terkirim (builder native MR→SE) → hilang."""
+		before = {e["mr"] for e in _attention_kinds(_summary(company=self.company_a), "handover_request")}
+		wo = self._make_wo(self.bom_plain, 42, self.fg_plain)
+		wo.submit()
+		mr = self._make_mr(wo)
+		rows = _attention_kinds(_summary(company=self.company_a), "handover_request")
+		self.assertEqual({e["mr"] for e in rows} - before, {mr.name})
+		row = next(e for e in rows if e["mr"] == mr.name)
+		self.assertEqual(row["severity"], "warn")
+		self.assertEqual(row["link"], "#/handover")
+		self.assertIsNotNone(row["age_minutes"])
+		# kirim via builder native MR → SE (material_request tercatat di baris
+		# SE); isi dulu stok item MR di gudang asal agar SE lolos validasi
+		self._receipt(self.fg_plain, 10, self.src_wh)
+		se = frappe.get_doc(make_mr_stock_entry(mr.name))
+		se.insert()
+		se.submit()
+		after = {e["mr"] for e in _attention_kinds(_summary(company=self.company_a), "handover_request")}
+		self.assertNotIn(mr.name, after)
+
+	def test_19_attention_form_order_owner_scope(self):
+		"""form_order attention mengikuti scope owner PERSIS count lama:
+		produksi biasa hanya melihat Form Order buatannya sendiri."""
+		wo = self._make_wo(self.bom_plain, 43, self.fg_plain)
+		wo.submit()
+		mr_admin = self._make_mr(wo, form_order=True)  # owner Administrator
+		try:
+			frappe.set_user(self.user_prod)
+			before = {e["mr"] for e in _attention_kinds(_summary(), "form_order")}
+			self.assertNotIn(mr_admin.name, before)  # milik orang lain tak tampak
+			mr_own = self._make_mr(wo, form_order=True)  # owner sendiri
+			rows = _attention_kinds(_summary(), "form_order")
+			self.assertEqual({e["mr"] for e in rows} - before, {mr_own.name})
+			row = next(e for e in rows if e["mr"] == mr_own.name)
+			self.assertEqual(row["severity"], "warn")
+			self.assertEqual(row["link"], "#/form-order")
+			self.assertIsNotNone(row["age_minutes"])
+		finally:
+			frappe.set_user("Administrator")
+		admin_names = {
+			e["mr"] for e in _attention_kinds(_summary(company=self.company_a), "form_order")
+		}
+		self.assertIn(mr_admin.name, admin_names)
+		self.assertIn(mr_own.name, admin_names)
+
+	def test_20_attention_suhu(self):
+		"""Suhu adonan di atas ambang → kind suhu (warn); kosong atau tepat/
+		<= ambang → tidak muncul; adonan_ke dikirim apa adanya (default kolom
+		Int = 0 bila tak pernah diisi). Urutan array global: baris tanpa umur
+		paling belakang, tie-break link (urut suhu hanya menentukan cap)."""
+		before = {e["wo"] for e in _attention_kinds(_summary(company=self.company_a), "suhu")}
+		wo_hot = self._make_wo(self.bom_plain, 10, self.fg_plain, adonan=5)
+		wo_hot.db_set("custom_suhu_adonan", 33.5)
+		wo_edge = self._make_wo(self.bom_plain, 11, self.fg_plain, adonan=2)
+		wo_edge.db_set("custom_suhu_adonan", 32.0)  # tepat ambang: tidak masuk
+		self._make_wo(self.bom_plain, 12, self.fg_plain)  # tanpa suhu: tidak masuk
+		wo_hot2 = self._make_wo(self.bom_plain, 13, self.fg_plain)
+		wo_hot2.db_set("custom_suhu_adonan", 34.5)  # adonan_ke kosong
+		rows = [
+			e
+			for e in _attention_kinds(_summary(company=self.company_a), "suhu")
+			if e["wo"] not in before
+		]
+		# tanpa umur → paling belakang; sesama suhu tie-break link (nama WO)
+		self.assertEqual([e["wo"] for e in rows], sorted([wo_hot.name, wo_hot2.name]))
+		self.assertEqual(rows[0]["severity"], "warn")
+		self.assertEqual(rows[0]["link"], f"#/wo/{rows[0]['wo']}")
+		self.assertEqual(rows[0]["item_name"], f"{PREFIX} FGPlain {self.suffix}")
+		self.assertAlmostEqual(rows[0]["suhu"], 33.5, places=6)
+		self.assertEqual(rows[0]["threshold"], 32.0)
+		self.assertEqual(rows[0]["adonan_ke"], 5)
+		self.assertAlmostEqual(rows[1]["suhu"], 34.5, places=6)
+		self.assertEqual(rows[1]["adonan_ke"], 0)  # kosong → default kolom 0
+		self.assertNotIn(
+			wo_edge.name,
+			{e["wo"] for e in _attention_kinds(_summary(company=self.company_a), "suhu")},
+		)
+
+	def test_21_attention_stopped(self):
+		"""WO di-stop (submitted, status Stopped) → kind stopped (bad) TANPA
+		field umur (tidak ada timestamp stop native); WO aktif biasa tidak."""
+		before = {e["wo"] for e in _attention_kinds(_summary(company=self.company_a), "stopped")}
+		wo = self._make_wo(self.bom_plain, 44, self.fg_plain)
+		wo.submit()
+		wo.db_set("status", "Stopped")
+		rows = _attention_kinds(_summary(company=self.company_a), "stopped")
+		self.assertEqual({e["wo"] for e in rows} - before, {wo.name})
+		row = next(e for e in rows if e["wo"] == wo.name)
+		self.assertEqual(row["severity"], "bad")
+		self.assertEqual(row["link"], f"#/wo/{wo.name}")
+		self.assertEqual(row["item_name"], f"{PREFIX} FGPlain {self.suffix}")
+		self.assertNotIn("age_minutes", row)
+		wo_ok = self._make_wo(self.bom_plain, 45, self.fg_plain)
+		wo_ok.submit()
+		rows = _attention_kinds(_summary(company=self.company_a), "stopped")
+		self.assertEqual({e["wo"] for e in rows} - before, {wo.name})
+
+	def test_22_attention_yield_company_dan_user_permission(self):
+		"""Kunci baru ikut filter company dan User Permission: company B
+		tetap kosong; user ber-UP Company=B tidak melihat attention/product_
+		yield company A."""
+		wo = self._make_wo(self.bom_plain, 46, self.fg_plain)
+		wo.submit()
+		wo.db_set("status", "Stopped")
+		names_a = {e["wo"] for e in _attention_kinds(_summary(company=self.company_a), "stopped")}
+		self.assertIn(wo.name, names_a)
+		s_b = _summary(company=self.company_b)
+		self.assertEqual(s_b["product_yield"], [])
+		self.assertEqual(s_b["attention"], [])
+		try:
+			frappe.set_user(self.user_up)
+			s_up = _summary()
+			self.assertEqual(s_up["product_yield"], [])
+			self.assertEqual(s_up["attention"], [])
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_23_attention_urutan_severity_dan_umur(self):
+		"""Urutan array: severity bad dulu lalu warn; dalam satu severity umur
+		terlama dulu (tanpa umur paling belakang); baris uji muncul sesuai
+		urutan itu (stopped → stagnant 6 jam → handover_request baru)."""
+		wo_stop = self._make_wo(self.bom_plain, 50, self.fg_plain)
+		wo_stop.submit()
+		wo_stop.db_set("status", "Stopped")
+		wo_stag = self._make_wo(self.bom_plain, 51, self.fg_plain)
+		wo_stag.submit()
+		frappe.db.set_value(
+			"Work Order",
+			wo_stag.name,
+			"modified",
+			now_datetime() - timedelta(hours=6),
+			update_modified=False,
+		)
+		mr = self._make_mr(wo_stop)  # handover_request: umur ~0 menit
+		entries = _summary(company=self.company_a)["attention"]
+		# invarian global: semua bad sebelum semua warn
+		severities = [e["severity"] for e in entries]
+		self.assertEqual(severities, sorted(severities, key=lambda s: s != "bad"))
+		# dalam warn: umur tak naik (baris tanpa umur hanya ber-severity bad)
+		warn_ages = [
+			e["age_minutes"]
+			for e in entries
+			if e["severity"] == "warn" and e.get("age_minutes") is not None
+		]
+		self.assertEqual(warn_ages, sorted(warn_ages, reverse=True))
+		# baris uji berurutan sesuai aturan
+		ident = [e.get("wo") or e.get("mr") for e in entries]
+		self.assertLess(ident.index(wo_stop.name), ident.index(wo_stag.name))
+		self.assertLess(ident.index(wo_stag.name), ident.index(mr.name))
+
