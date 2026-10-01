@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   STAGES, activeTotal, attentionText, bahanHref, durationText, materialCounts, materialRowText,
-  materialSummaryText, outputTotalsText, rangeParams, rangeLabel, selesaiTileLabel,
+  materialSummaryText, outputTotalsText, presetLabel, rangeParams, rangeLabel, selesaiTileLabel,
   variancePctText, yieldPctText, yieldSegments
 } from '../src/dashboard.js'
 
@@ -229,4 +229,12 @@ test('selesaiTileLabel: hari ini berlabel harian, rentang lain berlabel rentang'
   assert.equal(selesaiTileLabel('hari_ini'), 'Selesai hari ini')
   assert.equal(selesaiTileLabel('kemarin'), 'Selesai dalam rentang')
   assert.equal(selesaiTileLabel('kustom'), 'Selesai dalam rentang')
+})
+
+test('presetLabel: label tombol filter — tak dikenal jatuh ke Hari ini', () => {
+  assert.equal(presetLabel('hari_ini'), 'Hari ini')
+  assert.equal(presetLabel('bulan_kemarin'), 'Bulan kemarin')
+  assert.equal(presetLabel('kustom'), 'Kustom')
+  assert.equal(presetLabel('tidak_ada'), 'Hari ini')
+  assert.equal(presetLabel(undefined), 'Hari ini')
 })

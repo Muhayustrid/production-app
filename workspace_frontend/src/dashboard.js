@@ -221,6 +221,12 @@ export function rangeLabel(preset, dari, sampai) {
   return `${a.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })} – ${b.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`
 }
 
+// label tombol filter rentang: preset tak dikenal jatuh ke "Hari ini"
+// (fallback sama dengan rangeParams)
+export function presetLabel(preset) {
+  return RANGE_PRESETS.find((r) => r.key === preset)?.label || 'Hari ini'
+}
+
 // label tile terakhir papan: ikut preset (server menghitung selesai dalam
 // rentang); hari ini tetap berlabel harian
 export function selesaiTileLabel(preset) {

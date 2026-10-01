@@ -6,11 +6,12 @@
 // rentang (FU76: preset tanggal server-resolved + kustom). Perilaku klik
 // tahap/tabel/seret konteks (pendingStageFilter) tetap seperti FU72.
 import { computed, onMounted, ref } from 'vue'
-import { ChevronRight, SearchX } from 'lucide-vue-next'
+import { Check, ChevronDown, ChevronRight, SearchX } from 'lucide-vue-next'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
 import MeterGroup from 'primevue/metergroup'
+import Popover from 'primevue/popover'
 import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
@@ -18,7 +19,7 @@ import { dashboardState, loadDashboard, pendingStageFilter, STAGE_LABELS } from 
 import { fmtId } from './format.js'
 import {
   STAGES, YIELD_LEGEND, RANGE_PRESETS, attentionText, bahanHref, materialRowText, materialSummaryText,
-  outputTotalsText, variancePctText, woQtyText, yieldPctText, yieldSegments,
+  outputTotalsText, presetLabel, variancePctText, woQtyText, yieldPctText, yieldSegments,
   rangeParams, rangeLabel, selesaiTileLabel
 } from './dashboard.js'
 
@@ -35,24 +36,29 @@ const companyOptions = computed(() => [
 ])
 const companyParam = () => (company.value === 'ALL' ? '' : company.value)
 
-// FU76: filter rentang — preset di-resolve server; kustom memakai 2 input
-// tanggal dan reload menunggu isian valid (dari≤sampai, ≤366 hari)
+// FU76 (revisi UI): filter rentang = satu tombol + popover di page-head —
+// daftar preset DAN input kustom hidup di panel yang sama (input di luar
+// dropdown membingungkan, review user). Preset tersimpan = yang sudah
+// diterapkan; "Kustom" di daftar hanya membuka draft isian, commit lewat
+// tombol Terapkan — menutup popover membatalkan draft, data tak berubah.
 const preset = ref('hari_ini')
 const customDari = ref('')
 const customSampai = ref('')
 const rangeOptions = RANGE_PRESETS
+const rangePop = ref(null)
+const rangeOpen = ref(false)
+const kustomDraft = ref(false)
 const rangeInvalid = computed(() =>
-  preset.value === 'kustom' && customDari.value && customSampai.value &&
-  customDari.value > customSampai.value
+  !!customDari.value && !!customSampai.value && customDari.value > customSampai.value
 )
 const rangeTooLong = computed(() => {
-  if (preset.value !== 'kustom' || !customDari.value || !customSampai.value) return false
+  if (!customDari.value || !customSampai.value) return false
   const span = (new Date(customSampai.value) - new Date(customDari.value)) / 86400000
   return span > 366
 })
-const rangeReady = computed(() =>
-  preset.value !== 'kustom' ||
-  (customDari.value && customSampai.value && !rangeInvalid.value && !rangeTooLong.value)
+// kustom layak diterapkan: kedua tanggal terisi & valid
+const kustomReady = computed(() =>
+  !!(customDari.value && customSampai.value) && !rangeInvalid.value && !rangeTooLong.value
 )
 
 const dateLabel = computed(() =>
@@ -99,18 +105,32 @@ const muOver = computed(() => muRows.value.filter((r) => !!r?.over))
 const muOverExtra = computed(() => Math.max(0, muOver.value.length - 3))
 
 function reload() {
-  if (!rangeReady.value) return // kustom belum lengkap/valid — hint tampil
+  if (preset.value === 'kustom' && !kustomReady.value) return // draft belum lengkap/valid
   loadDashboard(companyParam(), rangeParams(preset.value, customDari.value, customSampai.value))
 }
 function onCompany() { reload() }
-function onPreset() {
-  // kustom menunggu kedua tanggal terisi (watch di bawah yang memuat);
-  // preset lain langsung memuat ulang
-  if (preset.value === 'kustom' && !(customDari.value && customSampai.value)) return
+function toggleRange(e) { rangePop.value?.toggle(e) }
+function pickPreset(key) {
+  // kustom = buka form isian di panel yang sama; diterapkan lewat Terapkan
+  if (key === 'kustom') { kustomDraft.value = true; return }
+  kustomDraft.value = false
+  preset.value = key
+  rangePop.value?.hide()
   reload()
 }
-// FU76: isian tanggal kustom memuat saat lengkap & valid
-function onCustomDate() { if (preset.value === 'kustom') reload() }
+function applyKustom() {
+  if (!kustomReady.value) return
+  preset.value = 'kustom'
+  kustomDraft.value = false
+  rangePop.value?.hide()
+  reload()
+}
+// tutup tanpa Terapkan = batal: highlight kembali ke preset terpakai,
+// isian tanggal tetap tersimpan untuk pembukaan berikutnya
+function onPopHide() {
+  rangeOpen.value = false
+  kustomDraft.value = false
+}
 // klik kartu tahap membawa konteks dashboard ke daftar WO (review FU72):
 // company terpilih, dan kartu "Selesai" dibatasi rentang resolved server
 function openStage(stage) {
@@ -142,16 +162,17 @@ onMounted(reload)
       <p class="sub">Ringkasan produksi.</p>
     </div>
     <div class="ph-right">
-      <Select
-        v-model="preset"
-        :options="rangeOptions"
-        optionLabel="label"
-        optionValue="key"
-        inputId="dash-range"
+      <button
+        type="button"
+        class="dash-range-btn"
+        aria-haspopup="true"
+        :aria-expanded="rangeOpen ? 'true' : 'false'"
         aria-label="Filter rentang tanggal"
-        class="ph-pselect"
-        @change="onPreset"
-      />
+        @click="toggleRange"
+      >
+        <span>{{ presetLabel(preset) }}</span>
+        <ChevronDown :size="15" :stroke-width="2" aria-hidden="true" />
+      </button>
       <Select
         v-if="showCompany"
         v-model="company"
@@ -167,25 +188,44 @@ onMounted(reload)
     </div>
   </div>
 
-  <div v-if="preset === 'kustom'" class="dash-custom-range">
-    <div class="ffield">
-      <label for="dash-dari">Dari</label>
-      <input id="dash-dari" v-model="customDari" class="input" type="date" @change="onCustomDate" />
+  <!-- popover filter rentang: daftar preset + form kustom dalam SATU panel
+     (appendTo body agar tidak terpotong overflow head) -->
+  <Popover ref="rangePop" append-to="body" class="dash-rpop" @show="rangeOpen = true" @hide="onPopHide">
+    <div class="dash-rlist" role="listbox" aria-label="Preset rentang tanggal">
+      <button
+        v-for="p in rangeOptions"
+        :key="p.key"
+        type="button"
+        class="dash-ropt"
+        :class="{ on: p.key === preset || (p.key === 'kustom' && kustomDraft) }"
+        :aria-selected="p.key === preset || (p.key === 'kustom' && kustomDraft) ? 'true' : 'false'"
+        @click="pickPreset(p.key)"
+      >
+        <span>{{ p.label }}</span>
+        <Check v-if="p.key === preset || (p.key === 'kustom' && kustomDraft)" :size="15" :stroke-width="2.2" aria-hidden="true" />
+      </button>
     </div>
-    <div class="ffield">
-      <label for="dash-sampai">s.d.</label>
-      <input id="dash-sampai" v-model="customSampai" class="input" type="date" @change="onCustomDate" />
+    <div v-if="kustomDraft || preset === 'kustom'" class="dash-rkustom">
+      <div class="ffield">
+        <label for="dash-dari">Dari</label>
+        <input id="dash-dari" v-model="customDari" class="input" type="date" />
+      </div>
+      <div class="ffield">
+        <label for="dash-sampai">s.d.</label>
+        <input id="dash-sampai" v-model="customSampai" class="input" type="date" />
+      </div>
+      <p v-if="rangeInvalid" class="dash-range-hint" role="status">
+        Tanggal tidak valid: "dari" melebihi "sampai".
+      </p>
+      <p v-else-if="rangeTooLong" class="dash-range-hint" role="status">
+        Rentang maksimal 366 hari.
+      </p>
+      <p v-else-if="!kustomReady" class="dash-range-hint" role="status">
+        Pilih tanggal awal dan akhir untuk memuat data.
+      </p>
+      <Button label="Terapkan" size="small" :disabled="!kustomReady" @click="applyKustom" />
     </div>
-    <p v-if="rangeInvalid" class="dash-range-hint" role="status">
-      Tanggal tidak valid: "dari" melebihi "sampai".
-    </p>
-    <p v-else-if="rangeTooLong" class="dash-range-hint" role="status">
-      Rentang maksimal 366 hari.
-    </p>
-    <p v-else-if="!(customDari && customSampai)" class="dash-range-hint" role="status">
-      Pilih tanggal awal dan akhir untuk memuat data.
-    </p>
-  </div>
+  </Popover>
 
   <div v-if="dashboardState.error" class="callout bad dash-error" role="alert">
     <p>Gagal memuat, coba lagi</p>
