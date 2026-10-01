@@ -6,12 +6,15 @@ import WarehouseSettings from './WarehouseSettings.vue'
 import HandoverBoard from './HandoverBoard.vue'
 import FormOrderPage from './FormOrderPage.vue'
 import FormOrderCreate from './FormOrderCreate.vue'
+import Dashboard from './Dashboard.vue'
 import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
-import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState } from './store.js'
+import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
+import { activeTotal } from './dashboard.js'
 import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
 
-// router hash minimal: '#/' + '#/wo/<id>' (work order), '#/handover' (stock entry)
+// router hash minimal: '#/' (dashboard, FU72), '#/wo' (daftar), '#/wo/<id>'
+// (work order), '#/handover' (stock entry)
 const hash = ref(window.location.hash)
 const onHash = () => {
   hash.value = window.location.hash
@@ -29,11 +32,13 @@ onUnmounted(() => window.removeEventListener('hashchange', onHash))
 const woId = computed(() =>
   hash.value.startsWith('#/wo/') ? decodeURIComponent(hash.value.slice(5)) : null
 )
+// FU72: '#/wo' menutup '#/wo/' juga; default (hash kosong/'#/') = dashboard
 const section = computed(() =>
-  hash.value.startsWith('#/settings') ? 'settings'
-    : hash.value.startsWith('#/handover') ? 'handover'
-      : hash.value.startsWith('#/form-order') ? 'form-order'
-        : 'workorder'
+  hash.value.startsWith('#/wo') ? 'workorder'
+    : hash.value.startsWith('#/settings') ? 'settings'
+      : hash.value.startsWith('#/handover') ? 'handover'
+        : hash.value.startsWith('#/form-order') ? 'form-order'
+          : 'dashboard'
 )
 // FU52: halaman buat Form Order terpisah dari riwayat
 const foCreate = computed(() => hash.value === '#/form-order/baru')
@@ -82,7 +87,13 @@ let printJobSequence = 0
 const errorClose = ref(null)
 const currentUser = window.workspace_user || 'Pengguna ERPNext'
 const initials = currentUser.split(' ').slice(0, 2).map(s => s[0]).join('')
-const activeCount = computed(() => workOrders.filter((w) => w.stage !== 'completed').length)
+// FU72: landing Dashboard tidak memuat daftar WO — badge pakai ringkasan tahap
+// dari dashboard_summary; setelah daftar dimuat, hitungan daftar yang menang.
+const activeCount = computed(() => {
+  if (state.loaded) return workOrders.filter((w) => w.stage !== 'completed').length
+  const stages = dashboardState.summary?.stages
+  return stages ? activeTotal(stages) : 0
+})
 const handoverCount = computed(() =>
   handoverRequests.filter((r) => r.lane === 'request').length
 )
@@ -236,13 +247,23 @@ function onNavClick() {
         <a
           href="#/"
           class="navitem"
+          :class="{ on: section === 'dashboard' }"
+          :aria-current="section === 'dashboard' ? 'page' : undefined"
+          @click="onNavClick"
+        >
+          <LayoutGrid :size="18" :stroke-width="1.9" class="nicon" />
+          <span class="nlabel">Dashboard</span>
+        </a>
+        <a
+          href="#/wo"
+          class="navitem"
           :class="{ on: section === 'workorder' }"
           :aria-current="section === 'workorder' ? 'page' : undefined"
           @click="onNavClick"
         >
           <ClipboardCheck :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Work Orders</span>
-          <span class="navbadge">{{ activeCount }}</span>
+          <span v-if="activeCount" class="navbadge">{{ activeCount }}</span>
         </a>
         <a
           href="#/handover"
@@ -288,6 +309,18 @@ function onNavClick() {
     <nav class="bottomnav" aria-label="Navigasi utama">
       <a
         href="#/"
+        class="bnav-item"
+        :class="{ on: section === 'dashboard' }"
+        :aria-current="section === 'dashboard' ? 'page' : undefined"
+        @click="onNavClick"
+      >
+        <span class="bnav-ic">
+          <LayoutGrid :size="20" :stroke-width="1.9" />
+        </span>
+        <span class="bnav-label">Dashboard</span>
+      </a>
+      <a
+        href="#/wo"
         class="bnav-item"
         :class="{ on: section === 'workorder' }"
         :aria-current="section === 'workorder' ? 'page' : undefined"
@@ -336,8 +369,9 @@ function onNavClick() {
           <HandoverBoard v-else-if="section === 'handover'" />
           <FormOrderCreate v-else-if="foCreate" />
           <FormOrderPage v-else-if="section === 'form-order'" />
+          <Dashboard v-else-if="section === 'dashboard'" />
           <Workspace v-else-if="woId" :key="woId" :id="woId" />
-          <WorkOrderList v-else />
+          <WorkOrderList v-else-if="section === 'workorder'" />
         </div>
         <footer class="appfoot">
           Tersambung ERPNext — server adalah sumber kebenaran.

@@ -1,5 +1,8 @@
 // Stock quantities are authoritative; display UOM and factor come from Item metadata.
 export const fmtInt = n => Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 6 }) : '—'
+// FU72: format Indonesia (titik ribuan, koma desimal, maks 2 desimal, tanpa
+// nol belakang) khusus Dashboard — helper lama tetap en-US untuk halaman lain.
+export const fmtId = n => Number.isFinite(n) ? n.toLocaleString('id-ID', { maximumFractionDigits: 2 }) : '-'
 export const fmtNum = fmtInt
 export function hasAlternate(units) {
   return !!units?.displayUom && units.displayUom !== units.stockUom && Number.isFinite(units.qtyInPack) && units.qtyInPack > 0

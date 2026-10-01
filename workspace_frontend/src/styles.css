@@ -2049,7 +2049,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   .kb-lane, .roleswitch button { transition: none; }
   .kc-enter-active { transition: none; }
   .dialog[open], .dialog[open]::backdrop { animation: none; }
-  .btn, .wo-row, .c-arrow, .back, .step, .step .dot, .sep, .wsc { transition: none; }
+  .btn, .wo-row, .c-arrow, .back, .step, .step .dot, .sep, .wsc, .dash-stage { transition: none; }
   .pop-enter-active, .pop-leave-active { transition: none; }
   .viewswitch button { transition: none; }
   .view-anim { animation: none; }
@@ -2223,4 +2223,107 @@ textarea.input { height: auto; padding: 8px 10px; }
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+}
+
+/* ============ FU72: Dashboard "Hari Ini" ============ */
+
+.ph-right { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.ph-select { width: auto; min-width: 160px; }
+
+/* ringkasan 3 angka: satu strip bersekat, bukan kartu identik */
+.dash-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }
+.dash-stat { display: flex; flex-direction: column; gap: 3px; padding: 15px 20px; min-width: 0; }
+.dash-stat + .dash-stat { border-left: 1px solid var(--line); }
+.dash-stat .k, .dash-panel .k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.dash-stat .v, .dash-panel .v {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.dash-stat .s { font-size: 12px; color: var(--muted); }
+
+/* papan 7 tahap: semua tombol; tahap berjalan diberi tint biru */
+.dash-stages { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.dash-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+.dash-stage:hover { background: var(--brand-softer); }
+.dash-stage:active { background: var(--brand-soft); }
+.dash-stage.on { background: var(--brand-soft); border-color: transparent; }
+.dash-stage .n {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+.dash-stage .l { font-size: 12px; color: var(--muted); }
+.dash-stage.on .n { color: var(--brand); }
+.dash-stage.on .l { color: var(--brand-strong); }
+
+/* panel serah terima + form order */
+.dash-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.dash-panel:only-child { grid-column: 1 / -1; } /* gudang-only: panel serah terima sendiri penuh */
+.dash-panel-body { display: flex; flex-direction: column; gap: 3px; }
+.dash-sec-title { margin: 20px 0 10px; }
+
+/* error inline dengan tombol coba lagi */
+.dash-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+/* tabel WO hari ini: 6 kolom di atas pola wo-row; scroll-x tetap di dalam
+   kontainer .wo-body (overflow-x auto), halaman tidak ikut scroll samping */
+.wo-body.dash-wo .wo-thead,
+.wo-body.dash-wo .wo-row {
+  grid-template-columns: minmax(126px, 0.9fr) minmax(170px, 1.6fr) minmax(110px, 0.6fr) minmax(130px, 0.9fr) minmax(130px, 0.9fr) 16px;
+}
+.dash-wo .wo-thead .num { text-align: right; }
+.dash-more { margin: 2px 2px 0; }
+
+/* chip filter tahap aktif di daftar WO (bisa diklik-hapus) */
+.filterchips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chip-filter { gap: 6px; font: inherit; cursor: pointer; }
+.chip-filter:hover { background: var(--grey-bg); }
+
+@media (max-width: 1000px) {
+  .dash-stages { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 820px) {
+  .dash-summary { grid-template-columns: 1fr; }
+  .dash-stat + .dash-stat { border-left: 0; border-top: 1px solid var(--line); }
+  .dash-panels { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  /* papan jadi daftar vertikal: angka kiri, label mengikuti */
+  .dash-stages { grid-template-columns: 1fr; gap: 8px; }
+  .dash-stage { flex-direction: row; align-items: baseline; gap: 12px; }
+  .dash-stage .n { font-size: 18px; min-width: 30px; }
+}
+/* FU72: mobile — layout areas global .wo-row (9 kolom) tidak berlaku untuk
+   kolom dashboard; susun ulang: WO, produk, tahap, lalu rencana & hasil */
+@media (max-width: 820px) {
+  .wo-body.dash-wo .wo-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "id id"
+      "prod prod"
+      "stage stage"
+      "plan hasil";
+  }
+  .dash-wo .c-plan { grid-area: plan; }
+  .dash-wo .c-hasil { grid-area: hasil; text-align: right; }
 }

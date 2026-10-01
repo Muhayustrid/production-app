@@ -1,0 +1,617 @@
+# FU72 dashboard "Hari Ini" — agregat read-only + param `company` di wo_list.
+#
+# Membuktikan dengan eksekusi pada runtime terpasang:
+# - wo_list(company=...) memfilter per company (kode lama: TypeError — bukti
+#   merah asli bagian ini);
+# - dashboard_summary: bentuk kontrak lengkap, hari kosong company fixture =
+#   semua nol, konversi Default Inventory UOM server-side (faktor 12 → 1000
+#   Pcs = 83,33 Pack), fallback stock UOM saat field default kosong, UOM beda
+#   TIDAK pernah dijumlahkan, Item master terhapus hanya men-skip baris itu
+#   (pola FU65), User Permission Company membatasi cakupan user, hitungan
+#   stage per derive_stage (draft → persiapan; aktif → lajur papan; selesai
+#   hari ini → selesai_hari_ini; selesai kemarin → TIDAK masuk papan), dan
+#   handover_menunggu / form_order_menunggu dari MR nyata + filter company.
+#
+# Semua record test berprefix FU72; framework test me-rollback tiap run
+# (tanpa commit — tearDownClass hanya sapu defensif ala test_form_order).
+
+import frappe
+from frappe.tests import IntegrationTestCase
+from frappe.utils import add_days, flt, now, random_string, today
+
+from erpnext.manufacturing.doctype.work_order.work_order import (
+	make_stock_entry as make_wo_stock_entry,
+)
+
+from production_app.api.work_order import (
+	STAGE_FINISH,
+	STAGE_MATERIAL,
+	STAGE_OPERASI,
+	STAGE_POST_PACKING,
+	STAGE_PREPACKING,
+	STAGE_PERSIAPAN,
+	wo_list,
+)
+
+PREFIX = "FU72"
+STAGE_SELESAI_HARI_INI = "selesai_hari_ini"
+
+SHAPE_KEYS = {
+	"today",
+	"companies",
+	"wo_planned_today",
+	"output_today",
+	"adonan_terakhir",
+	"stages",
+	"handover_menunggu",
+	"form_order_menunggu",
+}
+STAGE_KEYS = {
+	STAGE_PERSIAPAN,
+	STAGE_MATERIAL,
+	STAGE_OPERASI,
+	STAGE_PREPACKING,
+	STAGE_POST_PACKING,
+	STAGE_FINISH,
+	STAGE_SELESAI_HARI_INI,
+}
+
+
+def _summary(company=None):
+	"""Import lambat supaya RED terukur per-kasus (modul belum ada → ImportError),
+	bukan satu ImportError di level file yang menelan bukti TypeError wo_list."""
+	from production_app.api.dashboard import dashboard_summary
+
+	return dashboard_summary(company=company)
+
+
+def _uom_qty(summary, uom):
+	"""Qty hasil hari ini untuk satu UOM (None bila tidak ada entri)."""
+	return next((e["qty"] for e in summary["output_today"] if e["uom"] == uom), None)
+
+
+class TestDashboard(IntegrationTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		cls.suffix = random_string(6).upper()
+		cls.company_a = frappe.db.get_value("Company", {}, "name")
+		cls.uom_base = frappe.db.get_value("Work Order", {"docstatus": 1}, "stock_uom") or "Nos"
+		country = frappe.db.get_value("Company", cls.company_a, "country")
+		currency = frappe.db.get_value("Company", cls.company_a, "default_currency")
+
+		# ---- company fixture B (ringan: tanpa chart of accounts, tanpa perpetual)
+		frappe.local.flags.ignore_chart_of_accounts = True
+		try:
+			cls.company_b = (
+				frappe.get_doc(
+					{
+						"doctype": "Company",
+						"company_name": f"{PREFIX} Company {cls.suffix}",
+						"abbr": cls.suffix[:4],
+						"country": country,
+						"default_currency": currency,
+						"enable_perpetual_inventory": 0,
+					}
+				)
+				.insert()
+				.name
+			)
+		finally:
+			frappe.local.flags.ignore_chart_of_accounts = False
+
+		def warehouse(company, parent, name, group=False):
+			return (
+				frappe.get_doc(
+					{
+						"doctype": "Warehouse",
+						"warehouse_name": f"{PREFIX} {name} {cls.suffix}",
+						"company": company,
+						"parent_warehouse": parent,
+						"is_group": 1 if group else 0,
+					}
+				)
+				.insert()
+				.name
+			)
+
+		parent_a = frappe.db.get_value(
+			"Warehouse", {"company": cls.company_a, "is_group": 1}, "name"
+		)
+		cls.src_wh = warehouse(cls.company_a, parent_a, "Source")
+		cls.wip_wh = warehouse(cls.company_a, parent_a, "WIP")
+		cls.fg_wh = warehouse(cls.company_a, parent_a, "FG")
+		root_b = warehouse(cls.company_b, None, "B Root", group=True)
+		cls.b_src_wh = warehouse(cls.company_b, root_b, "B Source")
+		cls.b_wip_wh = warehouse(cls.company_b, root_b, "B WIP")
+		cls.b_fg_wh = warehouse(cls.company_b, root_b, "B FG")
+
+		# ---- UOM fixture (nama unik per run; UOM "Pack" global TIDAK diasumsikan)
+		def uom(name):
+			return (
+				frappe.get_doc({"doctype": "UOM", "uom_name": f"{PREFIX} {name} {cls.suffix}"})
+				.insert()
+				.name
+			)
+
+		cls.uom_pack = uom("Pack")
+		cls.uom_yest = uom("UYest")
+		cls.uom_del = uom("UDel")
+
+		# ---- item + BOM
+		cls.rm = cls._make_item("RM", cls.uom_base)
+
+		def item_with_uom(label, stock_uom, display_uom=None, factor=None):
+			code = cls._make_item(label, stock_uom)
+			if display_uom:
+				item = frappe.get_cached_doc("Item", code)
+				item.custom_default_inventory_unit_of_measure = display_uom
+				if factor:
+					item.append("uoms", {"uom": display_uom, "conversion_factor": factor})
+				item.save()
+			return code
+
+		# produk utama: Default Inventory UOM faktor 12 (kontrak contoh 1000 Pcs)
+		cls.fg_pack = item_with_uom("FGPack", cls.uom_base, cls.uom_pack, 12)
+		# produk tanpa field default → fallback stock UOM
+		cls.fg_plain = cls._make_item("FGPlain", cls.uom_base)
+		# produk untuk WO selesai KEMARIN (UOM unik: kehadirannya terbaca jelas)
+		cls.fg_yest = item_with_uom("FGYest", cls.uom_base, cls.uom_yest, 5)
+		# produk yang master-nya "terhapus" dari SE (pola FU65: rewrite item_code)
+		cls.fg_del = item_with_uom("FGDel", cls.uom_base, cls.uom_del, 3)
+
+		cls.bom_pack = cls._make_bom(cls.fg_pack)
+		cls.bom_plain = cls._make_bom(cls.fg_plain)
+		cls.bom_yest = cls._make_bom(cls.fg_yest)
+		cls.bom_del = cls._make_bom(cls.fg_del)
+		cls.bom_plain_b = cls._make_bom(cls.fg_plain, company=cls.company_b)
+
+		# persediaan RM untuk seluruh run
+		cls._receipt(cls.rm, 6000, cls.src_wh)
+
+		# ---- WO company B: submit lalu cancel — tampil di wo_list(company=B),
+		# tidak pernah masuk papan stage (docstatus 2) → company B tetap "kosong"
+		cls.wo_b = cls._make_wo(
+			cls.bom_plain_b,
+			5,
+			cls.fg_plain,
+			company=cls.company_b,
+			wip_wh=cls.b_wip_wh,
+			fg_wh=cls.b_fg_wh,
+			src_wh=cls.b_src_wh,
+		)
+		cls.wo_b.submit()
+		cls.wo_b.cancel()
+
+		# ---- user dengan User Permission Company=B (persona multi-company FU66)
+		cls.user_email = f"fu72.up.{cls.suffix.lower()}@prodapp.example.com"
+		cls.user_up = (
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": cls.user_email,
+					"first_name": f"FU72 UP {cls.suffix}",
+					"send_welcome_email": 0,
+				}
+			)
+			.insert()
+			.name
+		)
+		user = frappe.get_doc("User", cls.user_up)
+		for role in ("Manufacturing User", "Accounts User"):
+			user.append("roles", {"role": role})
+		user.save()
+		frappe.get_doc(
+			{
+				"doctype": "User Permission",
+				"user": cls.user_up,
+				"allow": "Company",
+				"for_value": cls.company_b,
+			}
+		).insert()
+
+	@classmethod
+	def tearDownClass(cls):
+		"""Sapu defensif EXACT-NAME (semua doc sebenarnya ikut rollback
+		framework; pola ini hanya menjebak commit liar masa depan — pattern
+		LIKE sengaja dihindari agar tidak menyentuh data committed lain)."""
+		frappe.db.rollback()
+		frappe.set_user("Administrator")
+		items = (cls.rm, cls.fg_pack, cls.fg_plain, cls.fg_yest, cls.fg_del)
+		uoms = (cls.uom_pack, cls.uom_yest, cls.uom_del)
+		warehouses = (cls.src_wh, cls.wip_wh, cls.fg_wh, cls.b_src_wh, cls.b_wip_wh, cls.b_fg_wh)
+		for doctype, field, names in (
+			("User Permission", "user", [cls.user_up]),
+			("User", "name", [cls.user_up]),
+			("Item", "name", items),
+			("Warehouse", "name", warehouses),
+			("Company", "name", [cls.company_b]),
+			("UOM", "name", uoms),
+		):
+			for name in names:
+				if name and frappe.db.exists(doctype, name):
+					frappe.delete_doc(doctype, name, force=True)
+		frappe.db.commit()
+		super().tearDownClass()
+
+	# ------------------------------------------------------------- fixtures
+
+	@staticmethod
+	def _pin_posting(se, posting_date, posting_time):
+		"""Urutan posting dibuat deterministik: receipt kemarin 07:00 <
+		transfer 09:00 < manufacture 10:00 (pola pinning T23)."""
+		se.set_posting_time = 1
+		se.posting_date = posting_date
+		se.posting_time = posting_time
+
+	@classmethod
+	def _make_item(cls, label, stock_uom):
+		return (
+			frappe.get_doc(
+				{
+					"doctype": "Item",
+					"item_code": f"{PREFIX}-{label}-{cls.suffix}",
+					"item_name": f"{PREFIX} {label} {cls.suffix}",
+					"item_group": frappe.db.get_value("Item Group", {}, "name"),
+					"stock_uom": stock_uom,
+					"is_stock_item": 1,
+					"is_purchase_item": 0,
+					"is_sales_item": 0,
+					"has_batch_no": 0,
+					"is_fixed_asset": 0,
+					"standard_rate": 10,
+				}
+			)
+			.insert()
+			.name
+		)
+
+	@classmethod
+	def _make_bom(cls, fg_item, company=None):
+		bom = frappe.get_doc(
+			{
+				"doctype": "BOM",
+				"item": fg_item,
+				"company": company or cls.company_a,
+				"currency": frappe.db.get_value("Company", company or cls.company_a, "default_currency"),
+				"quantity": 1,
+				"items": [
+					{
+						"item_code": cls.rm,
+						"qty": 1,
+						"rate": 10,
+						"uom": cls.uom_base,
+						"stock_uom": cls.uom_base,
+					}
+				],
+			}
+		)
+		bom.insert()
+		bom.submit()
+		return bom.name
+
+	@classmethod
+	def _receipt(cls, item, qty, warehouse_):
+		# posting KEMARIN 07:00 supaya transfer/produksi backdated WO kemarin
+		# lolos cek stok; Material Receipt tidak menyentuh metrik dashboard
+		# (hanya purpose Manufacture yang dihitung)
+		se = frappe.get_doc(
+			{
+				"doctype": "Stock Entry",
+				"stock_entry_type": "Material Receipt",
+				"company": cls.company_a,
+				"items": [
+					{
+						"item_code": item,
+						"qty": qty,
+						"basic_rate": 10,
+						"t_warehouse": warehouse_,
+						"uom": cls.uom_base,
+						"stock_uom": cls.uom_base,
+					}
+				],
+			}
+		)
+		cls._pin_posting(se, add_days(today(), -1), "07:00:00")
+		se.insert()
+		se.submit()
+		return se
+
+	@classmethod
+	def _make_wo(
+		cls, bom, qty, item, adonan=None, planned=None, company=None, wip_wh=None, fg_wh=None, src_wh=None
+	):
+		wo = frappe.get_doc(
+			{
+				"doctype": "Work Order",
+				"production_item": item,
+				"bom_no": bom,
+				"qty": qty,
+				"company": company or cls.company_a,
+				"fg_warehouse": fg_wh or cls.fg_wh,
+				"wip_warehouse": wip_wh or cls.wip_wh,
+				"source_warehouse": src_wh or cls.src_wh,
+				"scrap_warehouse": fg_wh or cls.fg_wh,
+				"stock_uom": cls.uom_base,
+				"planned_start_date": planned or now(),
+				"transfer_material_against": "Work Order",
+				"use_multi_level_bom": 0,
+				**({"custom_adonan_ke": adonan} if adonan else {}),
+			}
+		)
+		wo.get_items_and_operations_from_bom()
+		wo.insert()
+		return wo
+
+	@classmethod
+	def _transfer(cls, wo, posting_date=None):
+		se = frappe.get_doc(make_wo_stock_entry(wo.name, "Material Transfer for Manufacture"))
+		cls._pin_posting(se, posting_date or today(), "09:00:00")
+		se.insert()
+		se.submit()
+		return se
+
+	@classmethod
+	def _manufacture(cls, wo, good, posting_date=None):
+		"""Submit Manufacture hari `posting_date` (default hari ini); baris bahan
+		mengikuti rencana transfer (aturan konsumsi workspace, pola finish/T23)."""
+		se = frappe.get_doc(make_wo_stock_entry(wo.name, "Manufacture", qty=good))
+		cls._pin_posting(se, posting_date or today(), "10:00:00")
+		transferred = frappe._dict()
+		for r in frappe.get_all(
+			"Stock Entry Detail",
+			filters={
+				"parent": ("in", frappe.get_all(
+					"Stock Entry",
+					filters={
+						"work_order": wo.name,
+						"purpose": "Material Transfer for Manufacture",
+						"docstatus": 1,
+					},
+					pluck="name",
+				)),
+				"docstatus": 1,
+			},
+			fields=["item_code", "transfer_qty"],
+		):
+			transferred[r.item_code] = transferred.get(r.item_code, 0.0) + flt(r.transfer_qty)
+		for row in se.items:
+			if not row.is_finished_item and row.item_code in transferred:
+				row.qty = transferred[row.item_code]
+				row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
+		se.insert()
+		se.submit()
+		return se
+
+	@classmethod
+	def _make_mr(cls, wo, form_order=False):
+		"""MR Material Transfer nyata: serah terima (row.custom_work_order) atau
+		Form Order (custom_is_form_order) — bentuk fixture T23/test_form_order."""
+		row = {
+			"item_code": cls.fg_plain,
+			"qty": 5,
+			"uom": cls.uom_base,
+			"stock_uom": cls.uom_base,
+			"conversion_factor": 1,
+			"from_warehouse": cls.src_wh,
+			"warehouse": cls.fg_wh,
+			"schedule_date": add_days(now(), 1),
+		}
+		doc = {
+			"doctype": "Material Request",
+			"material_request_type": "Material Transfer",
+			"company": cls.company_a,
+			"transaction_date": now(),
+			"schedule_date": add_days(now(), 1),
+			"set_from_warehouse": cls.src_wh,
+			"set_warehouse": cls.fg_wh,
+			"items": [row],
+		}
+		if form_order:
+			doc["custom_is_form_order"] = 1
+		else:
+			row["custom_work_order"] = wo.name
+		mr = frappe.get_doc(doc)
+		mr.insert()
+		mr.submit()
+		return mr
+
+	# ------------------------------------------------------------ helper asersi
+
+	def _assert_full_shape(self, summary):
+		self.assertEqual(set(summary.keys()), SHAPE_KEYS)
+		self.assertEqual(set(summary["stages"].keys()), STAGE_KEYS)
+		self.assertEqual(summary["today"], today())
+		self.assertIsInstance(summary["output_today"], list)
+
+	# ----------------------------------------------- 1. param company di wo_list
+
+	def test_01_wo_list_company_param(self):
+		"""wo_list(company=...) hanya memuat WO company itu; tanpa param semua
+		terlihat. Lawan kode lama: TypeError unexpected keyword 'company'."""
+		rows_b = wo_list(company=self.company_b, page_len=2500)
+		self.assertEqual([r.name for r in rows_b], [self.wo_b.name])
+		rows_a = wo_list(company=self.company_a, page_len=2500)
+		self.assertNotIn(self.wo_b.name, [r.name for r in rows_a])
+		all_rows = wo_list(page_len=2500)
+		self.assertIn(self.wo_b.name, [r.name for r in all_rows])
+
+	# ------------------------------------- 2. hari kosong company fixture: nol
+
+	def test_02_hari_kosong_semua_nol(self):
+		"""Company fixture tanpa dokumen hidup → seluruh angka nol + bentuk
+		kontrak lengkap (endpoint tetap 200-shape di hari sepi)."""
+		s = _summary(company=self.company_b)
+		self._assert_full_shape(s)
+		self.assertIn(self.company_b, s["companies"])
+		self.assertEqual(s["wo_planned_today"], 0)
+		self.assertEqual(s["output_today"], [])
+		self.assertEqual(s["adonan_terakhir"], 0)
+		self.assertEqual(s["handover_menunggu"], 0)
+		self.assertEqual(s["form_order_menunggu"], 0)
+		for key in STAGE_KEYS:
+			self.assertEqual(s["stages"][key], 0, key)
+
+	# ------------------------------------- 3. konversi Default Inventory UOM
+
+	def test_03_output_pack_faktor_12(self):
+		"""1000 Pcs (faktor 12) hari ini → satu entri Pack 83,33 (server-side
+		konversi, float mentah — frontend yang format)."""
+		before = _uom_qty(_summary(company=self.company_a), self.uom_pack) or 0.0
+		wo = self._make_wo(self.bom_pack, 1000, self.fg_pack, adonan=1)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 1000)
+		after = _summary(company=self.company_a)
+		qty = _uom_qty(after, self.uom_pack)
+		self.assertIsNotNone(qty)
+		self.assertAlmostEqual(qty, before + 1000 / 12, places=6)
+
+	# ------------------------------------- 4. fallback stock UOM
+
+	def test_04_output_fallback_stock_uom(self):
+		"""Produk TANPA field Default Inventory UOM → entri dalam stock UOM,
+		qty apa adanya (tidak dikonversi, tidak di-skip)."""
+		before = _uom_qty(_summary(company=self.company_a), self.uom_base) or 0.0
+		wo = self._make_wo(self.bom_plain, 250, self.fg_plain)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 250)
+		after = _summary(company=self.company_a)
+		qty = _uom_qty(after, self.uom_base)
+		self.assertIsNotNone(qty)
+		self.assertAlmostEqual(qty, before + 250, places=6)
+
+	# ------------------------------------- 5. UOM beda tidak pernah dijumlahkan
+
+	def test_05_output_uom_terpisah(self):
+		"""Dua produk beda satuan tampil → dua entri terpisah (tidak digabung
+		menjadi satu baris UOM pertama)."""
+		before_pack = _uom_qty(_summary(company=self.company_a), self.uom_pack) or 0.0
+		before_base = _uom_qty(_summary(company=self.company_a), self.uom_base) or 0.0
+		wo1 = self._make_wo(self.bom_pack, 120, self.fg_pack)
+		wo1.submit()
+		self._transfer(wo1)
+		self._manufacture(wo1, 120)
+		wo2 = self._make_wo(self.bom_plain, 60, self.fg_plain)
+		wo2.submit()
+		self._transfer(wo2)
+		self._manufacture(wo2, 60)
+		after = _summary(company=self.company_a)
+		pack = _uom_qty(after, self.uom_pack)
+		base = _uom_qty(after, self.uom_base)
+		self.assertIsNotNone(pack)
+		self.assertIsNotNone(base)
+		self.assertAlmostEqual(pack, before_pack + 10, places=6)  # 120/12
+		self.assertAlmostEqual(base, before_base + 60, places=6)
+
+	# ------------------------------------- 6. Item master terhapus: skip per baris
+
+	def test_06_item_master_terhapus_skip(self):
+		"""SE memegang item_code yang master-nya sudah tidak ada → baris itu di-
+		skip dari total (tanpa konversi karangan), endpoint tetap hidup penuh
+		bentuknya (pola FU65)."""
+		wo = self._make_wo(self.bom_del, 90, self.fg_del)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 90)
+		before = _summary(company=self.company_a)
+		self.assertAlmostEqual(_uom_qty(before, self.uom_del) or 0, 30, places=6)  # 90/3
+		# simulate admin deletion tanpa cascade teardown (pola FU65):
+		# rewrite referensi item_code di baris SE jadi kode yang tak pernah ada
+		for name in frappe.get_all(
+			"Stock Entry Detail", filters={"item_code": self.fg_del}, pluck="name"
+		):
+			frappe.db.set_value("Stock Entry Detail", name, "item_code", f"{PREFIX}-DELETED-{self.suffix}")
+		after = _summary(company=self.company_a)
+		self._assert_full_shape(after)
+		self.assertIsNone(_uom_qty(after, self.uom_del))
+
+	# ------------------------------------- 7. User Permission company
+
+	def test_07_user_permission_company(self):
+		"""User ber-UP Company=B hanya melihat/menghitung company-nya; filter
+		eksplisit tetap bekerja dalam batas UP (A tetap tersembunyi), admin
+		dengan company=A melihat angka A."""
+		try:
+			frappe.set_user(self.user_up)
+			s = _summary()
+			self.assertEqual(s["companies"], [self.company_b])
+			self.assertEqual(s["wo_planned_today"], 0)
+			self.assertEqual(s["output_today"], [])
+			for key in STAGE_KEYS:
+				self.assertEqual(s["stages"][key], 0, key)
+			# UP ∩ filter eksplisit: A tersembunyi meski dipaksa, B tetap 0-shape
+			self.assertEqual(_summary(company=self.company_a)["wo_planned_today"], 0)
+			self.assertEqual(_summary(company=self.company_b)["wo_planned_today"], 0)
+			# param company juga bekerja di wo_list untuk user yang sama
+			rows_b = wo_list(company=self.company_b, page_len=2500)
+			self.assertEqual([r.name for r in rows_b], [self.wo_b.name])
+		finally:
+			frappe.set_user("Administrator")
+		# admin: filter eksplisit company A memuat hasil fixture (WO plan hari ini)
+		admin_a = _summary(company=self.company_a)
+		self.assertGreater(admin_a["wo_planned_today"], 0)
+
+	# ------------------------------------- 8. hitungan stage per derive_stage
+
+	def test_08_stages_papan(self):
+		"""Papan hari ini: draft → persiapan; submitted aktif → material; selesai
+		hari ini (Manufacture SE hari ini) → selesai_hari_ini; selesai kemarin
+		TIDAK masuk papan; adonan_terakhir = max adonan WO today."""
+		before = _summary(company=self.company_a)["stages"]
+
+		wo_draft = self._make_wo(self.bom_plain, 40, self.fg_plain, adonan=7)
+		after_draft = _summary(company=self.company_a)
+		self.assertEqual(after_draft["stages"][STAGE_PERSIAPAN], before[STAGE_PERSIAPAN] + 1)
+		self.assertEqual(after_draft["adonan_terakhir"], 7)
+
+		wo_mat = self._make_wo(self.bom_plain, 41, self.fg_plain)
+		wo_mat.submit()
+		after_mat = _summary(company=self.company_a)
+		self.assertEqual(after_mat["stages"][STAGE_MATERIAL], before[STAGE_MATERIAL] + 1)
+
+		wo_done = self._make_wo(self.bom_pack, 200, self.fg_pack, adonan=2)
+		wo_done.submit()
+		self._transfer(wo_done)
+		self._manufacture(wo_done, 200)
+		after_done = _summary(company=self.company_a)
+		self.assertEqual(
+			after_done["stages"][STAGE_SELESAI_HARI_INI], before[STAGE_SELESAI_HARI_INI] + 1
+		)
+		self.assertEqual(after_done["stages"][STAGE_MATERIAL], before[STAGE_MATERIAL] + 1)  # wo_mat
+
+		# selesai KEMARIN: SE Manufacture posting kemarin → tidak menaikkan apa pun
+		yesterday = add_days(today(), -1)
+		wo_yest = self._make_wo(
+			self.bom_yest, 100, self.fg_yest, planned=f"{yesterday} 08:00:00"
+		)
+		wo_yest.submit()
+		self._transfer(wo_yest, posting_date=yesterday)
+		self._manufacture(wo_yest, 100, posting_date=yesterday)
+		after_yest = _summary(company=self.company_a)
+		for key in STAGE_KEYS:
+			self.assertEqual(after_yest["stages"][key], after_done["stages"][key], key)
+		self.assertEqual(after_yest["adonan_terakhir"], 7)  # wo_yest bukan WO today
+
+		# rencana hari ini bertambah: draft + mat + done (bukan wo_yest)
+		self.assertEqual(after_yest["wo_planned_today"], after_done["wo_planned_today"])
+
+	# ------------------------------------- 9. handover & form order menunggu
+
+	def test_09_handover_form_order_menunggu(self):
+		"""handover_menunggu = MR Material Transfer terikat WO (docstatus 1, bukan
+		Stopped, tanpa SE); form_order_menunggu = MR custom_is_form_order
+		submitted tanpa SE; keduanya mengikuti filter company."""
+		wo = self._make_wo(self.bom_plain, 42, self.fg_plain)
+		wo.submit()
+		before = _summary(company=self.company_a)
+
+		self._make_mr(wo)  # MR serah terima nyata (lane request)
+		self._make_mr(wo, form_order=True)  # MR Form Order nyata
+		after = _summary(company=self.company_a)
+		self.assertEqual(after["handover_menunggu"], before["handover_menunggu"] + 1)
+		self.assertEqual(after["form_order_menunggu"], before["form_order_menunggu"] + 1)
+		# filter company: company B tidak menghitung MR company A
+		self.assertEqual(_summary(company=self.company_b)["handover_menunggu"], 0)
+		self.assertEqual(_summary(company=self.company_b)["form_order_menunggu"], 0)

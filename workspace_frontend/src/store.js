@@ -290,6 +290,7 @@ export async function loadList(filters = {}) {
       start_date: filters.startDate || null,
       end_date: filters.endDate || null,
       stage: filters.stage || null,
+      company: filters.company || null,
       start: filters.start ?? 0,
       page_len: filters.pageLen ?? listState.pageSize,
       meta: 1
@@ -305,6 +306,45 @@ export async function loadList(filters = {}) {
     state.error = e.message
   } finally {
     state.loading = false
+  }
+}
+
+// FU72: Dashboard "Hari Ini" — ringkasan + tabel WO hari ini, satu sumber
+// untuk Dashboard.vue; error inline di halaman (bukan dialog aksi).
+export const dashboardState = reactive({ summary: null, rows: [], total: 0, loading: false, error: '' })
+// konteks satu-shot dari Dashboard (klik tahap / "tampilkan semua") —
+// dikonsumsi & dikosongkan WorkOrderList saat mount (runtime saja, tidak
+// masuk preferensi tersimpan); from/to membatasi kartu "Selesai hari ini"
+export const pendingStageFilter = reactive({ stage: '', company: '', from: '', to: '' })
+
+export async function loadDashboard(company = '') {
+  dashboardState.loading = true
+  dashboardState.error = ''
+  uiTopLoading.active = true
+  try {
+    const summary = await call('production_app.api.dashboard.dashboard_summary',
+      company ? { company } : {})
+    dashboardState.summary = summary
+    // tanggal server-otoritatif untuk tabel WO hari ini (endpoint existing)
+    const result = await call('production_app.api.work_order.wo_list', {
+      start_date: summary.today,
+      end_date: summary.today,
+      stage: null,
+      start: 0,
+      page_len: 20,
+      meta: 1,
+      company: company || null
+    })
+    const rows = result.rows || []
+    dashboardState.total = result.total ?? rows.length
+    // pemetaan sama dengan loadList: pakai detail termuat bila sudah ada
+    const details = new Map(workOrders.filter(w => w.requiredItemsLoaded).map(w => [w.id, w]))
+    dashboardState.rows = rows.map(r => details.get(r.name) || { ...mapDetail(r), hasOperations: !!r.has_operations, requiredItemsLoaded: false })
+  } catch (e) {
+    dashboardState.error = e.message
+  } finally {
+    dashboardState.loading = false
+    uiTopLoading.active = false
   }
 }
 

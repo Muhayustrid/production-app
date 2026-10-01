@@ -108,7 +108,7 @@ onMounted(() => {
   <div v-if="loading" aria-hidden="true"></div>
   <div v-else-if="error" class="err" role="alert">{{ error }} <button class="btn" @click="load">Coba lagi</button></div>
   <div v-else-if="wo">
-    <a class="back" href="#/"><ChevronLeft :size="16" :stroke-width="2" /> Daftar Perintah Kerja</a>
+    <a class="back" href="#/wo"><ChevronLeft :size="16" :stroke-width="2" /> Daftar Perintah Kerja</a>
 
     <!-- FU68: daftar WO jadi kolom kiri setinggi konten (scroll); konten di kanan -->
     <div class="ws-layout">
@@ -201,6 +201,6 @@ onMounted(() => {
   </div>
 
   <div v-else class="empty">
-    Perintah kerja tidak ditemukan. <a href="#/">Kembali ke daftar</a>.
+    Perintah kerja tidak ditemukan. <a href="#/wo">Kembali ke daftar</a>.
   </div>
 </template>

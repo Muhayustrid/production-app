@@ -126,7 +126,7 @@ def derive_stage(wo, operations=None):
 	return STAGE_FINISH
 
 
-def _base_filters(search=None, production_item=None, status=None, start_date=None, end_date=None):
+def _base_filters(search=None, production_item=None, status=None, start_date=None, end_date=None, company=None):
 	filters, or_filters = [], []
 	if search:
 		or_filters.extend(
@@ -150,6 +150,9 @@ def _base_filters(search=None, production_item=None, status=None, start_date=Non
 		filters.append([DOCTYPE, "planned_start_date", ">=", start_date])
 	if end_date:
 		filters.append([DOCTYPE, "planned_start_date", "<=", f"{end_date} 23:59:59"])
+	if company:
+		# FU72: scope company opsional (posisi akhir — backward-compatible)
+		filters.append([DOCTYPE, "company", "=", company])
 	return filters, or_filters
 
 
@@ -181,10 +184,10 @@ def _stage_filters(stage):
 
 
 @frappe.whitelist()
-def wo_list(search=None, production_item=None, status=None, start_date=None, end_date=None, stage=None, start=0, page_len=20, meta=0):
+def wo_list(search=None, production_item=None, status=None, start_date=None, end_date=None, stage=None, start=0, page_len=20, meta=0, company=None):
 	"""Permission-filtered, paginated Work Order list for the workspace."""
 	start, page_len = max(int(start), 0), max(min(int(page_len), 2500), 1)
-	filters, or_filters = _base_filters(search, production_item, status, start_date, end_date)
+	filters, or_filters = _base_filters(search, production_item, status, start_date, end_date, company)
 	if stage:
 		filters.extend(_stage_filters(stage))
 

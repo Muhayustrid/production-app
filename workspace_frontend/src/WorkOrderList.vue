@@ -1,9 +1,9 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
+import { HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
 import { fmtDate, qtyStack } from './format.js'
 import { buildWorkOrderPreferences, normalizeWorkOrderPreferences } from './work-order-preferences.js'
-import { Search, Filter, ChevronRight, SearchX, Table, Kanban } from 'lucide-vue-next'
+import { Search, Filter, ChevronRight, SearchX, Table, Kanban, X } from 'lucide-vue-next'
 import WorkOrderKanban from './WorkOrderKanban.vue'
 
 const q = ref('')
@@ -12,10 +12,37 @@ const fStatus = ref('all')
 const fStage = ref('all')
 const fFrom = ref('')
 const fTo = ref('')
+// FU72: context company satu-shot dari Dashboard — runtime saja, tidak
+// masuk preferensi tersimpan; tampil sebagai chip yang bisa dihapus
+const companyOverride = ref('')
 const pageSize = computed(() => listState.pageSize)
 const filterOpen = ref(false)
 const restoring = ref(true)
 let reloadTimer
+// FU72: filter satu-shot dari Dashboard (tahap/company/tanggal) — override
+// runtime saja. Diterima di sini, lalu pertahapan menjadi filter manual:
+// setelah pemuatan pertama, filter tampil sebagai chip dan tersimpan ke
+// preferensi bila user berinteraksi lagi (keputusan review FU72 #8)
+let oneShotStage = false
+const STAGE_FILTER_MAP = { pre_packing: 'prepacking', post_packing: 'postpacking', selesai_hari_ini: 'done' }
+function consumePendingStage() {
+  const pending = pendingStageFilter
+  if (!pending.stage && !pending.company && !pending.from) return
+  const { stage, company, from, to } = pending
+  pendingStageFilter.stage = '' // one-shot: langsung dikosongkan
+  pendingStageFilter.company = ''
+  pendingStageFilter.from = ''
+  pendingStageFilter.to = ''
+  if (stage) {
+    const value = STAGE_FILTER_MAP[stage] || stage
+    if (['persiapan', 'material', 'operasi', 'prepacking', 'postpacking', 'finish', 'done'].includes(value)) {
+      fStage.value = value
+      oneShotStage = true
+    }
+  }
+  if (company) { companyOverride.value = company; oneShotStage = true }
+  if (from) { fFrom.value = from; fTo.value = to || from; oneShotStage = true }
+}
 
 const products = computed(() => [...new Map(workOrders.map((w) => [w.itemCode, w.product]))].sort((a, b) => a[1].localeCompare(b[1])))
 const todayLabel = new Date().toLocaleDateString('id-ID', {
@@ -33,6 +60,7 @@ function filterPayload() {
     search: q.value.trim(), productionItem: fProduct.value === 'all' ? '' : fProduct.value,
     status: fStatus.value === 'all' ? '' : fStatus.value,
     stage: fStage.value === 'all' ? '' : (fStage.value === 'done' ? 'selesai' : fStage.value),
+    company: companyOverride.value || null,
       startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value
   }
 }
@@ -56,7 +84,9 @@ function saveWoPreferences() {
 async function reload() {
   listState.page = 1
   await loadList(filterPayload())
-  await saveWoPreferences()
+  // FU72: pemuatan pertama setelah one-shot stage jangan menimpa preferensi
+  if (oneShotStage) oneShotStage = false
+  else await saveWoPreferences()
 }
 function setPageSize(value) {
   listState.pageSize = normalizePageSize(value)
@@ -68,6 +98,7 @@ function scheduleReload() {
 }
 function clearFilters() {
   q.value = ''; fProduct.value = 'all'; fStatus.value = 'all'; fStage.value = 'all'; fFrom.value = ''; fTo.value = ''
+  companyOverride.value = ''
   filterOpen.value = false
   reload()
 }
@@ -105,6 +136,7 @@ onMounted(() => {
     listState.pageSize = normalizePageSize(p.pageSize)
     filterOpen.value = p.filterOpen
     listPrefs.view = p.view
+    consumePendingStage() // override runtime sebelum fetch awal; tidak disimpan
     await nextTick()
     restoring.value = false
     reload()
@@ -120,6 +152,8 @@ onMounted(() => {
 function open(id) { window.location.hash = '#/wo/' + id }
 function statusClass(s) { return s === 'Draft' ? 'b-draft' : s === 'Completed' ? 'b-done' : 'b-run' }
 function stageLabel(w) { return w.stage === 'completed' ? 'Selesai' : STAGE_LABELS[w.stage] }
+// FU72: chip filter tahap aktif (termasuk hasil one-shot dari Dashboard)
+const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STAGE_LABELS[fStage.value]))
 </script>
 
 <template>
@@ -220,6 +254,18 @@ function stageLabel(w) { return w.stage === 'completed' ? 'Selesai' : STAGE_LABE
         <span class="btext">Kanban</span>
       </button>
     </div>
+  </div>
+
+  <!-- FU72: chip filter tahap aktif (satu-shot dari Dashboard atau manual) -->
+  <div v-if="fStage !== 'all' || companyOverride" class="filterchips">
+    <button v-if="fStage !== 'all'" type="button" class="chip chip-filter" @click="fStage = 'all'">
+      Tahap: {{ stageChipLabel }}
+      <X :size="12" :stroke-width="2.2" />
+    </button>
+    <button v-if="companyOverride" type="button" class="chip chip-filter" @click="companyOverride = ''; reload()">
+      Company: {{ companyOverride }}
+      <X :size="12" :stroke-width="2.2" />
+    </button>
   </div>
 
   <template v-if="listPrefs.view === 'kanban'">
