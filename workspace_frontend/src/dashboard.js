@@ -130,3 +130,48 @@ export function attentionText(item) {
 export function yieldPctText(pct) {
   return Number.isFinite(pct) ? `${fmtId(pct)}%` : '-'
 }
+
+// ============================================================================
+// FU74: penggunaan bahan baku (dashboard panel + halaman Bahan baku) — helper
+// murni teruji. Kontrak agregat: rows[{item_code,item_name,uom,planned,
+// expected,consumed,variance,variance_pct|null,over,unlisted,work_orders[]}]
+// ============================================================================
+
+// baris panel: hitung dari rows — used = baris consumed > 0, over = baris over
+// (epsilon 1e-9: sisa noise float gross−retur tidak dihitung "dipakai")
+export function materialCounts(mu) {
+  const rows = Array.isArray(mu?.rows) ? mu.rows : []
+  return {
+    used: rows.filter((r) => (Number(r?.consumed) || 0) > 1e-9).length,
+    over: rows.filter((r) => !!r?.over).length
+  }
+}
+
+// kalimat ringkasan panel: mu absen → ''; tanpa pemakaian → kalimat kosong
+// jujur; ada pemakaian → jumlah bahan + (bila ada) berapa di atas rencana
+export function materialSummaryText(mu) {
+  if (!mu) return ''
+  const { used, over } = materialCounts(mu)
+  if (!used) return 'Belum ada pemakaian bahan hari ini'
+  return over
+    ? `${used} bahan dipakai · ${over} di atas rencana`
+    : `${used} bahan dipakai · semua sesuai rencana`
+}
+
+// "Terpakai 52 kg · sesuai hasil 48 kg" — angka fmtId, UOM stok bahan
+export function materialRowText(row) {
+  const uom = row?.uom || ''
+  return `Terpakai ${fmtId(Number(row?.consumed) || 0)}${uom ? ' ' + uom : ''} · sesuai hasil ${fmtId(Number(row?.expected) || 0)}${uom ? ' ' + uom : ''}`
+}
+
+// "+8,3%" / "−4,5%" (minus asli U+2212, koma desimal); null → '' (tanpa dasar)
+export function variancePctText(row) {
+  const pct = Number(row?.variance_pct)
+  if (row?.variance_pct == null || !Number.isFinite(pct)) return ''
+  return `${pct > 0 ? '+' : pct < 0 ? '−' : ''}${fmtId(Math.abs(pct))}%`
+}
+
+// link halaman bahan untuk satu item (dipakai panel Dashboard & halaman)
+export function bahanHref(itemCode) {
+  return '#/bahan?bahan=' + encodeURIComponent(itemCode)
+}

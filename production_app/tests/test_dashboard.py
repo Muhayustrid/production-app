@@ -17,6 +17,13 @@
 # reject_over/stagnant/handover_request/form_order/suhu/stopped — dirangkai
 # judulnya oleh frontend).
 #
+# FU74 menambah kunci material_usage (agregat pemakaian bahan per rentang
+# planned_start_date WO): planned dari Work Order Item, expected diskalakan
+# produced_qty/qty (overproduksi jujur), consumed = gross − return dihitung
+# LANGSUNG dari Stock Entry (consumed_qty WO diabaikan — native melebihkan
+# dengan +returned_qty); module api/material_usage.py dipakai bersama
+# dashboard dan endpoint whitelisted tersendiri.
+#
 # Semua record test berprefix FU72; framework test me-rollback tiap run
 # (tanpa commit — tearDownClass hanya sapu defensif ala test_form_order).
 
@@ -57,6 +64,7 @@ SHAPE_KEYS = {
 	"form_order_menunggu",
 	"product_yield",
 	"attention",
+	"material_usage",
 }
 STAGE_KEYS = {
 	STAGE_PERSIAPAN,
@@ -99,6 +107,33 @@ def _yield_base(rows, item_code):
 def _attention_kinds(summary, kind):
 	"""Semua baris attention satu kind."""
 	return [e for e in summary["attention"] if e["kind"] == kind]
+
+
+def _mu(**kwargs):
+	"""Import lambat `aggregate` FU74 supaya RED terukur per-kasus
+	(ModuleNotFoundError / KeyError material_usage), bukan satu ImportError
+	level file yang menelan bukti kasus lain (pola _summary)."""
+	from production_app.api.material_usage import aggregate
+
+	return aggregate(**kwargs)
+
+
+def _mu_row(rows, item_code):
+	"""Baris agregat satu bahan dari daftar baris (None bila tidak ada)."""
+	return next((r for r in rows if r["item_code"] == item_code), None)
+
+
+def _mu_wo(row, wo_name):
+	"""Entri breakdown satu WO dalam baris bahan (None bila tidak ada)."""
+	return next(
+		(w for w in (row or {}).get("work_orders", []) if w["wo"] == wo_name), None
+	)
+
+
+def _urutan_varian(entries):
+	"""Kunci invarian urutan FU74: variance_pct None (tanpa dasar) paling
+	atas, lalu persen menurun — daftar kunci harus terurut naik."""
+	return [(0, 0.0) if p is None else (1, -p) for p in (e.get("variance_pct") for e in entries)]
 
 
 class TestDashboard(IntegrationTestCase):
@@ -168,6 +203,9 @@ class TestDashboard(IntegrationTestCase):
 		cls.uom_pack = uom("Pack")
 		cls.uom_yest = uom("UYest")
 		cls.uom_del = uom("UDel")
+		# FU74: UOM pecahan (UOM baru tanpa must_be_whole_number) untuk bahan
+		# ambang varian 5.001
+		cls.uom_mu = uom("UMU")
 
 		# ---- item + BOM
 		cls.rm = cls._make_item("RM", cls.uom_base)
@@ -199,6 +237,16 @@ class TestDashboard(IntegrationTestCase):
 
 		# persediaan RM untuk seluruh run
 		cls._receipt(cls.rm, 6000, cls.src_wh)
+
+		# ---- fixture FU74: produk + bahan khusus agregat pemakaian bahan.
+		# Bahan khusus (mu_rm/mu_extra) membuat baris agregat mulai dari NOL —
+		# asersi tak tercampur WO fixture lama yang berbagi cls.rm.
+		cls.mu_fg = cls._make_item("FGMU", cls.uom_mu)
+		cls.mu_rm = cls._make_item("MU RM", cls.uom_mu)
+		cls.mu_extra = cls._make_item("MU EXTRA", cls.uom_mu)
+		cls.bom_mu = cls._make_bom(cls.mu_fg, material=cls.mu_rm)
+		cls._receipt(cls.mu_rm, 1000, cls.src_wh)
+		cls._receipt(cls.mu_extra, 10, cls.src_wh)
 
 		# ---- WO company B: submit lalu cancel — tampil di wo_list(company=B),
 		# tidak pernah masuk papan stage (docstatus 2) → company B tetap "kosong"
@@ -266,8 +314,8 @@ class TestDashboard(IntegrationTestCase):
 		LIKE sengaja dihindari agar tidak menyentuh data committed lain)."""
 		frappe.db.rollback()
 		frappe.set_user("Administrator")
-		items = (cls.rm, cls.fg_pack, cls.fg_plain, cls.fg_yest, cls.fg_del)
-		uoms = (cls.uom_pack, cls.uom_yest, cls.uom_del)
+		items = (cls.rm, cls.fg_pack, cls.fg_plain, cls.fg_yest, cls.fg_del, cls.mu_fg, cls.mu_rm, cls.mu_extra)
+		uoms = (cls.uom_pack, cls.uom_yest, cls.uom_del, cls.uom_mu)
 		warehouses = (cls.src_wh, cls.wip_wh, cls.fg_wh, cls.b_src_wh, cls.b_wip_wh, cls.b_fg_wh)
 		for doctype, field, names in (
 			("User Permission", "user", [cls.user_up]),
@@ -316,7 +364,9 @@ class TestDashboard(IntegrationTestCase):
 		)
 
 	@classmethod
-	def _make_bom(cls, fg_item, company=None):
+	def _make_bom(cls, fg_item, company=None, material=None):
+		material = material or cls.rm
+		material_uom = frappe.db.get_value("Item", material, "stock_uom")
 		bom = frappe.get_doc(
 			{
 				"doctype": "BOM",
@@ -326,11 +376,11 @@ class TestDashboard(IntegrationTestCase):
 				"quantity": 1,
 				"items": [
 					{
-						"item_code": cls.rm,
+						"item_code": material,
 						"qty": 1,
 						"rate": 10,
-						"uom": cls.uom_base,
-						"stock_uom": cls.uom_base,
+						"uom": material_uom,
+						"stock_uom": material_uom,
 					}
 				],
 			}
@@ -344,6 +394,7 @@ class TestDashboard(IntegrationTestCase):
 		# posting KEMARIN 07:00 supaya transfer/produksi backdated WO kemarin
 		# lolos cek stok; Material Receipt tidak menyentuh metrik dashboard
 		# (hanya purpose Manufacture yang dihitung)
+		item_uom = frappe.db.get_value("Item", item, "stock_uom")
 		se = frappe.get_doc(
 			{
 				"doctype": "Stock Entry",
@@ -355,8 +406,8 @@ class TestDashboard(IntegrationTestCase):
 						"qty": qty,
 						"basic_rate": 10,
 						"t_warehouse": warehouse_,
-						"uom": cls.uom_base,
-						"stock_uom": cls.uom_base,
+						"uom": item_uom,
+						"stock_uom": item_uom,
 					}
 				],
 			}
@@ -368,7 +419,7 @@ class TestDashboard(IntegrationTestCase):
 
 	@classmethod
 	def _make_wo(
-		cls, bom, qty, item, adonan=None, planned=None, company=None, wip_wh=None, fg_wh=None, src_wh=None
+		cls, bom, qty, item, adonan=None, planned=None, company=None, wip_wh=None, fg_wh=None, src_wh=None, stock_uom=None
 	):
 		wo = frappe.get_doc(
 			{
@@ -381,7 +432,8 @@ class TestDashboard(IntegrationTestCase):
 				"wip_warehouse": wip_wh or cls.wip_wh,
 				"source_warehouse": src_wh or cls.src_wh,
 				"scrap_warehouse": fg_wh or cls.fg_wh,
-				"stock_uom": cls.uom_base,
+				# stock UOM dari item produksi (fixture FU74 memakai UOM sendiri)
+				"stock_uom": stock_uom or frappe.db.get_value("Item", item, "stock_uom"),
 				"planned_start_date": planned or now(),
 				"transfer_material_against": "Work Order",
 				"use_multi_level_bom": 0,
@@ -396,6 +448,37 @@ class TestDashboard(IntegrationTestCase):
 	def _transfer(cls, wo, posting_date=None):
 		se = frappe.get_doc(make_wo_stock_entry(wo.name, "Material Transfer for Manufacture"))
 		cls._pin_posting(se, posting_date or today(), "09:00:00")
+		se.insert()
+		se.submit()
+		return se
+
+	@classmethod
+	def _transfer_qty(cls, wo, item, qty):
+		"""SE MTFM manual dengan qty eksplisit — overproduksi men-transfer di
+		atas required (sah hanya saat backflush per-transfer; lihat test_28)."""
+		item_uom = frappe.db.get_value("Item", item, "stock_uom")
+		se = frappe.get_doc(
+			{
+				"doctype": "Stock Entry",
+				"stock_entry_type": "Material Transfer for Manufacture",
+				"work_order": wo.name,
+				"company": wo.company,
+				"from_warehouse": wo.source_warehouse,
+				"to_warehouse": wo.wip_warehouse,
+				"items": [
+					{
+						"item_code": item,
+						"qty": qty,
+						"s_warehouse": wo.source_warehouse,
+						"t_warehouse": wo.wip_warehouse,
+						"basic_rate": 10,
+						"uom": item_uom,
+						"stock_uom": item_uom,
+					}
+				],
+			}
+		)
+		cls._pin_posting(se, today(), "09:00:00")
 		se.insert()
 		se.submit()
 		return se
@@ -428,6 +511,94 @@ class TestDashboard(IntegrationTestCase):
 			if not row.is_finished_item and row.item_code in transferred:
 				row.qty = transferred[row.item_code]
 				row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
+		se.insert()
+		se.submit()
+		return se
+
+	@classmethod
+	def _manufacture_bahan(cls, wo, good, materials=None, from_wh=None):
+		"""Manufacture SE dengan qty bahan EKSPLISIT per item (overproduksi /
+		konsumsi yang tidak mengikuti transfer); baris bahan di luar
+		`materials` dibuang — pola dasar _manufacture, tanpa klem transfer.
+		`from_wh` mengalihkan gudang asal bahan (overproduksi melampaui WIP:
+		bahan tambahan ditarik langsung dari gudang sumber)."""
+		se = frappe.get_doc(make_wo_stock_entry(wo.name, "Manufacture", qty=good))
+		cls._pin_posting(se, today(), "10:00:00")
+		kept = []
+		for row in se.items:
+			if row.is_finished_item:
+				kept.append(row)
+			elif row.item_code in (materials or {}):
+				row.qty = materials[row.item_code]
+				row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
+				if from_wh:
+					row.s_warehouse = from_wh
+				kept.append(row)
+		se.items = kept
+		se.insert()
+		se.submit()
+		return se
+
+	@classmethod
+	def _consume(cls, wo, materials, from_wh=None):
+		"""SE "Material Consumption for Manufacture" — bahan terpakai tanpa FG
+		(konsumsi ad-hoc/tambahan). Purpose ini sumber-mandatory native: baris
+		hanya membawa s_warehouse (t_warehouse dikosongkan validator)."""
+		se = frappe.get_doc(
+			{
+				"doctype": "Stock Entry",
+				"stock_entry_type": "Material Consumption for Manufacture",
+				"work_order": wo.name,
+				"company": wo.company,
+				# from_bom wajib: tanpa itu validator me-nol-kan fg_completed_qty
+				# lalu melempar "For Quantity (Manufactured Qty) is mandatory"
+				"from_bom": 1,
+				"bom_no": wo.bom_no,
+				"fg_completed_qty": sum(materials.values()),
+				"items": [
+					{
+						"item_code": code,
+						"qty": qty,
+						"s_warehouse": from_wh or wo.source_warehouse,
+						"basic_rate": 10,
+						"uom": frappe.db.get_value("Item", code, "stock_uom"),
+						"stock_uom": frappe.db.get_value("Item", code, "stock_uom"),
+					}
+					for code, qty in materials.items()
+				],
+			}
+		)
+		se.insert()
+		se.submit()
+		return se
+
+	@classmethod
+	def _return_se(cls, wo, item, qty):
+		"""SE kembali bahan: purpose Material Transfer for Manufacture dengan
+		is_return=1, arah baris WIP → gudang asal; konvensi native qty POSITIF
+		(SLE dibalik get_sle_for_source/target — stock_entry.py 2253/2314)."""
+		se = frappe.get_doc(
+			{
+				"doctype": "Stock Entry",
+				"stock_entry_type": "Material Transfer for Manufacture",
+				"work_order": wo.name,
+				"company": wo.company,
+				"is_return": 1,
+				"from_warehouse": wo.wip_warehouse,
+				"to_warehouse": wo.source_warehouse,
+				"items": [
+					{
+						"item_code": item,
+						"qty": qty,
+						"s_warehouse": wo.wip_warehouse,
+						"t_warehouse": wo.source_warehouse,
+						"basic_rate": 10,
+						"uom": frappe.db.get_value("Item", item, "stock_uom"),
+						"stock_uom": frappe.db.get_value("Item", item, "stock_uom"),
+					}
+				],
+			}
+		)
 		se.insert()
 		se.submit()
 		return se
@@ -992,4 +1163,379 @@ class TestDashboard(IntegrationTestCase):
 		ident = [e.get("wo") or e.get("mr") for e in entries]
 		self.assertLess(ident.index(wo_stop.name), ident.index(wo_stag.name))
 		self.assertLess(ident.index(wo_stag.name), ident.index(mr.name))
+
+	# -------------------------------------- FU74: material_usage (pemakaian bahan)
+	# Runner frappe v16 TIDAK rollback antar test method — disiplin delta yang
+	# sama dengan test lama: baris mu_rm/mu_extra di-snapshot "before", WO baru
+	# diaserti lewat entri work_orders per WO (nilai absolut per WO, bebas
+	# pengaruh akumulasi lintas test). Test baru dieksekusi urut nama
+	# (test_24 → test_40), fixture FU74 dibuat di setUpClass.
+
+	def test_24_material_usage_dalam_shape(self):
+		"""dashboard_summary membawa kunci material_usage (agregat FU74 hari
+		ini, pola FU65: tanpa izin baca sumber → angka menyusut jujur, bukan
+		500); invarian urutan baris berlaku sejak awal."""
+		mu = _summary(company=self.company_a)["material_usage"]
+		self.assertEqual(mu["dari"], today())
+		self.assertEqual(mu["sampai"], today())
+		self.assertIsInstance(mu["rows"], list)
+		self.assertIsInstance(mu["products"], list)
+		self.assertIn(self.company_a, mu["companies"])
+		self.assertEqual(_urutan_varian(mu["rows"]), sorted(_urutan_varian(mu["rows"])))
+
+	def test_25_planned_expected_dari_required_items(self):
+		"""WO pertama fixture FU74 → baris bahan absolut: planned dari Work
+		Order Item (BOM 1 bahan per unit, WO qty 40), produksi penuh →
+		expected 40, consumed 40, varian 0, bukan over/unlisted."""
+		wo = self._make_wo(self.bom_mu, 40, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 40)
+		mu = _mu(company=self.company_a)
+		row = _mu_row(mu["rows"], self.mu_rm)
+		self.assertIsNotNone(row)
+		self.assertEqual(row["item_name"], f"{PREFIX} MU RM {self.suffix}")
+		self.assertEqual(row["uom"], self.uom_mu)
+		self.assertAlmostEqual(row["planned"], 40, places=6)
+		self.assertAlmostEqual(row["expected"], 40, places=6)
+		self.assertAlmostEqual(row["consumed"], 40, places=6)
+		self.assertAlmostEqual(row["variance"], 0, places=6)
+		self.assertAlmostEqual(row["variance_pct"], 0.0, places=6)
+		self.assertFalse(row["over"])
+		self.assertFalse(row["unlisted"])
+		w = _mu_wo(row, wo.name)
+		self.assertIsNotNone(w)
+		self.assertEqual(w["produk"], f"{PREFIX} FGMU {self.suffix}")
+		self.assertAlmostEqual(w["planned"], 40, places=6)
+		self.assertAlmostEqual(w["expected"], 40, places=6)
+		self.assertAlmostEqual(w["consumed"], 40, places=6)
+		self.assertAlmostEqual(w["produced_qty"], 40, places=6)
+		self.assertAlmostEqual(w["qty"], 40, places=6)
+		self.assertAlmostEqual(w["variance_pct"], 0.0, places=6)
+		self.assertFalse(w["over"])
+
+	def test_26_konsumsi_hanya_purpose_manufaktur(self):
+		"""Konsumsi dihitung dari SE purpose Manufacture dan Material
+		Consumption for Manufacture SAJA — SE transfer ke WIP belum konsumsi."""
+		wo_tr = self._make_wo(self.bom_mu, 35, self.mu_fg)
+		wo_tr.submit()
+		self._transfer(wo_tr)
+		base_consumed = flt(
+			(_mu_row(_mu(company=self.company_a)["rows"], self.mu_rm) or {}).get("consumed")
+		)
+		w_tr = _mu_wo(
+			_mu_row(_mu(company=self.company_a)["rows"], self.mu_rm), wo_tr.name
+		)
+		self.assertAlmostEqual(w_tr["consumed"], 0, places=6)  # transfer ≠ konsumsi
+		self.assertAlmostEqual(w_tr["planned"], 35, places=6)
+		self.assertAlmostEqual(w_tr["expected"], 0, places=6)  # belum produksi
+		self.assertIsNone(w_tr["variance_pct"])
+		self.assertFalse(w_tr["over"])
+
+		wo_co = self._make_wo(self.bom_mu, 5, self.mu_fg)
+		wo_co.submit()
+		self._transfer(wo_co)
+		self._consume(wo_co, {self.mu_rm: 5})
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		self.assertAlmostEqual(flt(row["consumed"]), base_consumed + 5, places=6)
+		self.assertAlmostEqual(_mu_wo(row, wo_co.name)["consumed"], 5, places=6)
+
+	def test_27_return_tidak_mengubah_konsumsi(self):
+		"""Retur (MTFM is_return=1, WIP → gudang asal) membalik TRANSFER,
+		bukan konsumsi (semantik native: get_available_materials hanya
+		mengizinkan retur dari sisa belum terpakai, get_consumed_qty tanpa
+		pengurangan retur): transfer 10, kembali 3, produksi 7 → consumed 7;
+		expected 7 (skala produced/qty) → varian 0, tidak over."""
+		base_consumed = flt(
+			(_mu_row(_mu(company=self.company_a)["rows"], self.mu_rm) or {}).get("consumed")
+		)
+		wo = self._make_wo(self.bom_mu, 10, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._return_se(wo, self.mu_rm, 3)
+		self._manufacture_bahan(wo, 7, {self.mu_rm: 7})
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		self.assertAlmostEqual(flt(row["consumed"]), base_consumed + 7, places=6)
+		w = _mu_wo(row, wo.name)
+		self.assertAlmostEqual(w["consumed"], 7, places=6)
+		self.assertAlmostEqual(w["produced_qty"], 7, places=6)
+		self.assertAlmostEqual(w["expected"], 7, places=6)
+		self.assertAlmostEqual(w["variance"], 0, places=6)
+		self.assertAlmostEqual(w["variance_pct"], 0.0, places=6)
+		self.assertFalse(w["over"])
+
+	def test_28_overproduksi_konsumsi_proporsional_tidak_over(self):
+		"""Overproduksi native jujur: dengan celah overproduksi native
+		(overproduction_percentage_for_work_order 20%), WO qty 100 hasil 120
+		dengan konsumsi proporsional 120 → expected 120 (required ×
+		produced/qty), varian ≈ 0, TIDAK over. Setting global dikembalikan
+		selalu (finally) — runner tidak rollback antar method."""
+		settings = frappe.get_doc("Manufacturing Settings")
+		asli_over = settings.overproduction_percentage_for_work_order
+		asli_backflush = settings.backflush_raw_materials_based_on
+		base_planned = flt(
+			(_mu_row(_mu(company=self.company_a)["rows"], self.mu_rm) or {}).get("planned")
+		)
+		try:
+			settings.overproduction_percentage_for_work_order = 20
+			# backflush per-transfer: cek "excess material transfer" dilewati,
+			# transfer 120 (di atas required 100) sah
+			settings.backflush_raw_materials_based_on = "Material Transferred for Manufacture"
+			settings.save()
+			wo = self._make_wo(self.bom_mu, 100, self.mu_fg)
+			wo.submit()
+			self._transfer_qty(wo, self.mu_rm, 120)
+			self._manufacture(wo, 120)  # konsumsi proporsional, hasil 120
+		finally:
+			settings.overproduction_percentage_for_work_order = asli_over
+			settings.backflush_raw_materials_based_on = asli_backflush
+			settings.save()
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		self.assertAlmostEqual(flt(row["planned"]), base_planned + 100, places=6)
+		w = _mu_wo(row, wo.name)
+		self.assertAlmostEqual(w["consumed"], 120, places=6)
+		self.assertAlmostEqual(w["produced_qty"], 120, places=6)
+		self.assertAlmostEqual(w["expected"], 120, places=6)
+		self.assertAlmostEqual(w["variance"], 0, places=6)
+		self.assertAlmostEqual(w["variance_pct"], 0.0, places=6)
+		self.assertFalse(w["over"])
+
+	def test_29_ambang_varian_persis_5_persen(self):
+		"""Ambang terbuka: variance_pct tepat 5.0 → TIDAK over; 5.001 →
+		over (konsumsi tambahan setelah produksi penuh)."""
+		wo_edge = self._make_wo(self.bom_mu, 100, self.mu_fg)
+		wo_edge.submit()
+		self._transfer(wo_edge)
+		self._manufacture(wo_edge, 100)
+		self._consume(wo_edge, {self.mu_rm: 5}, from_wh=self.src_wh)
+		wo_over = self._make_wo(self.bom_mu, 100, self.mu_fg)
+		wo_over.submit()
+		self._transfer(wo_over)
+		self._manufacture(wo_over, 100)
+		self._consume(wo_over, {self.mu_rm: 5.001}, from_wh=self.src_wh)
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		we = _mu_wo(row, wo_edge.name)
+		self.assertAlmostEqual(we["consumed"], 105, places=6)
+		self.assertAlmostEqual(we["expected"], 100, places=6)
+		self.assertAlmostEqual(we["variance_pct"], 5.0, places=6)
+		self.assertFalse(we["over"])
+		wo = _mu_wo(row, wo_over.name)
+		self.assertAlmostEqual(wo["consumed"], 105.001, places=6)
+		self.assertAlmostEqual(wo["variance_pct"], 5.001, places=6)
+		self.assertTrue(wo["over"])
+
+	def test_30_wo_rencana_tanpa_konsumsi_under(self):
+		"""WO direncanakan (required 60) tanpa produksi/konsumsi apa pun →
+		baris under-konsumsi: consumed 0, expected 0, variance_pct None, bukan
+		over, tidak unlisted."""
+		base_planned = flt(
+			(_mu_row(_mu(company=self.company_a)["rows"], self.mu_rm) or {}).get("planned")
+		)
+		wo = self._make_wo(self.bom_mu, 60, self.mu_fg)  # draft pun terhitung
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		self.assertAlmostEqual(flt(row["planned"]), base_planned + 60, places=6)
+		self.assertFalse(row["unlisted"])
+		w = _mu_wo(row, wo.name)
+		self.assertAlmostEqual(w["consumed"], 0, places=6)
+		self.assertAlmostEqual(w["expected"], 0, places=6)
+		self.assertIsNone(w["variance_pct"])
+		self.assertFalse(w["over"])
+
+	def test_31_konsumsi_tanpa_dasar_over(self):
+		"""WO tidak memproduksi apa pun tapi bahan habis → expected 0,
+		variance_pct None ("tanpa dasar"), over=True pada entri WO."""
+		wo = self._make_wo(self.bom_mu, 50, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._consume(wo, {self.mu_rm: 10}, from_wh=self.src_wh)
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		w = _mu_wo(row, wo.name)
+		self.assertAlmostEqual(w["consumed"], 10, places=6)
+		self.assertAlmostEqual(w["expected"], 0, places=6)
+		self.assertIsNone(w["variance_pct"])
+		self.assertTrue(w["over"])
+		self.assertFalse(row["unlisted"])  # bahan ada di rencana WO ini
+
+	def test_32_bahan_di_luar_rencana_unlisted(self):
+		"""Bahan ad-hoc di luar semua required_items → baris planned 0,
+		unlisted=True, over=True (konsumsi tanpa dasar rencana)."""
+		wo = self._make_wo(self.bom_mu, 20, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._consume(wo, {self.mu_extra: 4}, from_wh=self.src_wh)
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_extra)
+		self.assertIsNotNone(row)
+		self.assertAlmostEqual(row["planned"], 0, places=6)
+		self.assertTrue(row["unlisted"])
+		self.assertTrue(row["over"])
+		self.assertIsNone(row["variance_pct"])
+		self.assertAlmostEqual(row["consumed"], 4, places=6)
+		w = _mu_wo(row, wo.name)
+		self.assertAlmostEqual(w["consumed"], 4, places=6)
+		self.assertTrue(w["over"])
+
+	def test_33_dua_wo_satu_bahan_teragregasi(self):
+		"""Dua WO memakai bahan sama → SATU baris (planned menjumlah 30+20),
+		dua entri work_orders dengan nilai per WO."""
+		base_planned = flt(
+			(_mu_row(_mu(company=self.company_a)["rows"], self.mu_rm) or {}).get("planned")
+		)
+		wo1 = self._make_wo(self.bom_mu, 30, self.mu_fg)
+		wo2 = self._make_wo(self.bom_mu, 20, self.mu_fg)
+		row = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		self.assertAlmostEqual(flt(row["planned"]), base_planned + 50, places=6)
+		names = {w["wo"] for w in row["work_orders"]}
+		self.assertIn(wo1.name, names)
+		self.assertIn(wo2.name, names)
+		self.assertAlmostEqual(_mu_wo(row, wo1.name)["planned"], 30, places=6)
+		self.assertAlmostEqual(_mu_wo(row, wo2.name)["planned"], 20, places=6)
+
+	def test_34_filter_company_memisah_wo(self):
+		"""aggregate(company=B) hanya memuat WO company B; company A tidak
+		bocor ke hasil B dan WO B tidak bocor ke hasil A."""
+		bom_b = self._make_bom(self.mu_fg, company=self.company_b, material=self.mu_rm)
+		wo_b = self._make_wo(
+			bom_b,
+			15,
+			self.mu_fg,
+			company=self.company_b,
+			wip_wh=self.b_wip_wh,
+			fg_wh=self.b_fg_wh,
+			src_wh=self.b_src_wh,
+		)
+		row_b = _mu_row(_mu(company=self.company_b)["rows"], self.mu_rm)
+		self.assertIsNotNone(row_b)
+		self.assertAlmostEqual(flt(row_b["planned"]), 15, places=6)
+		self.assertEqual([w["wo"] for w in row_b["work_orders"]], [wo_b.name])
+		row_a = _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)
+		self.assertNotIn(wo_b.name, {w["wo"] for w in row_a["work_orders"]})
+
+	def test_35_filter_production_item(self):
+		"""production_item membatasi WO yang dihitung: bahan dari WO produk
+		lain tidak ikut (barisnya pun hilang bila tak ada WO lain)."""
+		wo_mu = self._make_wo(self.bom_mu, 25, self.mu_fg)
+		wo_lain = self._make_wo(self.bom_plain, 25, self.fg_plain)
+		row_rm = _mu_row(_mu(company=self.company_a)["rows"], self.rm)
+		names_rm = {w["wo"] for w in row_rm["work_orders"]}
+		self.assertIn(wo_lain.name, names_rm)
+		self.assertNotIn(wo_mu.name, names_rm)  # WO mu_fg tidak memakai rm
+		# filter produk mu_fg: baris rm lenyap (tak ada WO mu_fg yang memakainya)
+		mu_rows = _mu(company=self.company_a, production_item=self.mu_fg)["rows"]
+		self.assertIsNone(_mu_row(mu_rows, self.rm))
+		self.assertIn(
+			wo_mu.name,
+			{w["wo"] for w in _mu_row(mu_rows, self.mu_rm)["work_orders"]},
+		)
+		# filter produk fg_plain: sebaliknya
+		fg_rows = _mu(company=self.company_a, production_item=self.fg_plain)["rows"]
+		self.assertIn(
+			wo_lain.name, {w["wo"] for w in _mu_row(fg_rows, self.rm)["work_orders"]}
+		)
+		self.assertIsNone(_mu_row(fg_rows, self.mu_rm))
+
+	def test_36_filter_search_substring(self):
+		"""search: substring case-insensitive pada item_code ATAU item_name,
+		diterapkan SETELAH agregasi (nilai baris tetap penuh)."""
+		self._make_wo(self.bom_mu, 10, self.mu_fg)
+		self.assertIsNotNone(_mu_row(_mu(company=self.company_a)["rows"], self.mu_rm))
+		# cocok di item_name saja ("MU RM" ber-spasi tidak ada di kode)
+		by_name = _mu_row(_mu(company=self.company_a, search="mu rm")["rows"], self.mu_rm)
+		self.assertIsNotNone(by_name)
+		# cocok di item_code saja ("72-mu" hanya ada di kode, tidak di nama —
+		# nama memakai spasi: "FU72 MU RM ...")
+		by_code = _mu_row(_mu(company=self.company_a, search="72-mu")["rows"], self.mu_rm)
+		self.assertIsNotNone(by_code)
+		# baris bahan lain tidak lolos search khusus mu
+		self.assertIsNone(_mu_row(_mu(company=self.company_a, search="mu rm")["rows"], self.rm))
+		# tidak cocok → kosong
+		self.assertEqual(_mu(company=self.company_a, search="tidak-ada-ioe")["rows"], [])
+
+	def test_37_filter_over_only(self):
+		"""over_only menyaring BARIS: hanya baris over; baris sehat (rm,
+		varian 0 dari konsumsi proporsional) tersembunyi, baris bermasalah
+		(mu_extra tanpa rencana) tetap tampil; urutan invarian terjaga."""
+		full = _mu(company=self.company_a)
+		self.assertFalse(_mu_row(full["rows"], self.rm)["over"])
+		self.assertTrue(_mu_row(full["rows"], self.mu_extra)["over"])
+		filtered = _mu(company=self.company_a, over_only=True)
+		self.assertGreater(len(filtered["rows"]), 0)
+		self.assertTrue(all(r["over"] for r in filtered["rows"]))
+		self.assertIsNotNone(_mu_row(filtered["rows"], self.mu_extra))
+		self.assertIsNone(_mu_row(filtered["rows"], self.rm))
+		self.assertEqual(
+			_urutan_varian(filtered["rows"]), sorted(_urutan_varian(filtered["rows"]))
+		)
+		# urutan breakdown per WO dalam satu baris mengikuti aturan yang sama
+		row = _mu_row(full["rows"], self.mu_rm)
+		self.assertEqual(
+			_urutan_varian(row["work_orders"]), sorted(_urutan_varian(row["work_orders"]))
+		)
+
+	def test_38_validasi_rentang_tanggal(self):
+		"""dari > sampai, rentang > 92 hari, dan tanggal rusak →
+		frappe.ValidationError; rentang tepat 92 hari sah."""
+		with self.assertRaises(frappe.ValidationError):
+			_mu(dari=today(), sampai=add_days(today(), -1))
+		with self.assertRaises(frappe.ValidationError):
+			_mu(dari=today(), sampai=add_days(today(), 93))
+		with self.assertRaises(frappe.ValidationError):
+			_mu(dari="bukan-tanggal", sampai=today())
+		mu = _mu(dari=today(), sampai=add_days(today(), 92))
+		self.assertEqual(mu["dari"], today())
+		self.assertEqual(mu["sampai"], add_days(today(), 92))
+
+	def test_39_rentang_tanggal_memfilter_wo(self):
+		"""WO di luar rentang planned_start_date tidak masuk agregat; rentang
+		lebar memuatnya kembali (draft pun, selama docstatus < 2)."""
+		wo_future = self._make_wo(
+			self.bom_mu, 70, self.mu_fg, planned=f"{add_days(today(), 10)} 08:00:00"
+		)
+		wo_past = self._make_wo(
+			self.bom_mu, 80, self.mu_fg, planned=f"{add_days(today(), -3)} 08:00:00"
+		)
+		names_now = {
+			w["wo"]
+			for w in _mu_row(_mu(company=self.company_a)["rows"], self.mu_rm)["work_orders"]
+		}
+		self.assertNotIn(wo_future.name, names_now)
+		self.assertNotIn(wo_past.name, names_now)
+		row_week = _mu_row(
+			_mu(
+				company=self.company_a,
+				dari=add_days(today(), -7),
+				sampai=add_days(today(), 14),
+			)["rows"],
+			self.mu_rm,
+		)
+		names_week = {w["wo"] for w in row_week["work_orders"]}
+		self.assertIn(wo_future.name, names_week)
+		self.assertIn(wo_past.name, names_week)
+
+	def test_40_daftar_produk_sebelum_filter_produk(self):
+		"""products diambil dari WO SEBELUM filter production_item: dengan
+		filter satu produk, daftar tetap memuat produk lain; urut item_name."""
+		self._make_wo(self.bom_mu, 12, self.mu_fg)
+		mu = _mu(company=self.company_a, production_item=self.mu_fg)
+		codes = {p["item_code"] for p in mu["products"]}
+		self.assertIn(self.mu_fg, codes)
+		self.assertIn(self.fg_plain, codes)
+		self.assertIn(self.fg_pack, codes)  # WO produk lain hari ini dari test lama
+		names = [p["item_name"] for p in mu["products"]]
+		self.assertEqual(names, sorted(names))
+		self.assertEqual(set(next(p for p in mu["products"]).keys()), {"item_code", "item_name"})
+
+	def test_41_endpoint_over_only_string(self):
+		"""Jalur endpoint whitelisted: param HTTP datang sebagai STRING —
+		over_only='0' harus TETAP menampilkan baris sehat (string '0' truthy
+		tanpa cint, review FU74 MAJOR-1); over_only='1' menyaring."""
+		from production_app.api.material_usage import material_usage as endpoint
+
+		penuh = endpoint(company=self.company_a)
+		self.assertFalse(_mu_row(penuh["rows"], self.rm)["over"])
+		self.assertTrue(_mu_row(penuh["rows"], self.mu_extra)["over"])
+		sehat = endpoint(company=self.company_a, over_only="0")
+		self.assertIsNotNone(_mu_row(sehat["rows"], self.rm))
+		atas = endpoint(company=self.company_a, over_only="1")
+		self.assertTrue(all(r["over"] for r in atas["rows"]))
+		self.assertIsNone(_mu_row(atas["rows"], self.rm))
 

@@ -2457,3 +2457,112 @@ textarea.input { height: auto; padding: 8px 10px; }
   .dash-card .panel-body { padding: 14px; }
   .ph-pselect.p-select { min-width: 140px; }
 }
+
+/* ============ FU74: penggunaan bahan baku (panel Dashboard + halaman Bahan) ============ */
+
+/* panel dashboard full-width: ringkasan + maks 3 baris over, tanpa tabel */
+.dash-mu { margin-bottom: 14px; }
+.dash-mu-link {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.dash-mu-link:hover { text-decoration: underline; }
+.dash-mu-rows { display: flex; flex-direction: column; }
+.dash-mu-rows > * + * { border-top: 1px solid var(--line); }
+.dash-mu-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 4px;
+  margin: 0 -4px;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 6px;
+  transition: background 0.14s ease;
+}
+.dash-mu-row:hover { background: var(--brand-softer); }
+.dash-mu-row .mtxt { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.dash-mu-row .ttl { font-weight: 600; font-size: 13.5px; color: var(--ink); }
+.dash-mu-row .ttl small { font-weight: 400; color: var(--faint); margin-left: 7px; }
+.dash-mu-row .dtl { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.dash-mu-extra {
+  display: block;
+  padding: 9px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand);
+  text-decoration: none;
+}
+.dash-mu-extra:hover { text-decoration: underline; }
+.dash-mu-empty { padding: 26px 20px; }
+
+/* Tag selisih: skin mengikuti bahasa chip app (netral abu / merah lembut) */
+.bahan-tag {
+  flex: none;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 3px 10px;
+  background: var(--grey-bg);
+  color: var(--grey-ink);
+  white-space: nowrap;
+}
+.bahan-tag.over { background: var(--bad-bg); color: var(--bad-ink); }
+
+/* halaman Bahan baku: toolbar filter + tabel ekspander */
+.bahan-toolbar { flex-wrap: wrap; } /* lawan .toolbar nowrap milik daftar WO di <=820px */
+.bahan-date { width: 152px; flex: none; }
+.bahan-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bahan-name { min-width: 0; }
+.bahan-noplan { margin-left: 8px; }
+.bahan-range-warn { margin-bottom: 12px; }
+
+/* baris ekspansi: tabel polos rincian per WO (bukan DataTable) */
+.bahan-table .p-datatable-row-expansion > td {
+  background: var(--brand-softer);
+  padding: 10px 14px 14px 44px;
+}
+.bahan-sub {
+  width: 100%;
+  min-width: 560px; /* layar sempit ikut scroll-x kontainer tabel, bukan remuk */
+  border-collapse: collapse;
+  font-size: 12.5px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.bahan-sub th, .bahan-sub td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+.bahan-sub tbody tr:last-child td { border-bottom: 0; }
+.bahan-sub thead th {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  background: rgba(243, 246, 249, 0.7);
+  white-space: nowrap;
+}
+.bahan-sub .num { text-align: right; white-space: nowrap; }
+.bahan-sub tbody tr:hover { background: var(--brand-softer); }
+
+@media (max-width: 620px) {
+  .bahan-date { flex: 1 1 46%; width: auto; }
+  .bahan-table .p-datatable-row-expansion > td { padding: 8px 10px 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-mu-row { transition: none; }
+}

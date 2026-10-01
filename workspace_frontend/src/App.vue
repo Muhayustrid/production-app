@@ -7,14 +7,15 @@ import HandoverBoard from './HandoverBoard.vue'
 import FormOrderPage from './FormOrderPage.vue'
 import FormOrderCreate from './FormOrderCreate.vue'
 import Dashboard from './Dashboard.vue'
+import BahanPage from './BahanPage.vue'
 import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
 import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
 import { activeTotal } from './dashboard.js'
-import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, Settings, HelpCircle, Factory, Package } from 'lucide-vue-next'
+import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
 
 // router hash minimal: '#/' (dashboard, FU72), '#/wo' (daftar), '#/wo/<id>'
-// (work order), '#/handover' (stock entry)
+// (work order), '#/handover' (stock entry), '#/bahan' (FU74)
 const hash = ref(window.location.hash)
 const onHash = () => {
   hash.value = window.location.hash
@@ -38,8 +39,21 @@ const section = computed(() =>
     : hash.value.startsWith('#/settings') ? 'settings'
       : hash.value.startsWith('#/handover') ? 'handover'
         : hash.value.startsWith('#/form-order') ? 'form-order'
-          : 'dashboard'
+          : hash.value.startsWith('#/bahan') ? 'bahan'
+            : 'dashboard'
 )
+// FU74: '#/bahan?bahan=..&dari=..&sampai=..&company=..' → props awal BahanPage
+const bahanQuery = computed(() => {
+  if (!hash.value.startsWith('#/bahan')) return { bahan: '', dari: '', sampai: '', company: '' }
+  const qs = hash.value.slice('#/bahan'.length)
+  const params = new URLSearchParams(qs.startsWith('?') ? qs.slice(1) : '')
+  return {
+    bahan: params.get('bahan') || '',
+    dari: params.get('dari') || '',
+    sampai: params.get('sampai') || '',
+    company: params.get('company') || ''
+  }
+})
 // FU52: halaman buat Form Order terpisah dari riwayat
 const foCreate = computed(() => hash.value === '#/form-order/baru')
 
@@ -287,6 +301,16 @@ function onNavClick() {
           <ClipboardList :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Form Order</span>
         </a>
+        <a
+          href="#/bahan"
+          class="navitem"
+          :class="{ on: section === 'bahan' }"
+          :aria-current="section === 'bahan' ? 'page' : undefined"
+          @click="onNavClick"
+        >
+          <Wheat :size="18" :stroke-width="1.9" class="nicon" />
+          <span class="nlabel">Bahan baku</span>
+        </a>
         <div class="navsection">Sistem</div>
         <a
           v-if="canSettings"
@@ -358,6 +382,18 @@ function onNavClick() {
         </span>
         <span class="bnav-label">Form Order</span>
       </a>
+      <a
+        href="#/bahan"
+        class="bnav-item"
+        :class="{ on: section === 'bahan' }"
+        :aria-current="section === 'bahan' ? 'page' : undefined"
+        @click="onNavClick"
+      >
+        <span class="bnav-ic">
+          <Wheat :size="20" :stroke-width="1.9" />
+        </span>
+        <span class="bnav-label">Bahan</span>
+      </a>
     </nav>
 
     <div class="maincol">
@@ -370,6 +406,13 @@ function onNavClick() {
           <FormOrderCreate v-else-if="foCreate" />
           <FormOrderPage v-else-if="section === 'form-order'" />
           <Dashboard v-else-if="section === 'dashboard'" />
+          <BahanPage
+            v-else-if="section === 'bahan'"
+            :initial-bahan="bahanQuery.bahan"
+            :initial-dari="bahanQuery.dari"
+            :initial-sampai="bahanQuery.sampai"
+            :initial-company="bahanQuery.company"
+          />
           <Workspace v-else-if="woId" :key="woId" :id="woId" />
           <WorkOrderList v-else-if="section === 'workorder'" />
         </div>

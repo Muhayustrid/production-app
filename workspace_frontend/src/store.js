@@ -348,6 +348,30 @@ export async function loadDashboard(company = '') {
   }
 }
 
+// FU74: penggunaan bahan baku — agregat server per rentang/company/produk
+// (production_app.api.material_usage.material_usage). Error inline di halaman.
+export const bahanState = reactive({ loading: false, error: '', loaded: false, data: null })
+
+export async function loadBahan(params = {}) {
+  bahanState.loading = true
+  bahanState.error = ''
+  try {
+    bahanState.data = await call('production_app.api.material_usage.material_usage', {
+      dari: params.dari || null,
+      sampai: params.sampai || null,
+      company: params.company || '',
+      production_item: params.productionItem || '',
+      search: params.search || '',
+      over_only: params.overOnly ? '1' : '0'
+    })
+    bahanState.loaded = true
+  } catch (e) {
+    bahanState.error = e.message
+  } finally {
+    bahanState.loading = false
+  }
+}
+
 export async function loadListPreferences() {
   try {
     Object.assign(savedListPreferences, await call('production_app.api.work_order.list_preferences'))

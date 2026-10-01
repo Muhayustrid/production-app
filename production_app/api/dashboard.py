@@ -17,6 +17,10 @@
 # FU73 menambah `product_yield` (agregat hasil post-packing per produk,
 # konversi satuan display) dan `attention` (baris mentah per kind — judul
 # dan format angka DIRANGKAI FRONTEND, server hanya data terstruktur).
+#
+# FU74 menambah `material_usage` — agregat pemakaian bahan hari ini dari
+# api/material_usage.aggregate; tanpa izin baca WO/SE → None (panel
+# disembunyikan frontend, pola FU65/FU73).
 
 from datetime import timedelta
 
@@ -28,6 +32,7 @@ from production_app.api.handover import (
 	ROLES_GUDANG,
 	_sent_se_by_mr,
 )
+from production_app.api.material_usage import aggregate
 from production_app.api.production_plan import _conversion_factor
 from production_app.api.work_order import (
 	STAGE_FINISH,
@@ -105,6 +110,14 @@ def dashboard_summary(company=None):
 	handover = _handover_mrs(company)
 	form_orders = _form_order_mrs(company)
 	planned, adonan = _wo_today(today_rows)
+	# FU74: agregat pemakaian bahan hari ini. Tanpa izin baca WO/SE → None:
+	# frontend menyembunyikan panelnya (degradasi jujur, pola FU65/FU73),
+	# endpoint tetap hidup — PermissionError sengaja TIDAK ditelan di dalam
+	# aggregate sendiri.
+	try:
+		material_usage = aggregate(company=company, dari=day, sampai=day)
+	except frappe.PermissionError:
+		material_usage = None
 	return {
 		"today": day,
 		"companies": _companies(),
@@ -116,6 +129,7 @@ def dashboard_summary(company=None):
 		"form_order_menunggu": len(form_orders),
 		"product_yield": _product_yield(today_rows),
 		"attention": _attention(rows, today_rows, handover, form_orders),
+		"material_usage": material_usage,
 	}
 
 

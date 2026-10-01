@@ -16,7 +16,8 @@ import Tag from 'primevue/tag'
 import { dashboardState, loadDashboard, pendingStageFilter, STAGE_LABELS } from './store.js'
 import { fmtId } from './format.js'
 import {
-  STAGES, YIELD_LEGEND, attentionText, outputTotalsText, woQtyText, yieldPctText, yieldSegments
+  STAGES, YIELD_LEGEND, attentionText, bahanHref, materialRowText, materialSummaryText,
+  outputTotalsText, variancePctText, woQtyText, yieldPctText, yieldSegments
 } from './dashboard.js'
 
 const summary = computed(() => dashboardState.summary)
@@ -56,6 +57,15 @@ const attentionRows = computed(() =>
     bad: item.severity !== 'warn'
   }))
 )
+
+// FU74: panel penggunaan bahan baku — null = user tanpa izin Stock Entry,
+// panel disembunyikan seluruhnya (jujur terhadap izin, bukan pesan error)
+const mu = computed(() => summary.value?.material_usage || null)
+const muRows = computed(() => (Array.isArray(mu.value?.rows) ? mu.value.rows : []))
+const muUsed = computed(() => muRows.value.some((r) => (Number(r?.consumed) || 0) > 0))
+// over sudah urut terburuk dari server (variance_pct null paling atas)
+const muOver = computed(() => muRows.value.filter((r) => !!r?.over))
+const muOverExtra = computed(() => Math.max(0, muOver.value.length - 3))
 
 function reload() { loadDashboard(companyParam()) }
 function onCompany() { reload() }
@@ -210,6 +220,44 @@ onMounted(reload)
         </div>
       </section>
     </div>
+
+    <!-- FU74: penggunaan bahan baku hari ini — panel lebar penuh, ringkas -->
+    <section v-if="mu" class="panel dash-mu" aria-label="Penggunaan bahan baku">
+      <div class="panel-head">
+        <div>
+          <h2>Penggunaan bahan baku</h2>
+          <p v-if="muUsed" class="lead">{{ materialSummaryText(mu) }}</p>
+        </div>
+        <a href="#/bahan" class="dash-mu-link">Lihat semua</a>
+      </div>
+      <div class="panel-body">
+        <div v-if="muUsed" class="dash-mu-rows">
+          <template v-if="muOver.length">
+            <a
+              v-for="row in muOver.slice(0, 3)"
+              :key="row.item_code"
+              class="dash-mu-row"
+              :href="bahanHref(row.item_code)"
+            >
+              <span class="mtxt">
+                <span class="ttl">{{ row.item_name }}<small v-if="row.item_code">{{ row.item_code }}</small></span>
+                <span class="dtl">{{ materialRowText(row) }}</span>
+              </span>
+              <!-- pct null = tanpa dasar — jangan pill merah kosong (review FU74 #3) -->
+              <Tag :value="variancePctText(row) || 'tanpa dasar'" severity="danger" class="bahan-tag over" />
+            </a>
+            <a v-if="muOverExtra" href="#/bahan" class="dash-mu-extra">
+              +{{ muOverExtra }} lainnya · buka halaman bahan baku
+            </a>
+          </template>
+          <p v-else class="dash-none">Semua pemakaian sesuai rencana (ambang 5%)</p>
+        </div>
+        <div v-else class="empty-inset dash-mu-empty">
+          <span class="eico"><SearchX :size="19" :stroke-width="1.8" /></span>
+          <p class="etitle">Belum ada pemakaian bahan hari ini</p>
+        </div>
+      </div>
+    </section>
 
     <section aria-label="Work Order hari ini">
       <h2 class="dash-sec-title">Work Order hari ini</h2>

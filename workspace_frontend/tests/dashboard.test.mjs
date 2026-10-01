@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  STAGES, activeTotal, attentionText, durationText, outputTotalsText, yieldPctText, yieldSegments
+  STAGES, activeTotal, attentionText, bahanHref, durationText, materialCounts, materialRowText,
+  materialSummaryText, outputTotalsText, variancePctText, yieldPctText, yieldSegments
 } from '../src/dashboard.js'
 
 test('outputTotalsText menggabungkan total per satuan', () => {
@@ -141,4 +142,63 @@ test('yieldPctText: fmtId + persen, null → "-"', () => {
   assert.equal(yieldPctText(0), '0%')
   assert.equal(yieldPctText(null), '-')
   assert.equal(yieldPctText(undefined), '-')
+})
+
+// ---- FU74: penggunaan bahan baku ----
+
+test('materialCounts: used = consumed > 0, over = baris over; field hilang ditoleransi', () => {
+  assert.deepEqual(
+    materialCounts({ rows: [{ consumed: 52 }, { consumed: 0, over: true }, null, {}] }),
+    { used: 1, over: 1 }
+  )
+  // noise float (sisa gross−retur) tidak dihitung "dipakai" (review NIT FU74)
+  assert.deepEqual(materialCounts({ rows: [{ consumed: 1e-13 }] }), { used: 0, over: 0 })
+  assert.deepEqual(materialCounts({}), { used: 0, over: 0 })
+  assert.deepEqual(materialCounts(null), { used: 0, over: 0 })
+})
+
+test('materialSummaryText: mu kosong, belum dipakai, sesuai rencana, ada over', () => {
+  assert.equal(materialSummaryText(null), '')
+  assert.equal(materialSummaryText(undefined), '')
+  assert.equal(materialSummaryText({}), 'Belum ada pemakaian bahan hari ini')
+  assert.equal(materialSummaryText({ rows: [{ consumed: 0 }] }), 'Belum ada pemakaian bahan hari ini')
+  assert.equal(
+    materialSummaryText({ rows: [{ consumed: 52 }, { consumed: 3.5 }] }),
+    '2 bahan dipakai · semua sesuai rencana'
+  )
+  assert.equal(
+    materialSummaryText({ rows: [{ consumed: 52, over: true }, { consumed: 3 }, { consumed: 9, over: true }] }),
+    '3 bahan dipakai · 2 di atas rencana'
+  )
+  // baris rusak/null dihitung aman
+  assert.equal(
+    materialSummaryText({ rows: [null, { consumed: 5, over: true }, {}] }),
+    '1 bahan dipakai · 1 di atas rencana'
+  )
+})
+
+test('materialRowText: frasa tetap "Terpakai X uom · sesuai hasil Y uom" (fmtId)', () => {
+  assert.equal(materialRowText({ consumed: 52, expected: 48, uom: 'kg' }), 'Terpakai 52 kg · sesuai hasil 48 kg')
+  assert.equal(materialRowText({ consumed: 52.5, expected: 48, uom: 'Kg' }), 'Terpakai 52,5 Kg · sesuai hasil 48 Kg')
+  assert.equal(materialRowText({ consumed: 0, expected: 0, uom: 'kg' }), 'Terpakai 0 kg · sesuai hasil 0 kg')
+  assert.equal(materialRowText({ consumed: 1200, expected: 1000, uom: 'g' }), 'Terpakai 1.200 g · sesuai hasil 1.000 g')
+  // uom hilang: tanpa spasi gantung
+  assert.equal(materialRowText({ consumed: 2, expected: 1 }), 'Terpakai 2 · sesuai hasil 1')
+})
+
+test('variancePctText: tanda selalu tampil, minus asli, koma desimal; null → ""', () => {
+  assert.equal(variancePctText({ variance_pct: 8.3 }), '+8,3%')
+  assert.equal(variancePctText({ variance_pct: -4.5 }), '−4,5%')
+  assert.equal(variancePctText({ variance_pct: 12 }), '+12%')
+  assert.equal(variancePctText({ variance_pct: -1250.55 }), '−1.250,55%')
+  assert.equal(variancePctText({ variance_pct: 0 }), '0%')
+  assert.equal(variancePctText({ variance_pct: null }), '')
+  assert.equal(variancePctText({}), '')
+  assert.equal(variancePctText(null), '')
+})
+
+test('bahanHref: hash bahan dengan query ter-encode', () => {
+  assert.equal(bahanHref('TERIGU-01'), '#/bahan?bahan=TERIGU-01')
+  assert.equal(bahanHref('Tepung Terigu'), '#/bahan?bahan=Tepung%20Terigu')
+  assert.equal(bahanHref('Gula & Sirup'), '#/bahan?bahan=Gula%20%26%20Sirup')
 })
