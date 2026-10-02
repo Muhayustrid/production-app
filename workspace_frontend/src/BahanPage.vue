@@ -23,7 +23,7 @@ import SelectButton from 'primevue/selectbutton'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import {
-  Boxes, ChevronRight, ClipboardList, ExternalLink, Factory, FlaskConical,
+  Boxes, ChevronRight, ClipboardList, ExternalLink, Factory, Filter, FlaskConical,
   Gauge, HelpCircle, Search, SearchX, TrendingUp, X
 } from 'lucide-vue-next'
 import { bahanState, loadBahan } from './store.js'
@@ -48,6 +48,11 @@ const sampai = ref(props.initialSampai)
 const product = ref('ALL')
 const company = ref(props.initialCompany || 'ALL')
 const overOnly = ref(false)
+// FU79b: filter panel gaya WorkOrderList — popover dari tombol Filter;
+// tanggal BAHAN tidak bisa kosong (server default hari ini), jadi "bersih"
+// = kembali ke rentang dasar milik server (di-catat saat muat pertama)
+const filterOpen = ref(false)
+const basis = ref({ dari: '', sampai: '' })
 let reloadTimer
 let echoingDates = false
 
@@ -57,10 +62,6 @@ const showCompany = computed(() => companies.value.length > 1)
 const companyOptions = computed(() => [
   { label: 'Semua company', value: 'ALL' },
   ...companies.value.map((c) => ({ label: c, value: c }))
-])
-const productOptions = computed(() => [
-  { label: 'Semua produk', value: 'ALL' },
-  ...(data.value?.products || []).map((p) => ({ label: p.item_name || p.item_code, value: p.item_code }))
 ])
 const rows = computed(() => data.value?.rows || [])
 const workOrders = computed(() => data.value?.work_orders || [])
@@ -83,12 +84,14 @@ async function reload() {
   const firstLoad = !bahanState.loaded
   await loadBahan(payload())
   // muat pertama tanpa tanggal: isi input dari jawaban server (server
-  // otoritatif atas "hari ini"); setelahnya isian user tak pernah ditimpa
+  // otoritatif atas "hari ini"); setelahnya isian user tak pernah ditimpa.
+  // Rentang dasar di-catat utk "Hapus semua filter" & hitungan badge Filter
   const d = bahanState.data
-  if (firstLoad && d && (!dari.value || !sampai.value)) {
+  if (firstLoad && d) {
     echoingDates = true
     if (!dari.value && d.dari) dari.value = d.dari
     if (!sampai.value && d.sampai) sampai.value = d.sampai
+    basis.value = { dari: dari.value, sampai: sampai.value }
     await nextTick()
     echoingDates = false
   }
@@ -100,7 +103,7 @@ function scheduleReload() {
 watch(q, scheduleReload)
 watch([dari, sampai], () => { if (!echoingDates) scheduleReload() })
 watch(overOnly, scheduleReload)
-watch(product, reload)
+watch(product, scheduleReload)
 // deep link saat halaman sudah terbuka (hash berubah tanpa remount — goto
 // dalam SPA hanya hashchange): ikuti perubahan props awal dari router
 watch(
@@ -214,6 +217,26 @@ function statusSeverity(status) {
 }
 function woHref(wo) { return '#/wo/' + encodeURIComponent(wo) }
 function noPlan(w) { return !Number(w?.planned) }
+
+// badge tombol Filter (pola WorkOrderList): produk/over-only dihitung 1 bila
+// aktif; tanggal dihitung bila menyimpang dari rentang dasar server
+const activeFilters = computed(
+  () =>
+    (product.value !== 'ALL') +
+    (overOnly.value ? 1 : 0) +
+    (dari.value && dari.value !== basis.value.dari ? 1 : 0) +
+    (sampai.value && sampai.value !== basis.value.sampai ? 1 : 0)
+)
+// satu aksi bersih (konvensi FU75): reset ke kondisi awal halaman — watcher
+// q/tanggal/over-only/product me-lebur lewat debounce jadi SATU reload
+function clearFilters() {
+  q.value = ''
+  product.value = 'ALL'
+  overOnly.value = false
+  dari.value = basis.value.dari
+  sampai.value = basis.value.sampai
+  filterOpen.value = false
+}
 </script>
 
 <template>
@@ -239,22 +262,57 @@ function noPlan(w) { return !Number(w?.planned) }
   </div>
 
   <div class="toolbar bahan-toolbar">
-    <input v-model="dari" class="input bahan-date" type="date" aria-label="Dari tanggal" />
-    <input v-model="sampai" class="input bahan-date" type="date" aria-label="Sampai tanggal" />
-    <Select
-      v-model="product"
-      :options="productOptions"
-      optionLabel="label"
-      optionValue="value"
-      inputId="bahan-product"
-      aria-label="Filter produk"
-      class="ph-pselect"
-      @change="reload"
-    />
-    <label class="bahan-check" for="bahan-over">
-      <Checkbox v-model="overOnly" binary inputId="bahan-over" />
-      <span>Hanya di atas rencana</span>
-    </label>
+    <div class="searchbox">
+      <Search :size="15" :stroke-width="2" class="search-ico" />
+      <input
+        v-model="q"
+        class="input"
+        type="search"
+        placeholder="Cari bahan"
+        aria-label="Cari bahan"
+      />
+    </div>
+    <div class="filterwrap">
+      <button class="btn filterbtn" :class="{ active: activeFilters }" aria-label="Filter" @click="filterOpen = !filterOpen">
+        <Filter :size="14" :stroke-width="2" />
+        <span class="btext">Filter</span>
+        <span v-if="activeFilters" class="filtercount">{{ activeFilters }}</span>
+      </button>
+      <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
+      <Transition name="pop">
+        <div v-if="filterOpen" class="filterpanel">
+          <div class="ffield">
+            <label>Produk</label>
+            <select v-model="product" class="select">
+              <option value="ALL">Semua produk</option>
+              <option v-if="product !== 'ALL' && !(data?.products || []).some((p) => p.item_code === product)" :value="product">{{ product }}</option>
+              <option v-for="p in data?.products || []" :key="p.item_code" :value="p.item_code">{{ p.item_name || p.item_code }}</option>
+            </select>
+          </div>
+          <div class="ffield">
+            <label>Cakupan</label>
+            <label class="bahan-check" for="bahan-over">
+              <Checkbox v-model="overOnly" binary inputId="bahan-over" />
+              <span>Hanya di atas rencana</span>
+            </label>
+          </div>
+          <div class="frow2">
+            <div class="ffield">
+              <label>Dari tanggal</label>
+              <input v-model="dari" class="input" type="date" />
+            </div>
+            <div class="ffield">
+              <label>s.d. tanggal</label>
+              <input v-model="sampai" class="input" type="date" />
+            </div>
+          </div>
+          <p v-if="rangeInvalid" class="bahan-range-hint" role="status">
+            Tanggal tidak valid: "dari" melebihi "sampai".
+          </p>
+          <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
+        </div>
+      </Transition>
+    </div>
   </div>
 
   <p v-if="rangeInvalid" class="callout bahan-range-warn" role="status">
@@ -390,16 +448,6 @@ function noPlan(w) { return !Number(w?.planned) }
           <p class="deye">Rincian per bahan</p>
           <h2>Analisis penggunaan</h2>
           <p class="dsub">Klik satu bahan untuk melihat transaksi sumbernya.</p>
-        </div>
-        <div class="searchbox">
-          <Search :size="15" :stroke-width="2" class="search-ico" />
-          <input
-            v-model="q"
-            class="input"
-            type="search"
-            placeholder="Cari bahan"
-            aria-label="Cari bahan"
-          />
         </div>
       </div>
       <div class="panel-body bahan-tbody">
