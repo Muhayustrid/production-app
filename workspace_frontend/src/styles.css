@@ -2400,6 +2400,21 @@ textarea.input { height: auto; padding: 8px 10px; }
 .donut-body { display: flex; flex-direction: column; }
 .donut-flex { display: flex; align-items: center; gap: 10px; flex: 1; min-height: 0; }
 .donut-wrap { position: relative; flex: none; width: 178px; height: 178px; }
+/* SAMA dgn .dchart-box: p-chart tanpa tinggi membuat chart.js mengukur
+   basi (canvas donat mentok 150px di wrap 178px → ring naik ~14px dan
+   angka pusat tampak turun) — rantai wrapper di-block-kan penuh */
+.donut-wrap p-chart, .donut-wrap .p-chart {
+  display: block;
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.donut-wrap canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
 
 /* angka pusat donut: overlay absolut (bukan plugin chart.js). ANGKA
    dipusatkan MURNI di 50% lubang (bukan ikut blok dua baris — label di
