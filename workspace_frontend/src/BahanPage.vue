@@ -23,15 +23,16 @@ import SelectButton from 'primevue/selectbutton'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import {
-  Boxes, ChevronRight, ClipboardList, ExternalLink, Factory, Filter, FlaskConical,
+  Boxes, Calendar, ChevronRight, ClipboardList, ExternalLink, Factory, Filter, FlaskConical,
   Gauge, HelpCircle, Search, SearchX, TrendingUp, X
 } from 'lucide-vue-next'
 import { bahanState, loadBahan } from './store.js'
 import { fmtId } from './format.js'
 import {
-  barPct, chartTrend, comparisonRows, efficiencyPct, materialCounts, peakDay, peakText,
-  signedQtyText, tanggalPendek, txnOfMaterial, uomTotals, variancePctText, varianceTone,
-  weightedVarPct, woStatusSummary, woStatusText, woYieldPct, yieldPctText, yieldTone
+  barPct, chartTrend, comparisonRows, efficiencyPct, materialCounts, normalisasiRentang, peakDay,
+  peakText, rentangDmyText, signedQtyText, tanggalPendek, txnOfMaterial, uomTotals,
+  variancePctText, varianceTone, weightedVarPct, woStatusSummary, woStatusText, woYieldPct,
+  yieldPctText, yieldTone
 } from './dashboard.js'
 
 const props = defineProps({
@@ -53,6 +54,11 @@ const overOnly = ref(false)
 // = kembali ke rentang dasar milik server (di-catat saat muat pertama)
 const filterOpen = ref(false)
 const basis = ref({ dari: '', sampai: '' })
+// FU79c: field rentang TUNGGAL — klik → kalender (pilihan pertama = dari,
+// langsung terfilter satu hari), kalender muncul lagi (pilihan kedua = to);
+// to tidak dipilih → tetap filter dari aja. showPicker() native.
+const modeKalender = ref(null) // null | 'dari' | 'sampai'
+const kalender = ref(null)
 let reloadTimer
 let echoingDates = false
 
@@ -218,14 +224,13 @@ function statusSeverity(status) {
 function woHref(wo) { return '#/wo/' + encodeURIComponent(wo) }
 function noPlan(w) { return !Number(w?.planned) }
 
-// badge tombol Filter (pola WorkOrderList): produk/over-only dihitung 1 bila
-// aktif; tanggal dihitung bila menyimpang dari rentang dasar server
+// badge tombol Filter (pola WorkOrderList): produk/over-only/tanggal
+// menyimpang dari dasar masing-masing dihitung 1
 const activeFilters = computed(
   () =>
     (product.value !== 'ALL') +
     (overOnly.value ? 1 : 0) +
-    (dari.value && dari.value !== basis.value.dari ? 1 : 0) +
-    (sampai.value && sampai.value !== basis.value.sampai ? 1 : 0)
+    (dari.value !== basis.value.dari || sampai.value !== basis.value.sampai ? 1 : 0)
 )
 // satu aksi bersih (konvensi FU75): reset ke kondisi awal halaman — watcher
 // q/tanggal/over-only/product me-lebur lewat debounce jadi SATU reload
@@ -235,7 +240,62 @@ function clearFilters() {
   overOnly.value = false
   dari.value = basis.value.dari
   sampai.value = basis.value.sampai
+  modeKalender.value = null
   filterOpen.value = false
+}
+
+// ---- field rentang tunggal (FU79c): klik → kalender 1 = dari (langsung
+// terfilter satu hari) → kalender 2 = to; to dibatalkan → tetap dari aja.
+// to yang lebih kecil dari dari ditukar (helper normalisasiRentang).
+const labelRentang = computed(() => rentangDmyText(dari.value, sampai.value))
+const rentangAktif = computed(
+  () => dari.value !== basis.value.dari || sampai.value !== basis.value.sampai
+)
+function bukaPicker(inp) {
+  try {
+    inp.showPicker()
+  } catch {
+    inp.focus() // webview tanpa showPicker: minimal bisa diketik manual
+  }
+}
+function klikRentang() {
+  const inp = kalender.value
+  if (!inp) return
+  // to masih menunggu (kalender kedua sempat tertutup) → lanjut to, bukan ulang
+  if (modeKalender.value === 'sampai') {
+    bukaPicker(inp)
+    return
+  }
+  modeKalender.value = 'dari'
+  inp.value = '' // pilih sama = tetap fire change (nilai dibersihkan dulu)
+  bukaPicker(inp)
+}
+function ubahKalender() {
+  const inp = kalender.value
+  const v = inp.value
+  if (!v) return
+  if (modeKalender.value === 'dari') {
+    // from-only langsung hidup (dari = sampai); kalender kedua menunggu to
+    ;[dari.value, sampai.value] = [v, v]
+    modeKalender.value = 'sampai'
+    inp.value = ''
+    // activation masih hangat di event change → kalender kedua otomatis
+    setTimeout(() => {
+      if (modeKalender.value === 'sampai' && filterOpen.value) bukaPicker(inp)
+    }, 60)
+  } else {
+    ;[dari.value, sampai.value] = normalisasiRentang(dari.value, v)
+    modeKalender.value = null
+  }
+}
+function tutupKalender() {
+  // picker ditutup tanpa memilih (cancel) → keluar dari mode to
+  if (modeKalender.value === 'sampai' && !kalender.value?.value) modeKalender.value = null
+}
+function resetRentang() {
+  dari.value = basis.value.dari
+  sampai.value = basis.value.sampai
+  modeKalender.value = null
 }
 </script>
 
@@ -296,28 +356,43 @@ function clearFilters() {
               <span>Hanya di atas rencana</span>
             </label>
           </div>
-          <div class="frow2">
-            <div class="ffield">
-              <label>Dari tanggal</label>
-              <input v-model="dari" class="input" type="date" />
-            </div>
-            <div class="ffield">
-              <label>s.d. tanggal</label>
-              <input v-model="sampai" class="input" type="date" />
+          <div class="ffield">
+            <label>Rentang</label>
+            <div
+              class="rangepicker"
+              role="button"
+              tabindex="0"
+              aria-label="Rentang tanggal: klik untuk memilih awal, lalu akhir"
+              @click="klikRentang"
+              @keydown.enter.prevent="klikRentang"
+            >
+              <Calendar :size="14" :stroke-width="2" class="rp-ico" aria-hidden="true" />
+              <span class="rp-label" :class="{ 'rp-ph': !labelRentang }">{{ labelRentang || 'Pilih rentang' }}</span>
+              <button
+                v-if="rentangAktif"
+                type="button"
+                class="rp-clear"
+                aria-label="Kembalikan rentang ke awal"
+                @click.stop="resetRentang"
+              >
+                <X :size="13" :stroke-width="2.2" aria-hidden="true" />
+              </button>
+              <input
+                ref="kalender"
+                type="date"
+                class="rp-input"
+                tabindex="-1"
+                aria-hidden="true"
+                @change="ubahKalender"
+                @blur="tutupKalender"
+              />
             </div>
           </div>
-          <p v-if="rangeInvalid" class="bahan-range-hint" role="status">
-            Tanggal tidak valid: "dari" melebihi "sampai".
-          </p>
           <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
         </div>
       </Transition>
     </div>
   </div>
-
-  <p v-if="rangeInvalid" class="callout bahan-range-warn" role="status">
-    Rentang tanggal tidak valid: "dari" melebihi "sampai". Perbaiki tanggal untuk memuat data.
-  </p>
 
   <div v-if="bahanState.error" class="callout bad dash-error" role="alert">
     <p>Gagal memuat: {{ bahanState.error }}</p>

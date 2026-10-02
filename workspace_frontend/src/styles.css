@@ -2844,9 +2844,47 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .bahan-name { min-width: 0; }
 .bahan-noplan { margin-left: 8px; }
-.bahan-range-warn { margin-bottom: 12px; }
-/* hint validasi tanggal DI DALAM panel filter (pola dash-range-hint FU76b) */
-.bahan-range-hint { font-size: 12.5px; color: var(--bad-ink); }
+
+/* FU79c: field rentang tunggal — kelihatan seperti .input, klik memunculkan
+   kalender native (input date tak terlihat menutupi field untuk showPicker) */
+.rangepicker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 9px;
+  background: var(--surface);
+  border: 1px solid var(--line2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+}
+.rangepicker:hover { border-color: var(--brand-light); }
+.rp-ico { color: var(--faint); flex: none; }
+.rp-label { font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rp-label.rp-ph { color: var(--faint); font-weight: 400; }
+.rp-clear {
+  margin-left: auto;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.rp-clear:hover { background: var(--grey-bg); color: var(--ink); }
+.rp-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none; /* klik tetap milik field; picker via showPicker() */
+  border: 0;
+}
 
 /* ============ FU79: rombak halaman Bahan baku gaya referensi ============ */
 

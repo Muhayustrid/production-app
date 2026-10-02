@@ -554,3 +554,30 @@ test('woYieldPct & yieldTone & tanggalPendek & txnOfMaterial', async () => {
   assert.deepEqual(txnOfMaterial(txns, 'XX'), [])
   assert.deepEqual(txnOfMaterial(null, 'RM1'), [])
 })
+
+// ---- FU79c: field rentang tunggal (from → to) di panel filter bahan ----
+test('rentangDmyText: format DD-MM-YYYY, tunggal tanpa "to", rentang dengan "to", tukar bila terbalik', async () => {
+  const { rentangDmyText } = await import('../src/dashboard.js')
+  // dari saja / dari = sampai → satu tanggal (filter from aja)
+  assert.equal(rentangDmyText('2026-10-02', '2026-10-02'), '02-10-2026')
+  assert.equal(rentangDmyText('2026-10-02', ''), '02-10-2026')
+  assert.equal(rentangDmyText('2026-10-02', null), '02-10-2026')
+  // rentang → "01-10-2026 to 02-10-2026" (format user, nol-penuh)
+  assert.equal(rentangDmyText('2026-10-01', '2026-10-02'), '01-10-2026 to 02-10-2026')
+  // to < from → ditukar, tetap valid
+  assert.equal(rentangDmyText('2026-10-02', '2026-10-01'), '01-10-2026 to 02-10-2026')
+  // kosong → '' (placeholder milik pemanggil)
+  assert.equal(rentangDmyText('', ''), '')
+  assert.equal(rentangDmyText(null, null), '')
+  // ISO rusak → apa adanya, tidak meledak
+  assert.equal(rentangDmyText('2026-10', '2026-10'), '2026-10')
+})
+
+test('normalisasiRentang: pasangan dari/sampai selalu naik; kosong diteruskan', async () => {
+  const { normalisasiRentang } = await import('../src/dashboard.js')
+  assert.deepEqual(normalisasiRentang('2026-10-02', '2026-10-01'), ['2026-10-01', '2026-10-02'])
+  assert.deepEqual(normalisasiRentang('2026-10-01', '2026-10-02'), ['2026-10-01', '2026-10-02'])
+  assert.deepEqual(normalisasiRentang('2026-10-01', '2026-10-01'), ['2026-10-01', '2026-10-01'])
+  assert.deepEqual(normalisasiRentang('', '2026-10-01'), ['', '2026-10-01'])
+  assert.deepEqual(normalisasiRentang(null, null), [null, null])
+})

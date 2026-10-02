@@ -615,3 +615,27 @@ export function txnOfMaterial(transactions, itemCode) {
     (t) => t?.item_code === itemCode
   )
 }
+
+// ISO "2026-10-01" → "01-10-2026" (format DD-MM-YYYY permintaan user FU79c);
+// bukan ISO harian → apa adanya; kosong → ''
+export function tanggalDmy(iso) {
+  const s = String(iso || '')
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s)
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : s
+}
+
+// pasangan dari/sampai selalu naik (to yang dipilih lebih kecil → tukar);
+// nilai kosong diteruskan apa adanya
+export function normalisasiRentang(a, b) {
+  if (a && b && b < a) return [b, a]
+  return [a, b]
+}
+
+// label field rentang: satu tanggal → "02-10-2026" (filter from aja);
+// rentang → "01-10-2026 to 02-10-2026" (format user FU79c); kosong → ''
+export function rentangDmyText(dari, sampai) {
+  if (!dari && !sampai) return ''
+  const [a, b] = normalisasiRentang(dari, sampai)
+  const tglA = tanggalDmy(a)
+  return b && b !== a ? `${tglA} to ${tanggalDmy(b)}` : tglA
+}
