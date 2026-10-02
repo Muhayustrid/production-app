@@ -2401,27 +2401,32 @@ textarea.input { height: auto; padding: 8px 10px; }
 .donut-flex { display: flex; align-items: center; gap: 10px; flex: 1; min-height: 0; }
 .donut-wrap { position: relative; flex: none; width: 178px; height: 178px; }
 
-/* angka pusat donut: overlay absolut (bukan plugin chart.js); diturunkan
-   setinggi label di bawah angka agar ANGKA yang tepat di tengah lubang */
-.dcenter {
+/* angka pusat donut: overlay absolut (bukan plugin chart.js). ANGKA
+   dipusatkan MURNI di 50% lubang (bukan ikut blok dua baris — label di
+   bawah tidak boleh menggesernya), lebih besar agar tegap terbaca */
+.dcenter { position: absolute; inset: 0; pointer-events: none; }
+.dcenter strong {
   position: absolute;
   inset: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  pointer-events: none;
-  transform: translateY(7px);
-}
-.dcenter strong {
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
-.dcenter span { font-size: 11px; color: var(--muted); }
+.dcenter span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 19px);
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted);
+}
 
 /* legend donut klikabel = navigasi papan FU72 (pengganti tile 7 tahap);
    mengisi sisi kanan donut, tahap 0 diberi pudar tapi tetap klikabel */
