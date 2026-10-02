@@ -30,6 +30,7 @@ import {
   selesaiTileLabel, topMaterialRows, uomPrimaryText, variancePctText, woProgressPct, woQtyText,
   yieldPctText, yieldSegments
 } from './dashboard.js'
+import RangeField from './RangeField.vue'
 
 const summary = computed(() => dashboardState.summary)
 // "Semua company" pakai sentinel ALL, bukan '' — PrimeVue Select memperlakukan
@@ -45,6 +46,10 @@ const companyParam = () => (company.value === 'ALL' ? '' : company.value)
 
 // FU76 (revisi UI): filter rentang = satu tombol + popover — daftar preset DAN
 // input kustom dalam satu panel; Terapkan = commit, tutup popover = batal.
+// FU79e: input kustom = field tunggal RangeField (sama dgn Work Order & Stock
+// Entry) — first-to 'same' krn endpoint kustom wajib dari+sampai (pilihan
+// pertama = satu hari, langsung layak diterapkan); to < from ditukar otomatis
+// sehingga rentang tak mungkin terbalik.
 const preset = ref('hari_ini')
 const customDari = ref('')
 const customSampai = ref('')
@@ -52,17 +57,15 @@ const rangeOptions = RANGE_PRESETS
 const rangePop = ref(null)
 const rangeOpen = ref(false)
 const kustomDraft = ref(false)
-const rangeInvalid = computed(() =>
-  !!customDari.value && !!customSampai.value && customDari.value > customSampai.value
-)
 const rangeTooLong = computed(() => {
   if (!customDari.value || !customSampai.value) return false
   const span = (new Date(customSampai.value) - new Date(customDari.value)) / 86400000
   return span > 366
 })
-// kustom layak diterapkan: kedua tanggal terisi & valid
+// kustom layak diterapkan: kedua tanggal terisi (RangeField menyetor keduanya
+// sekaligus di pilihan pertama) & rentang ≤ 366 hari
 const kustomReady = computed(() =>
-  !!(customDari.value && customSampai.value) && !rangeInvalid.value && !rangeTooLong.value
+  !!(customDari.value && customSampai.value) && !rangeTooLong.value
 )
 
 const dateLabel = computed(() =>
@@ -352,21 +355,18 @@ onMounted(reload)
     </div>
     <div v-if="kustomDraft || preset === 'kustom'" class="dash-rkustom">
       <div class="ffield">
-        <label for="dash-dari">Dari</label>
-        <input id="dash-dari" v-model="customDari" class="input" type="date" />
+        <label>Rentang kustom</label>
+        <RangeField
+          v-model:dari="customDari"
+          v-model:sampai="customSampai"
+          first-to="same"
+        />
       </div>
-      <div class="ffield">
-        <label for="dash-sampai">s.d.</label>
-        <input id="dash-sampai" v-model="customSampai" class="input" type="date" />
-      </div>
-      <p v-if="rangeInvalid" class="dash-range-hint" role="status">
-        Tanggal tidak valid: "dari" melebihi "sampai".
-      </p>
-      <p v-else-if="rangeTooLong" class="dash-range-hint" role="status">
+      <p v-if="rangeTooLong" class="dash-range-hint" role="status">
         Rentang maksimal 366 hari.
       </p>
       <p v-else-if="!kustomReady" class="dash-range-hint" role="status">
-        Pilih tanggal awal dan akhir untuk memuat data.
+        Pilih tanggal untuk memuat data.
       </p>
       <Button label="Terapkan" size="small" :disabled="!kustomReady" @click="applyKustom" />
     </div>
