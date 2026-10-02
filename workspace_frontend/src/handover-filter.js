@@ -41,8 +41,8 @@ export function filterSerahRows(rows, f) {
 }
 
 export function serahFilterCount(f) {
+  // FU79d: rentang tanggal = SATU filter (satu field .rangepicker, pola bahan)
   return (f.status && f.status !== 'all' ? 1 : 0)
     + (f.item && f.item !== 'all' ? 1 : 0)
-    + (f.from ? 1 : 0)
-    + (f.to ? 1 : 0)
+    + (f.from || f.to ? 1 : 0)
 }

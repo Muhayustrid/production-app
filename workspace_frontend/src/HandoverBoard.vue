@@ -20,6 +20,7 @@ import { distinctItems, filterSerahRows, serahFilterCount } from './handover-fil
 import { rowClickAction, seRouteLabel } from './handover-se.js'
 import { boxAllocationText, groupBoxText } from './handover-box.js'
 import { laneStatusMeta } from './form-order.js'
+import RangeField from './RangeField.vue'
 import {
   CheckCircle2, ChevronRight, ClipboardList, Filter, Inbox, KanbanSquare,
   Search, Snowflake, Table2, Truck
@@ -167,7 +168,8 @@ function setColdPageSize(value) {
   coldPage.value = 1
   saveHandoverPreferences()
 }
-const lotFilterCount = computed(() => (lotFrom.value ? 1 : 0) + (lotTo.value ? 1 : 0))
+// FU79d: rentang lot masuk = SATU filter (satu field .rangepicker)
+const lotFilterCount = computed(() => (lotFrom.value || lotTo.value ? 1 : 0))
 const lotDateActive = computed(() => !!(lotFrom.value || lotTo.value))
 const filteredLots = computed(() => handoverLots.filter((l) => {
   if (!lotDateActive.value) return true
@@ -391,28 +393,17 @@ onMounted(() => {
                 </option>
               </select>
             </div>
-            <div class="frow2">
-              <div class="ffield">
-                <label>Dibuat dari</label>
-                <input v-model="seFrom" class="input" type="date" />
-              </div>
-              <div class="ffield">
-                <label>Dibuat s.d.</label>
-                <input v-model="seTo" class="input" type="date" />
-              </div>
+            <div class="ffield">
+              <label>Dibuat</label>
+              <!-- FU79d: field tunggal; to belum dipilih = filter dari aja (terbuka) -->
+              <RangeField v-model:dari="seFrom" v-model:sampai="seTo" placeholder="Semua tanggal" />
             </div>
             <button class="linkbtn filter-clear" type="button" @click="seReset">Hapus semua filter</button>
           </template>
           <template v-else>
-            <div class="frow2">
-              <div class="ffield">
-                <label>Lot masuk dari</label>
-                <input v-model="lotFrom" class="input" type="date" />
-              </div>
-              <div class="ffield">
-                <label>Lot masuk s.d.</label>
-                <input v-model="lotTo" class="input" type="date" />
-              </div>
+            <div class="ffield">
+              <label>Lot masuk</label>
+              <RangeField v-model:dari="lotFrom" v-model:sampai="lotTo" placeholder="Semua tanggal" />
             </div>
             <button class="linkbtn filter-clear" type="button" @click="lotReset">Hapus semua filter</button>
           </template>

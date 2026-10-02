@@ -46,8 +46,11 @@ test('filterSerahRows rentang tanggal createdAt; tanpa tanggal dikecualikan saat
   assert.deepEqual(filterSerahRows(rows, onlyFrom).map((r) => r.itemCode), ['RC01', 'RK03'])
 })
 
-test('serahFilterCount menghitung filter aktif', () => {
+test('serahFilterCount menghitung filter aktif — rentang tanggal = SATU filter (FU79d)', () => {
   assert.equal(serahFilterCount({ status: 'all', item: 'all', from: '', to: '' }), 0)
   assert.equal(serahFilterCount({ status: 'terkirim', item: 'all', from: '', to: '' }), 1)
-  assert.equal(serahFilterCount({ status: 'all', item: 'Krim Kopi', from: '2026-09-01', to: '2026-09-30' }), 3)
+  assert.equal(serahFilterCount({ status: 'all', item: 'Krim Kopi', from: '2026-09-01', to: '2026-09-30' }), 2)
+  assert.equal(serahFilterCount({ status: 'all', item: 'all', from: '2026-09-01', to: '' }), 1)
+  assert.equal(serahFilterCount({ status: 'all', item: 'all', from: '', to: '2026-09-30' }), 1)
+  assert.equal(serahFilterCount({ status: 'request', item: 'Krim Kopi', from: '2026-09-01', to: '2026-09-30' }), 3)
 })

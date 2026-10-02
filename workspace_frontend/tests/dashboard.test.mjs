@@ -581,3 +581,21 @@ test('normalisasiRentang: pasangan dari/sampai selalu naik; kosong diteruskan', 
   assert.deepEqual(normalisasiRentang('', '2026-10-01'), ['', '2026-10-01'])
   assert.deepEqual(normalisasiRentang(null, null), [null, null])
 })
+
+// ---- FU79d: field rentang tunggal dipakai lintas halaman (komponen RangeField) ----
+test('rentangSetelahPilih: fase dari — firstTo same = satu hari, clear = dari aja (to dikosongkan)', async () => {
+  const { rentangSetelahPilih } = await import('../src/dashboard.js')
+  // pola bahan: endpoint wajib dari+sampai → pilihan pertama langsung satu hari
+  assert.deepEqual(rentangSetelahPilih('2026-10-01', '2026-10-05', '2026-10-02', 'dari', 'same'), ['2026-10-02', '2026-10-02'])
+  // pola WO/handover: from-only terbuka (semantik lama utuh) → to dikosongkan
+  assert.deepEqual(rentangSetelahPilih('2026-10-01', '2026-10-05', '2026-10-02', 'dari', 'clear'), ['2026-10-02', ''])
+  // default firstTo = clear
+  assert.deepEqual(rentangSetelahPilih('', '', '2026-10-02', 'dari'), ['2026-10-02', ''])
+})
+
+test('rentangSetelahPilih: fase sampai — tukar bila to < from, lewat normalisasiRentang', async () => {
+  const { rentangSetelahPilih } = await import('../src/dashboard.js')
+  assert.deepEqual(rentangSetelahPilih('2026-10-02', '', '2026-10-01', 'sampai'), ['2026-10-01', '2026-10-02'])
+  assert.deepEqual(rentangSetelahPilih('2026-10-01', '', '2026-10-03', 'sampai'), ['2026-10-01', '2026-10-03'])
+  assert.deepEqual(rentangSetelahPilih('2026-10-01', '', '2026-10-01', 'sampai'), ['2026-10-01', '2026-10-01'])
+})

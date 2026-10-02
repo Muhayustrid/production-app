@@ -521,7 +521,6 @@ textarea.input { height: auto; padding: 8px 10px; }
 .pop-leave-to { opacity: 0; }
 .ffield { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .ffield label { font-size: 12px; font-weight: 600; color: var(--muted); }
-.frow2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .linkbtn {
   align-self: flex-start;
   border: 0;

@@ -5,6 +5,7 @@ import { fmtDate, qtyStack } from './format.js'
 import { buildWorkOrderPreferences, normalizeWorkOrderPreferences } from './work-order-preferences.js'
 import { Search, Filter, ChevronRight, SearchX, Table, Kanban, X } from 'lucide-vue-next'
 import WorkOrderKanban from './WorkOrderKanban.vue'
+import RangeField from './RangeField.vue'
 
 const q = ref('')
 const fProduct = ref('all')
@@ -52,7 +53,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(listState.total / pageSi
 const currentPage = computed(() => listState.page)
 const activeFilters = computed(() =>
   (fProduct.value !== 'all') + (fStatus.value !== 'all') + (fStage.value !== 'all') +
-  (fFrom.value ? 1 : 0) + (fTo.value ? 1 : 0)
+  (fFrom.value || fTo.value ? 1 : 0)
 )
 
 function filterPayload() {
@@ -209,15 +210,10 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
               <option value="done">Selesai</option>
             </select>
           </div>
-        <div class="frow2">
-          <div class="ffield">
-            <label>Jadwal dari</label>
-            <input v-model="fFrom" class="input" type="date" />
-          </div>
-          <div class="ffield">
-            <label>Jadwal s.d.</label>
-            <input v-model="fTo" class="input" type="date" />
-          </div>
+        <div class="ffield">
+          <label>Jadwal</label>
+          <!-- FU79d: field tunggal; to belum dipilih = filter dari aja (terbuka, semantik lama) -->
+          <RangeField v-model:dari="fFrom" v-model:sampai="fTo" placeholder="Semua jadwal" />
         </div>
         <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
         </div>
@@ -311,7 +307,7 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
     <div v-if="!pagedFiltered.length" class="empty-inset">
       <span class="eico"><SearchX :size="19" :stroke-width="1.8" /></span>
       <p class="etitle">Tidak ada perintah kerja</p>
-      <p class="ehint">Tidak ada Work Order untuk filter saat ini. Pilih Semua tanggal atau ubah filter.</p>
+      <p class="ehint">Tidak ada Work Order untuk filter saat ini. Ubah filter atau kata pencarian.</p>
     </div>
     <div class="pagination-bar pagination-footer">
       <label class="page-size-control">

@@ -631,6 +631,15 @@ export function normalisasiRentang(a, b) {
   return [a, b]
 }
 
+// FU79d: hasil SATU pilihan kalender untuk field rentang tunggal (RangeField).
+// fase 'dari': firstTo 'same' → satu hari [v, v] (pola bahan — endpoint wajib
+// dari+sampai); 'clear' → dari aja [v, ''] (pola WO/handover — from-only
+// terbuka, semantik lama utuh). fase 'sampai': to ditukar bila < dari.
+export function rentangSetelahPilih(dari, sampai, v, fase, firstTo = 'clear') {
+  if (fase === 'sampai') return normalisasiRentang(dari, v)
+  return firstTo === 'same' ? [v, v] : [v, '']
+}
+
 // label field rentang: satu tanggal → "02-10-2026" (filter from aja);
 // rentang → "01-10-2026 to 02-10-2026" (format user FU79c); kosong → ''
 export function rentangDmyText(dari, sampai) {
