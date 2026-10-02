@@ -260,11 +260,35 @@ const bulatkan = (n, desimal) => {
   return Math.round((Number(n) || 0) * f) / f
 }
 
-// daily FU78 → {labels, planned, produced} untuk Chart bar (2 desimal)
-export function chartSeries(daily) {
-  const rows = Array.isArray(daily?.rows) ? daily.rows : []
+// ============================================================================
+// FU78b: kartu grafik filter LOKAL (endpoint dashboard_daily) — mode minggu
+// (Senin s.d. Minggu, label nama hari) / bulan (1 s.d. akhir bulan, label
+// tanggal); server mengirim series PER UOM sehingga krim kopi (Pcs) dan
+// dough (Pack) berdampingan tanpa pernah dijumlahkan.
+// ============================================================================
+
+// pilihan filter lokal kartu grafik — kontrak mode dashboard_daily
+export const DAILY_MODES = [
+  { key: 'minggu', label: 'Minggu ini' },
+  { key: 'bulan', label: 'Bulan ini' }
+]
+
+// nama hari id-ID — index getDay() (Minggu = 0)
+const HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
+
+// "2026-10-02" → "Jumat"; parsing lokal (pola rangeLabel — tanpa 'Z' agar
+// tidak bergeser sehari); tak valid → "" (pemanggil menyembunyikan label)
+export function dayLabel(iso) {
+  const d = new Date(String(iso || '') + 'T00:00:00')
+  return isNaN(d) ? '' : HARI[d.getDay()]
+}
+
+// satu seri dashboard_daily → {labels, planned, produced} untuk Chart bar
+// (2 desimal); mode minggu berlabel nama hari, selain itu label tanggal
+export function chartDaily(series, mode) {
+  const rows = Array.isArray(series?.rows) ? series.rows : []
   return {
-    labels: rows.map((r) => periodLabel(r?.period, daily?.granularity)),
+    labels: rows.map((r) => (mode === 'minggu' ? dayLabel(r?.period) : periodLabel(r?.period))),
     planned: rows.map((r) => bulatkan(r?.planned, 2)),
     produced: rows.map((r) => bulatkan(r?.produced, 2))
   }
@@ -318,15 +342,16 @@ export const STAGE_COLORS = {
   selesai_hari_ini: '#2f5940'
 }
 
-// stages papan → {segments, total} utk donut chart.js; segmen 0 dibuang
-// (donut tetap benar), total = jumlah segmen yang tampil (pusat kartu)
+// stages papan → {segments, total} utk donut chart.js; SEMUA 7 tahap ikut
+// (FU78b: legend samping menampilkan tahap kosong juga — segmen 0 tidak
+// menggambar apa pun di donut); total = jumlah seluruhnya (pusat kartu)
 export function donutData(stages) {
   const segments = STAGES.map((s) => ({
     key: s.key,
     label: s.label,
     value: Number(stages?.[s.key]) || 0,
     color: STAGE_COLORS[s.key]
-  })).filter((s) => s.value > 0)
+  }))
   return { segments, total: segments.reduce((t, s) => t + s.value, 0) }
 }
 

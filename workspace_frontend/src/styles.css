@@ -2295,7 +2295,9 @@ textarea.input { height: auto; padding: 8px 10px; }
 .dash-kpi .ksub .kdelta.down { color: var(--bad-ink); }
 .dash-kpi .krest { font-size: 11.5px; color: var(--faint); overflow-wrap: anywhere; }
 
-/* baris grafik: kartu chart lebar (2fr) + kartu donut (1fr) */
+/* baris grafik: kartu chart lebar (2fr) + kartu donut (1fr); dua-duanya
+   flex column dan diperegang grid sehingga TINGGI KEDUA KARTU SAMA (FU78b
+   kerapian: chart mengisi sisa kartu, donut+kisi mengisi kartunya) */
 .dash-row2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -2305,6 +2307,8 @@ textarea.input { height: auto; padding: 8px 10px; }
 @media (min-width: 1000px) {
   .dash-row2 { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 }
+.dash-row2 .dash-card { display: flex; flex-direction: column; }
+.dash-row2 .panel-body { flex: 1; min-height: 0; }
 
 /* kepala kartu gaya referensi: label kecil uppercase + judul + meta kanan */
 .dcard-head {
@@ -2339,13 +2343,66 @@ textarea.input { height: auto; padding: 8px 10px; }
   white-space: nowrap;
 }
 
-/* area chart tinggi tetap — responsive:false mematikan lebar & bikin
+/* alat kepala kartu grafik: filter LOKAL minggu/bulan (toggle kecil) +
+   pemilih UOM bila server mengirim >1 satuan */
+.dhead-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dseg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.dseg-btn {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 5px 11px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.dseg-btn:hover { color: var(--brand-strong); }
+.dseg-btn.on { background: var(--brand-soft); color: var(--brand-strong); }
+.dseg-uom { width: 130px; min-width: 0; }
+.dseg-uom.p-select { height: 32px; font-size: 12.5px; }
+
+/* area chart: mengisi sisa tinggi kartu (min-height menjaga bentuk saat
+   kartu donut lebih pendek) — responsive:false mematikan lebar & bikin
    overflow 390px; responsive:true + wrapper inilah yang benar */
-.dchart-box { position: relative; height: 280px; }
-.donut-box { height: 205px; }
+.dchart-body { display: flex; flex-direction: column; }
+.dchart-box { position: relative; flex: 1; min-height: 250px; }
+/* chart.js mengukur tinggi SEBELUM flex selesai (canvas mentok 150px di
+   box 250px) — canvas dipaksa mengisi wrapper; ResizeObserver chart.js
+   menyesuaikan backing store mengikuti ukuran CSS ini. PrimeVue membungkus
+   canvas dgn <p-chart> (elemen custom inline) → diblok-kan dan diisi penuh */
+.dchart-box p-chart, .dchart-box .p-chart {
+  display: block;
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.dchart-box canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
 .dcap { margin: 10px 0 0; font-size: 11.5px; color: var(--faint); }
 
-/* angka pusat donut: overlay absolut (bukan plugin chart.js) */
+/* donut + kisi 7 tahap berdampingan (FU78b: hemat ruang — legend pindah
+   ke kanan, semua tahap tampil, kosong pudar); yield menempel kaki kartu */
+.donut-body { display: flex; flex-direction: column; }
+.donut-flex { display: flex; align-items: center; gap: 10px; flex: 1; min-height: 0; }
+.donut-wrap { position: relative; flex: none; width: 178px; height: 178px; }
+
+/* angka pusat donut: overlay absolut (bukan plugin chart.js); diturunkan
+   setinggi label di bawah angka agar ANGKA yang tepat di tengah lubang */
 .dcenter {
   position: absolute;
   inset: 0;
@@ -2355,6 +2412,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   justify-content: center;
   gap: 1px;
   pointer-events: none;
+  transform: translateY(7px);
 }
 .dcenter strong {
   font-size: 26px;
@@ -2365,8 +2423,9 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .dcenter span { font-size: 11px; color: var(--muted); }
 
-/* legend donut klikabel = navigasi papan FU72 (pengganti tile 7 tahap) */
-.dleg-list { list-style: none; margin: 12px 0 0; padding: 0; }
+/* legend donut klikabel = navigasi papan FU72 (pengganti tile 7 tahap);
+   mengisi sisi kanan donut, tahap 0 diberi pudar tapi tetap klikabel */
+.dleg-list { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; }
 .dleg-row {
   display: flex;
   align-items: center;
@@ -2375,16 +2434,17 @@ textarea.input { height: auto; padding: 8px 10px; }
   border: 0;
   background: none;
   font: inherit;
-  padding: 6px 8px;
+  padding: 5px 8px;
   border-radius: 6px;
   cursor: pointer;
   text-align: left;
   transition: background 0.14s ease;
 }
 .dleg-row:hover { background: var(--brand-softer); }
+.dleg-row.zero { opacity: 0.45; }
 .dleg-row .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; }
-.dleg-row .lname { flex: 1; font-size: 13px; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
-.dleg-row .lval { font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.dleg-row .lname { flex: 1; font-size: 12.5px; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.dleg-row .lval { font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--ink); }
 
 /* bar rata-rata yield di kaki kartu donut */
 .dyield { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 11px; }
@@ -2663,6 +2723,10 @@ textarea.input { height: auto; padding: 8px 10px; }
   .dash-kpi { padding: 13px 14px 12px; }
   .dash-kpi .knum { font-size: 21px; }
   .dcard-head { padding: 13px 14px 0; }
+  /* grafik sempit: donut pindah di atas kisi tahap (tetap semua 7 tampil) */
+  .donut-flex { flex-direction: column; align-items: stretch; }
+  .donut-wrap { margin: 0 auto 8px; width: 168px; height: 168px; }
+  .dchart-box { min-height: 210px; }
   /* tabel antrean sempit: buang Produk & Target — WO/status/progres/qty cukup */
   .dash-table .col-prod, .dash-table .col-target { display: none; }
 }

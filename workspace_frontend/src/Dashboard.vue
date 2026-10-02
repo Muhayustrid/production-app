@@ -8,7 +8,7 @@
 // beda UOM tidak pernah dijumlahkan (kualitas dikelompokkan per UOM).
 // Perilaku FU72-FU77 dipertahankan: filter rentang preset+kustom (popover),
 // company, pagination 10/halaman (FU77), klik tahap → #/wo, klik baris → #/wo.
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import Chart from 'primevue/chart'
 import ProgressBar from 'primevue/progressbar'
 import { Activity, Check, ChevronDown, ChevronRight, Gauge, Layers, Package, SearchX, TriangleAlert } from 'lucide-vue-next'
@@ -21,12 +21,12 @@ import Paginator from 'primevue/paginator'
 import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
-import { dashboardState, DASH_PAGE_SIZE, loadDashboard, loadDashboardPage, pendingStageFilter, STAGE_LABELS } from './store.js'
+import { dashboardState, DASH_PAGE_SIZE, loadDashboard, loadDashboardDaily, loadDashboardPage, pendingStageFilter, STAGE_LABELS } from './store.js'
 import { fmtId } from './format.js'
 import {
-  STAGES, YIELD_LEGEND, RANGE_PRESETS, achievementPct, activeTotal, activityText, activityTime,
-  attentionText, bahanHref, chartSeries, deltaPctText, donutData, isOverdue, materialRowText,
-  materialSummaryText, presetLabel, qualityPerUom, rangeParams, rangeLabel,
+  STAGES, YIELD_LEGEND, RANGE_PRESETS, DAILY_MODES, achievementPct, activeTotal, activityText,
+  activityTime, attentionText, bahanHref, chartDaily, deltaPctText, donutData, isOverdue,
+  materialRowText, materialSummaryText, presetLabel, qualityPerUom, rangeParams, rangeLabel,
   selesaiTileLabel, topMaterialRows, uomPrimaryText, variancePctText, woProgressPct, woQtyText,
   yieldPctText, yieldSegments
 } from './dashboard.js'
@@ -88,16 +88,43 @@ const achievement = computed(() =>
 const woAktif = computed(() => activeTotal(summary.value?.stages))
 const attCount = computed(() => (summary.value?.attention || []).length)
 
-// ---- kartu grafik: bar rencana vs hasil (satu UOM dominan, kedua seri)
-const daily = computed(() => summary.value?.daily || null)
-const seri = computed(() => chartSeries(daily.value))
-const barData = computed(() => ({
-  labels: seri.value.labels,
-  datasets: [
-    { label: 'Rencana', data: seri.value.planned, backgroundColor: '#9bbdd8', borderRadius: 4, maxBarThickness: 24 },
-    { label: 'Hasil', data: seri.value.produced, backgroundColor: '#3368a0', borderRadius: 4, maxBarThickness: 24 }
-  ]
-}))
+// ---- kartu grafik: filter LOKAL kartu (FU78b, lepas dari rentang halaman) —
+// "Minggu ini" berlabel Senin s.d. Minggu, "Bulan ini" berlabel tanggal.
+// Server mengirim series PER UOM (krim kopi Pcs vs dough Pack tidak pernah
+// dijumlahkan): chart menampilkan satu UOM terpilih, default = dominan
+// window versi server; pemilih UOM hanya muncul bila >1 seri.
+const chartMode = ref('minggu')
+const chartUom = ref('')
+const daily = computed(() => dashboardState.daily)
+const chartSeriesList = computed(() => daily.value?.series || [])
+const chartUomOptions = computed(() =>
+  chartSeriesList.value.map((s) => ({ label: s.uom, value: s.uom }))
+)
+const seri = computed(() => {
+  const list = chartSeriesList.value
+  if (!list.length) return null
+  return (
+    list.find((s) => s.uom === chartUom.value) ||
+    list.find((s) => s.uom === daily.value?.dominant_uom) ||
+    list[0]
+  )
+})
+// pilihan UOM ganti tidak valid (hasil fetch baru / ganti mode) → dominan
+watch(chartSeriesList, (list) => {
+  if (!list.some((s) => s.uom === chartUom.value)) {
+    chartUom.value = daily.value?.dominant_uom || list[0]?.uom || ''
+  }
+})
+const barData = computed(() => {
+  const s = chartDaily(seri.value, chartMode.value)
+  return {
+    labels: s.labels,
+    datasets: [
+      { label: 'Rencana', data: s.planned, backgroundColor: '#9bbdd8', borderRadius: 4, maxBarThickness: 24 },
+      { label: 'Hasil', data: s.produced, backgroundColor: '#3368a0', borderRadius: 4, maxBarThickness: 24 }
+    ]
+  }
+})
 const barOptions = {
   responsive: true, // wrapper .dchart-box tinggi tetap — responsive:false bikin overflow 390
   maintainAspectRatio: false,
@@ -108,6 +135,14 @@ const barOptions = {
     x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 8 } },
     y: { beginAtZero: true, grid: { color: '#e3e9ee' }, ticks: { maxTicksLimit: 6 } }
   }
+}
+function pilihChartMode(mode) {
+  if (mode === chartMode.value) return
+  chartMode.value = mode
+  loadDashboardDaily(companyParam(), mode)
+}
+function retryDaily() {
+  loadDashboardDaily(companyParam(), chartMode.value)
 }
 
 // ---- kartu donut: distribusi tahap (klik legend = filter #/wo, kontrak FU72)
@@ -135,16 +170,8 @@ const doughnutOptions = {
   responsive: true,
   maintainAspectRatio: false,
   cutout: '72%',
-  plugins: { legend: { display: false } } // legend custom klikabel di bawah donut
+  plugins: { legend: { display: false } } // legend custom klikabel di samping donut
 }
-// caption chart: lebih dari satu UOM di rentang → sebut pengecualian eksplisit
-const multiUom = computed(() => {
-  const uoms = new Set([
-    ...(summary.value?.output_today || []).map((e) => e.uom),
-    ...(summary.value?.planned_qty || []).map((e) => e.uom)
-  ])
-  return uoms.size > 1
-})
 const stageByKey = (key) => STAGES.find((s) => s.key === key) || { key }
 // rata-rata yield per produk (tak tertimbang — yield_pct unitless, aman lintas
 // UOM); bisa >100 saat overproduksi → bar dibatasi 100, angka apa adanya
@@ -233,6 +260,9 @@ function reload() {
   loadedAtMs.value = Date.now()
   if (preset.value === 'kustom' && !kustomReady.value) return // draft belum lengkap/valid
   loadDashboard(companyParam(), rangeParams(preset.value, customDari.value, customSampai.value))
+  // grafik mengikuti company (rentang halaman tidak mempengaruhinya — filter
+  // lokal minggu/bulan), dimuat ringan terpisah (pola wo_list FU77)
+  loadDashboardDaily(companyParam(), chartMode.value)
 }
 function onCompany() { reload() }
 function toggleRange(e) { rangePop.value?.toggle(e) }
@@ -418,17 +448,50 @@ onMounted(reload)
             <p class="deye">Kinerja output</p>
             <h2>Rencana vs hasil</h2>
           </div>
+          <div class="dhead-tools">
+            <!-- filter LOKAL kartu (FU78b): minggu = Senin s.d. Minggu,
+               bulan = 1 s.d. akhir bulan (tanggal server) -->
+            <div class="dseg" role="group" aria-label="Periode grafik">
+              <button
+                v-for="m in DAILY_MODES"
+                :key="m.key"
+                type="button"
+                class="dseg-btn"
+                :class="{ on: chartMode === m.key }"
+                :aria-pressed="chartMode === m.key ? 'true' : 'false'"
+                @click="pilihChartMode(m.key)"
+              >
+                {{ m.label }}
+              </button>
+            </div>
+            <!-- UOM campuran (krim kopi Pcs vs dough Pack): satu chart satu
+               satuan — pindah seri, tidak pernah menjumlahkan -->
+            <Select
+              v-if="chartUomOptions.length > 1"
+              v-model="chartUom"
+              :options="chartUomOptions"
+              optionLabel="label"
+              optionValue="value"
+              aria-label="Satuan grafik"
+              class="ph-pselect dseg-uom"
+            />
+          </div>
         </div>
-        <div class="panel-body">
-          <template v-if="seri.labels.length">
+        <div class="panel-body dchart-body">
+          <div v-if="dashboardState.dailyLoading && !seri" class="dchart-box" aria-hidden="true">
+            <Skeleton width="100%" height="100%" borderRadius="8px" />
+          </div>
+          <div v-else-if="dashboardState.dailyError && !seri" class="callout bad dash-page-error" role="alert">
+            <p>Gagal memuat grafik.</p>
+            <Button label="Coba lagi" size="small" severity="secondary" variant="outlined" @click="retryDaily" />
+          </div>
+          <template v-else-if="seri">
             <div class="dchart-box">
               <Chart type="bar" :data="barData" :options="barOptions" aria-label="Grafik rencana vs hasil per periode" />
             </div>
-            <p class="dcap">
-              Dalam {{ daily?.uom }}<template v-if="multiUom"> · mengecualikan item UOM lain</template> · hasil = tanggal posting, rencana = tanggal mulai WO
-            </p>
+            <p class="dcap">Dalam {{ seri.uom }} · hasil = tanggal posting, rencana = tanggal mulai WO</p>
           </template>
-          <p v-else class="dash-none">Belum ada rencana maupun hasil dalam rentang ini</p>
+          <p v-else class="dash-none">Belum ada rencana maupun hasil dalam periode ini</p>
         </div>
       </section>
 
@@ -439,29 +502,30 @@ onMounted(reload)
             <h2>Tahap work order</h2>
           </div>
         </div>
-        <div class="panel-body">
-          <template v-if="donut.total">
-            <div class="dchart-box donut-box">
+        <div class="panel-body donut-body">
+          <div class="donut-flex">
+            <div class="donut-wrap">
               <Chart type="doughnut" :data="doughnutData" :options="doughnutOptions" aria-label="Distribusi work order per tahap" />
               <!-- angka pusat overlay (bukan plugin) — pointer-events none agar
-                 hover tooltip donut tetap hidup -->
+                 hover tooltip donut tetap hidup; translateY agar ANGKA pas
+                 di tengah lubang (label di bawahnya ikut seimbang) -->
               <div class="dcenter" aria-hidden="true">
                 <strong>{{ fmtId(donut.total) }}</strong>
                 <span>Total WO</span>
               </div>
             </div>
-            <!-- legend klikabel = navigasi papan FU72 yang sama dgn tile lama -->
+            <!-- legend klikabel = navigasi papan FU72 yang sama dgn tile lama;
+               SEMUA 7 tahap tampil (kosong = pudar), di kanan donut (FU78b) -->
             <ul class="dleg-list">
               <li v-for="s in donut.segments" :key="s.key">
-                <button type="button" class="dleg-row" @click="openStage(stageByKey(s.key))">
+                <button type="button" class="dleg-row" :class="{ zero: !s.value }" @click="openStage(stageByKey(s.key))">
                   <i class="dot" :style="{ background: s.color }" aria-hidden="true"></i>
                   <span class="lname">{{ s.label }}</span>
                   <span class="lval">{{ fmtId(s.value) }}</span>
                 </button>
               </li>
             </ul>
-          </template>
-          <p v-else class="dash-none">Tidak ada WO pada papan saat ini</p>
+          </div>
           <div v-if="avgYield != null" class="dyield">
             <div class="dyield-head">
               <span>Rata-rata yield per produk</span>

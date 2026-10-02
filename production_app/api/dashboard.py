@@ -39,11 +39,27 @@
 # pernah dijumlahkan), output_prev (window sebelumnya, hanya preset hari
 # ini — dasar chip "+x% vs kemarin") dan recent_activity (Manufacture/MTFM
 # terbaru dalam rentang, retur dibuang).
+#
+# FU78b memindah seri grafik ke endpoint whitelisted tersendiri
+# `dashboard_daily` — filter LOKAL kartu (mode minggu = Senin..Minggu pekan
+# ini, bulan = 1..akhir bulan berjalan, harian zero-fill) yang lepas dari
+# filter rentang halaman, dan mengembalikan SEMUA satuan display sebagai
+# `series` per UOM (krim kopi Pcs vs dough Pack tidak pernah dijumlahkan;
+# frontend menyediakan pemilih UOM, default dominant_uom milik window).
 
 from datetime import timedelta
 
 import frappe
-from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, today
+from frappe.utils import (
+	add_days,
+	cint,
+	flt,
+	get_datetime,
+	get_last_day,
+	getdate,
+	now_datetime,
+	today,
+)
 
 from production_app.api.handover import (
 	ROLE_MANAJER_PRODUKSI,
@@ -99,8 +115,11 @@ DASHBOARD_PRESETS = (
 	PRESET_TAHUN_INI,
 )
 DASHBOARD_MAX_DAYS = 366
-# FU78: batas granularitas harian kartu grafik — lebih panjang → bucket bulanan.
-DAILY_MAX_DAYS = 31
+# FU78b: window filter LOKAL kartu grafik (lepas dari filter rentang halaman)
+# — "minggu" = Senin..Minggu pekan ini (label nama hari di frontend), "bulan"
+# = 1..akhir bulan berjalan; keduanya harian dan zero-fill.
+DAILY_MODE_MINGGU = "minggu"
+DAILY_MODE_BULAN = "bulan"
 
 # Kolom baris WO papan — satu sumber untuk _stages dan attention FU73
 # (custom field lewat get_list + .get(), bukan db.get_value berdaftar kolom
@@ -227,7 +246,6 @@ def dashboard_summary(company=None, preset=None, dari=None, sampai=None):
 		),
 		"planned_qty": planned_qty,
 		"dominant_uom": dominant,
-		"daily": _daily(dari, sampai, company, dominant, range_rows),
 		"adonan_terakhir": adonan,
 		"stages": _stages(dari, sampai, company, rows),
 		"handover_menunggu": len(handover),
@@ -490,21 +508,50 @@ def _dominant_uom(output, planned):
 	return None
 
 
-def _daily(dari, sampai, company, dominant, range_rows):
-	"""Seri rencana vs hasil untuk kartu grafik (FU78). Granularitas harian
-	(span <= DAILY_MAX_DAYS) atau bulanan; period ISO "YYYY-MM-DD" / "YYYY-MM".
-	HANYA item yang satuan display-nya == `dominant` yang masuk KEDUA seri —
-	beda UOM tidak pernah dijumlahkan (caption frontend menyebut UOM dan
-	pengecualian item UOM lain). Basis tanggal sengaja berbeda: hasil =
-	posting_date SE Manufacture, rencana = planned_start_date WO — bar hasil
-	tanpa rencana / pencapaian >100% dimungkinkan; di-caption, bukan
-	dikoreksi (penyelarasan = mesin alokasi WO-per-hari, tidak sebanding)."""
-	if not dominant:
-		return {"uom": None, "granularity": "harian", "rows": []}
-	bulanan = (getdate(sampai) - getdate(dari)).days > DAILY_MAX_DAYS
+@frappe.whitelist()
+def dashboard_daily(company=None, mode=None):
+	"""Seri kartu grafik "Rencana vs hasil" (FU78b) — filter LOKAL kartu yang
+	lepas dari filter rentang halaman: mode `minggu` = Senin..Minggu pekan
+	ini, `bulan` = 1..akhir bulan berjalan (tanggal server otoritatif);
+	granularitas selalu harian dan hari tanpa kejadian tetap dikirim
+	(zero-fill) agar label Senin s.d. Minggu / tanggal 1..31 di frontend
+	tidak bolong. SEMUA satuan display dikembalikan sebagai `series`
+	terpisah — krim kopi (Pcs) dan dough (Pack) berdampingan TANPA pernah
+	dijumlahkan; frontend menampilkan satu UOM per chart (pemilih UOM) dengan
+	default `dominant_uom` milik window ini (dihitung server, satu sumber,
+	seri pertama). Basis tanggal sengaja berbeda: hasil = posting_date SE
+	Manufacture, rencana = planned_start_date WO — di-caption frontend.
+	Permission native get_list: tanpa izin → series kosong (endpoint tetap
+	hidup, pola FU65). Mode tak dikenal → ValidationError (417 konvensi)."""
+	mode = DAILY_MODE_MINGGU if not mode else str(mode)
+	hari = getdate(today())
+	if mode == DAILY_MODE_MINGGU:
+		tgl_dari = add_days(hari, -hari.weekday())  # Senin pekan ini
+		tgl_sampai = add_days(tgl_dari, 6)
+	elif mode == DAILY_MODE_BULAN:
+		tgl_dari = hari.replace(day=1)
+		tgl_sampai = getdate(get_last_day(hari))
+	else:
+		frappe.throw("Mode grafik tidak dikenal.", exc=frappe.ValidationError)
+	series = _daily_series(str(tgl_dari), str(tgl_sampai), company)
+	return {
+		"mode": mode,
+		"dari": str(tgl_dari),
+		"sampai": str(tgl_sampai),
+		"granularity": "harian",
+		"dominant_uom": series[0]["uom"] if series else None,
+		"series": series,
+	}
 
-	def bucket(d):
-		return str(d)[:7] if bulanan else str(d)
+
+def _daily_series(dari, sampai, company):
+	"""Semua satuan display dalam window → satu seri baris harian per UOM
+	(zero-fill penuh dari..sampai); hasil & rencana tidak pernah dicampur
+	antar-UOM (perumuman _daily FU78 yang sebelumnya memfilter satu UOM
+	dominan). Urutan seri: total hasil menurun, lalu rencana, lalu nama UOM
+	— seri pertama = dominan window."""
+	span = (getdate(sampai) - getdate(dari)).days
+	periods = [str(add_days(getdate(dari), i)) for i in range(span + 1)]
 
 	def display_uom(code):
 		try:
@@ -528,7 +575,7 @@ def _daily(dari, sampai, company, dominant, range_rows):
 		)
 	except frappe.PermissionError:
 		ses = []
-	produced = {}
+	produced = {}  # (uom, period) → qty display
 	if ses:
 		se_date = {s.name: s.posting_date for s in ses}
 		totals = {}
@@ -541,32 +588,44 @@ def _daily(dari, sampai, company, dominant, range_rows):
 			totals[key] = totals.get(key, 0.0) + flt(r.transfer_qty or r.qty)
 		for (se_name, code), qty in totals.items():
 			alternate, factor = display_uom(code)
-			if not factor or alternate != dominant:
-				continue  # UOM lain tidak masuk seri (jangan pernah dijumlah)
-			k = bucket(se_date[se_name])
+			if not factor:
+				continue  # tanpa konversi valid: skip, jangan mengarang faktor
+			k = (alternate, str(se_date[se_name]))
 			produced[k] = produced.get(k, 0.0) + qty / factor
 
-	# ---- rencana: qty WO per tanggal mulai, item ber-UOM dominan saja
+	# ---- rencana: qty WO per tanggal mulai, dikelompokkan per satuan display
 	planned = {}
 	uom_by_item = {}
-	for row in range_rows:
+	for row in _wo_range_rows(dari, sampai, company):
 		if row.production_item not in uom_by_item:
 			uom_by_item[row.production_item] = display_uom(row.production_item)
 		alternate, factor = uom_by_item[row.production_item]
-		if not factor or alternate != dominant:
+		if not factor:
 			continue
-		k = bucket(getdate(row.planned_start_date))
+		k = (alternate, str(getdate(row.planned_start_date)))
 		planned[k] = planned.get(k, 0.0) + flt(row.qty) / factor
 
-	periods = sorted(set(planned) | set(produced))
-	return {
-		"uom": dominant,
-		"granularity": "bulanan" if bulanan else "harian",
-		"rows": [
-			{"period": p, "planned": flt(planned.get(p)), "produced": flt(produced.get(p))}
-			for p in periods
-		],
-	}
+	def total(peta, uom):
+		return sum(v for (u, _), v in peta.items() if u == uom)
+
+	uoms = sorted(
+		{u for u, _ in produced} | {u for u, _ in planned},
+		key=lambda u: (-total(produced, u), -total(planned, u), u),
+	)
+	return [
+		{
+			"uom": uom,
+			"rows": [
+				{
+					"period": p,
+					"planned": flt(planned.get((uom, p))),
+					"produced": flt(produced.get((uom, p))),
+				}
+				for p in periods
+			],
+		}
+		for uom in uoms
+	]
 
 
 def _recent_activity(dari, sampai, company, limit=10):

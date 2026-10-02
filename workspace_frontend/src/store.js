@@ -325,7 +325,10 @@ export async function loadList(filters = {}) {
 export const DASH_PAGE_SIZE = 10
 export const dashboardState = reactive({
   summary: null, rows: [], total: 0, page: 0, loading: false, error: '',
-  rowsLoading: false, rowsError: '', company: '', range: null
+  rowsLoading: false, rowsError: '', company: '', range: null,
+  // FU78b: seri kartu grafik — endpoint ringan terpisah dgn filter LOKAL
+  // (minggu/bulan, series per UOM); gagal → dailyError kecil di kartu
+  daily: null, dailyLoading: false, dailyError: ''
 })
 // konteks satu-shot dari Dashboard (klik tahap / "tampilkan semua") —
 // dikonsumsi & dikosongkan WorkOrderList saat mount (runtime saja, tidak
@@ -364,6 +367,22 @@ export async function loadDashboard(company = '', range = null) {
   } finally {
     dashboardState.loading = false
     uiTopLoading.active = false
+  }
+}
+
+// FU78b: seri kartu grafik "Rencana vs hasil" — endpoint ringan terpisah;
+// company mengikuti filter head, mode = filter LOKAL kartu (minggu/bulan).
+// Gagal TIDAK membongkar layar — ditandai dailyError, dicoba ulang.
+export async function loadDashboardDaily(company = '', mode = 'minggu') {
+  dashboardState.dailyLoading = true
+  dashboardState.dailyError = ''
+  try {
+    dashboardState.daily = await call('production_app.api.dashboard.dashboard_daily',
+      { company: company || null, mode })
+  } catch (e) {
+    dashboardState.dailyError = e.message
+  } finally {
+    dashboardState.dailyLoading = false
   }
 }
 

@@ -252,20 +252,41 @@ test('periodLabel: harian "2 Okt", bulanan "Okt 2026" — tanpa Date (TZ-safe)',
   assert.equal(periodLabel('', 'harian'), '')
 })
 
-test('chartSeries memetakan daily ke labels/planned/produced (2 desimal)', async () => {
-  const { chartSeries } = await import('../src/dashboard.js')
+test('DAILY_MODES: dua pilihan filter lokal kartu grafik (kontrak server)', async () => {
+  const { DAILY_MODES } = await import('../src/dashboard.js')
+  assert.deepEqual(DAILY_MODES.map((m) => m.key), ['minggu', 'bulan'])
+  assert.deepEqual(DAILY_MODES.map((m) => m.label), ['Minggu ini', 'Bulan ini'])
+})
+
+test('dayLabel: nama hari id-ID dari ISO (TZ-safe); tak valid → ""', async () => {
+  const { dayLabel } = await import('../src/dashboard.js')
+  assert.equal(dayLabel('2026-09-28'), 'Senin')
+  assert.equal(dayLabel('2026-10-02'), 'Jumat')
+  assert.equal(dayLabel('2026-10-03'), 'Sabtu')
+  assert.equal(dayLabel('2026-10-04'), 'Minggu')
+  assert.equal(dayLabel(''), '')
+  assert.equal(dayLabel('bukan-tanggal'), '')
+})
+
+test('chartDaily memetakan satu seri ke labels/planned/produced (2 desimal) — minggu nama hari, bulan tanggal', async () => {
+  const { chartDaily } = await import('../src/dashboard.js')
+  const seri = {
+    uom: 'Pack',
+    rows: [
+      { period: '2026-09-28', planned: 100.456, produced: 90 },
+      { period: '2026-09-29', planned: 0, produced: 83.333 }
+    ]
+  }
   assert.deepEqual(
-    chartSeries({
-      granularity: 'harian',
-      rows: [
-        { period: '2026-10-01', planned: 100.456, produced: 90 },
-        { period: '2026-10-02', planned: 0, produced: 83.333 }
-      ]
-    }),
-    { labels: ['1 Okt', '2 Okt'], planned: [100.46, 0], produced: [90, 83.33] }
+    chartDaily(seri, 'minggu'),
+    { labels: ['Senin', 'Selasa'], planned: [100.46, 0], produced: [90, 83.33] }
   )
-  assert.deepEqual(chartSeries(null), { labels: [], planned: [], produced: [] })
-  assert.deepEqual(chartSeries({}), { labels: [], planned: [], produced: [] })
+  assert.deepEqual(
+    chartDaily(seri, 'bulan'),
+    { labels: ['28 Sep', '29 Sep'], planned: [100.46, 0], produced: [90, 83.33] }
+  )
+  assert.deepEqual(chartDaily(null, 'minggu'), { labels: [], planned: [], produced: [] })
+  assert.deepEqual(chartDaily({}, 'bulan'), { labels: [], planned: [], produced: [] })
 })
 
 test('uomPrimaryText memilih UOM dominan + sisa digabung; kosong jujur "0"', async () => {
@@ -300,14 +321,16 @@ test('deltaPctText: +/− (U+2212)/0; pembanding tak valid → string kosong', a
   assert.equal(deltaPctText(null, 10), '')
 })
 
-test('donutData: segmen 0 dibuang, total = jumlah segmen tampil, warna ada', async () => {
-  const { donutData } = await import('../src/dashboard.js')
+test('donutData: SEMUA 7 tahap ikut (kosong bernilai 0 — legend samping utuh), total = jumlah', async () => {
+  const { donutData, STAGES } = await import('../src/dashboard.js')
   const { segments, total } = donutData({ persiapan: 2, operasi: 1, selesai_hari_ini: 3 })
+  assert.equal(segments.length, 7)
+  assert.deepEqual(segments.map((s) => s.key), STAGES.map((s) => s.key))
+  assert.deepEqual(segments.map((s) => s.value), [2, 0, 1, 0, 0, 0, 3])
   assert.equal(total, 6)
-  assert.deepEqual(segments.map((s) => s.key), ['persiapan', 'operasi', 'selesai_hari_ini'])
-  assert.deepEqual(segments.map((s) => s.value), [2, 1, 3])
   assert.ok(segments.every((s) => /^#[0-9a-f]{6}$/i.test(s.color)))
-  assert.deepEqual(donutData({}), { segments: [], total: 0 })
+  assert.equal(donutData({}).total, 0)
+  assert.deepEqual(donutData({}).segments.map((s) => s.value), [0, 0, 0, 0, 0, 0, 0])
 })
 
 test('qualityPerUom mengelompokkan per UOM — TIDAK menjumlah lintas UOM', async () => {

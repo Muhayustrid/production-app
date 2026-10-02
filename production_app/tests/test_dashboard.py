@@ -27,6 +27,7 @@
 # Semua record test berprefix FU72; framework test me-rollback tiap run
 # (tanpa commit — tearDownClass hanya sapu defensif ala test_form_order).
 
+import calendar
 from datetime import timedelta
 
 import frappe
@@ -68,10 +69,10 @@ SHAPE_KEYS = {
 	"product_yield",
 	"attention",
 	"material_usage",
-	# FU78: KPI rencana + chart + delta + aktivitas
+	# FU78: KPI rencana + chart + delta + aktivitas; FU78b: daily pindah ke
+	# endpoint dashboard_daily (filter LOKAL kartu grafik minggu/bulan)
 	"planned_qty",
 	"dominant_uom",
-	"daily",
 	"output_prev",
 	"recent_activity",
 }
@@ -100,6 +101,14 @@ def _summary_range(**kwargs):
 	from production_app.api.dashboard import dashboard_summary
 
 	return dashboard_summary(**kwargs)
+
+
+def _daily(**kwargs):
+	"""Varian FU78b: endpoint kartu grafik dashboard_daily (mode minggu/bulan)
+	— pola import lambat yang sama."""
+	from production_app.api.dashboard import dashboard_daily
+
+	return dashboard_daily(**kwargs)
 
 
 def _uom_qty(summary, uom):
@@ -1763,43 +1772,94 @@ class TestDashboard(IntegrationTestCase):
 			out[0]["uom"] if out else (plan[0]["uom"] if plan else None),
 		)
 
-	def test_56_daily_harian_filter_uom_dominan(self):
-		"""daily (FU78): granularity harian utk rentang ≤31 hari; HANYA item
-		ber-UOM dominan yang masuk KEDUA seri — rencana fg_plain (UOM lain)
-		tereksklusi saat dominan Pack, dan sebaliknya (aturan inti: beda UOM
-		tidak pernah dijumlahkan); period naik & berformat ISO."""
-		def _baris(s):
-			return next((r for r in s["daily"]["rows"] if r["period"] == today()), {})
+	def test_56_daily_minggu_zero_fill_dan_seri_per_uom(self):
+		"""dashboard_daily mode 'minggu' (FU78b): window Senin..Minggu pekan ini
+		(tanggal server otoritatif), 7 baris harian ZERO-FILL — label Senin
+		s.d. Minggu di frontend tetap utuh walau tak ada produksi. SEMUA
+		satuan display dapat seri sendiri: fg_pack (Pack) dan fg_plain (Nos)
+		tidak pernah tercampur dalam satu seri (aturan inti: beda UOM tidak
+		dijumlahkan) — kasus user krim kopi (Pcs) vs dough (Pack). Hasil =
+		posting_date SE Manufacture, rencana = planned_start_date WO."""
+		def _nilai(d, uom, field, period):
+			seri = next((s for s in d["series"] if s["uom"] == uom), None)
+			if not seri:
+				return None
+			return next((r[field] for r in seri["rows"] if r["period"] == period), None)
 
-		sebelum = _summary()
+		hari = getdate(today())
+		senin = add_days(hari, -hari.weekday())
+		sebelum = _daily(mode="minggu")
 		wo_pack = self._make_wo(self.bom_pack, 1200, self.fg_pack)  # 1200 Pcs = 100 Pack
 		wo_pack.submit()
 		self._make_wo(self.bom_plain, 50, self.fg_plain)  # 50 Nos — UOM lain
 		self._transfer(wo_pack)
 		self._manufacture(wo_pack, 1200)
-		s = _summary()
-		self.assertEqual(s["daily"]["uom"], s["dominant_uom"])
-		self.assertEqual(s["daily"]["granularity"], "harian")
-		# dominan Pack → rencana +100 (fg_plain dikecualikan), hasil +100;
-		# dominan UOM lain → keduanya 0 (item saya bukan dominan)
-		ekspektasi = {self.uom_pack: (100.0, 100.0)}.get(s["dominant_uom"], (0.0, 0.0))
-		baris, sb = _baris(s), _baris(sebelum)
+		d = _daily(mode="minggu")
+		self.assertEqual(d["mode"], "minggu")
+		self.assertEqual(d["granularity"], "harian")
+		self.assertEqual(getdate(d["dari"]), senin)
+		self.assertEqual(getdate(d["sampai"]), add_days(senin, 6))
+		periods = [r["period"] for r in d["series"][0]["rows"]]
+		self.assertEqual(periods, [str(add_days(senin, i)) for i in range(7)])
+		# delta rencana & hasil hari ini di seri Pack-nya sendiri
 		self.assertAlmostEqual(
-			baris.get("planned", 0) - sb.get("planned", 0), ekspektasi[0], places=6
+			(_nilai(d, self.uom_pack, "planned", str(hari)) or 0.0)
+			- (_nilai(sebelum, self.uom_pack, "planned", str(hari)) or 0.0),
+			100.0,
+			places=6,
 		)
 		self.assertAlmostEqual(
-			baris.get("produced", 0) - sb.get("produced", 0), ekspektasi[1], places=6
+			(_nilai(d, self.uom_pack, "produced", str(hari)) or 0.0)
+			- (_nilai(sebelum, self.uom_pack, "produced", str(hari)) or 0.0),
+			100.0,
+			places=6,
 		)
-		periods = [r["period"] for r in s["daily"]["rows"]]
-		self.assertEqual(periods, sorted(periods))
+		# UOM lain dapat seri TERPISAH — tidak ada seri gabungan Pack+Nos
+		self.assertAlmostEqual(
+			(_nilai(d, self.uom_base, "planned", str(hari)) or 0.0)
+			- (_nilai(sebelum, self.uom_base, "planned", str(hari)) or 0.0),
+			50.0,
+			places=6,
+		)
+		seri_berisi = {
+			s["uom"]
+			for s in d["series"]
+			if any(r["planned"] or r["produced"] for r in s["rows"])
+		}
+		self.assertIn(self.uom_pack, seri_berisi)
+		self.assertIn(self.uom_base, seri_berisi)
+		# kontrak: seri pertama = dominant_uom milik window ini (server satu sumber)
+		self.assertEqual(d["dominant_uom"], d["series"][0]["uom"])
 
-	def test_57_daily_bulanan_span_panjang(self):
-		"""daily (FU78): rentang > 31 hari (tahun ini) → bucket bulanan dengan
-		period berformat YYYY-MM; UOM tetap dominan milik server."""
-		s = _summary_range(preset="tahun_ini")
-		self.assertEqual(s["daily"]["granularity"], "bulanan")
-		self.assertEqual(s["daily"]["uom"], s["dominant_uom"])
-		self.assertTrue(all(len(r["period"]) == 7 and r["period"][4] == "-" for r in s["daily"]["rows"]))
+	def test_57_daily_bulan_zero_fill_sepanjang_bulan(self):
+		"""dashboard_daily mode 'bulan' (FU78b): window 1..akhir bulan berjalan
+		(tanggal server), harian zero-fill sepanjang bulan — frontend memberi
+		label tanggal; kontrak seri per UOM sama dengan mode minggu."""
+		hari = getdate(today())
+		akhir = getdate(
+			f"{hari.year:04d}-{hari.month:02d}-{calendar.monthrange(hari.year, hari.month)[1]:02d}"
+		)
+		d = _daily(mode="bulan")
+		self.assertEqual(d["mode"], "bulan")
+		self.assertEqual(d["granularity"], "harian")
+		self.assertEqual(getdate(d["dari"]), hari.replace(day=1))
+		self.assertEqual(getdate(d["sampai"]), akhir)
+		self.assertEqual(len(d["series"][0]["rows"]), akhir.day)
+		self.assertEqual(d["dominant_uom"], d["series"][0]["uom"] if d["series"] else None)
+
+	def test_57b_daily_mode_tak_dikenal_dan_guest(self):
+		"""dashboard_daily (FU78b): mode tak dikenal → ValidationError (417);
+		tanpa izin baca WO/SE (Guest) → series kosong (endpoint tetap hidup,
+		pola FU65 — degradasi jujur, bukan error)."""
+		with self.assertRaises(frappe.ValidationError):
+			_daily(mode="tahunan")
+		frappe.set_user("Guest")
+		try:
+			d = _daily(mode="minggu")
+			self.assertEqual(d["series"], [])
+			self.assertIsNone(d["dominant_uom"])
+		finally:
+			frappe.set_user("Administrator")
 
 	def _prev_yest(self, summary):
 		"""Qty output_prev satu UOM kemarin (0 bila tak ada entri)."""
