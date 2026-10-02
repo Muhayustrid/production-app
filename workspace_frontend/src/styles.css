@@ -2494,11 +2494,13 @@ textarea.input { height: auto; padding: 8px 10px; }
 .dash-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .dash-legend .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; }
 
-/* baris produk: nama + meter ramping + % hasil di kanan */
+/* baris produk: nama + meter ramping + % hasil di kanan — kolom % LEBAR
+   TETAP agar meter semua baris sama panjang (persen beda digit jangan
+   menggeser bar, keluhan user FU78b) */
 .dash-yield { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 13px; }
 .dash-yield-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 56px;
   column-gap: 14px;
   row-gap: 5px;
   align-items: center;
@@ -2509,6 +2511,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   grid-column: 2;
   grid-row: 1 / span 2;
   text-align: right;
+  white-space: nowrap;
   font-size: 15px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
