@@ -418,6 +418,8 @@ export async function loadDashboardPage(page = 0) {
 
 // FU74: penggunaan bahan baku — agregat server per rentang/company/produk
 // (production_app.api.material_usage.material_usage). Error inline di halaman.
+// FU79: include_trace → +work_orders/transactions/series (KPI, tren,
+// traceability halaman bahan; dashboard_summary TIDAK lewat jalur ini).
 export const bahanState = reactive({ loading: false, error: '', loaded: false, data: null })
 
 export async function loadBahan(params = {}) {
@@ -430,7 +432,8 @@ export async function loadBahan(params = {}) {
       company: params.company || '',
       production_item: params.productionItem || '',
       search: params.search || '',
-      over_only: params.overOnly ? '1' : '0'
+      over_only: params.overOnly ? '1' : '0',
+      include_trace: '1'
     })
     bahanState.loaded = true
   } catch (e) {

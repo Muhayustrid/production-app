@@ -2847,35 +2847,231 @@ textarea.input { height: auto; padding: 8px 10px; }
 .bahan-noplan { margin-left: 8px; }
 .bahan-range-warn { margin-bottom: 12px; }
 
-/* baris ekspansi: tabel polos rincian per WO (bukan DataTable) */
-.bahan-table .p-datatable-row-expansion > td {
-  background: var(--brand-softer);
-  padding: 10px 14px 14px 44px;
+/* ============ FU79: rombak halaman Bahan baku gaya referensi ============ */
+
+/* 5 kartu KPI satu baris; menyusut bertahap 5 → 3 → 2 mengikuti dash-kpis */
+.bahan-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
 }
-.bahan-sub {
-  width: 100%;
-  min-width: 560px; /* layar sempit ikut scroll-x kontainer tabel, bukan remuk */
-  border-collapse: collapse;
-  font-size: 12.5px;
-  border: 1px solid var(--line);
-  background: var(--surface);
+.kuom { font-size: 12px; font-weight: 500; color: var(--muted); }
+
+/* baris dua kartu: perbandingan (lebar) + tren (sempit), tinggi sama
+   (pola dash-row2: kartu flex column, panel-body mengisi sisa) */
+.bahan-row2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
+.bahan-row2 .dash-card { display: flex; flex-direction: column; }
+.bahan-row2 .panel-body { flex: 1; min-height: 0; }
+.bahan-card { margin-bottom: 14px; overflow: hidden; }
+.dsub { margin-top: 2px; font-size: 12px; color: var(--muted); }
+
+/* canvas tren pasti terisi: tinggi persen TIDAK ter-resolve di rantai grid
+   ini (DIV.p-chart jatuh ke 0px — donat aman karena 178px pasti), jadi
+   p-chart dibuat absolut mengisi .dchart-box; inline position:relative
+   PrimeVue dikalahkan !important. Canvas absolut global .dchart-box lalu
+   mengisi p-chart (posisi relatif terhadap kakek-neneknya yang berposisi) */
+.bahan-row2 .dchart-box .p-chart { position: absolute !important; inset: 0; display: block; }
+
+/* ---- kartu perbandingan konsumsi: bar ganda per bahan + % selisih tetap
+   64px rata kanan (pelajaran FU78b: kolom persen mengapung bikin bar geser) */
+.bahan-cmp-body { display: flex; flex-direction: column; }
+.bahan-cmp { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; flex: 1; }
+.bcm-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 170px) minmax(0, 1fr) 64px;
+  gap: 12px;
+  align-items: center;
+  padding: 7px 0;
 }
-.bahan-sub th, .bahan-sub td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); }
-.bahan-sub tbody tr:last-child td { border-bottom: 0; }
-.bahan-sub thead th {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--faint);
-  background: rgba(243, 246, 249, 0.7);
+.bcm-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bcm-bars { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bcm-track { display: block; height: 7px; border-radius: 999px; background: var(--grey-bg); overflow: hidden; }
+.bcm-track.akt { background: #f6ecd9; } /* track hangat utk bar aktual */
+.bcm-fill { display: block; height: 100%; border-radius: 999px; background: var(--brand-strong); }
+.bcm-track.akt .bcm-fill { background: #c98d33; }
+.bcm-pct { text-align: right; font-size: 12.5px; font-weight: 650; white-space: nowrap; }
+.tone-over { color: var(--bad-ink); }
+.tone-under { color: var(--ok-strong); }
+.tone-flat { color: var(--muted); }
+.bcm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.bcm-legend { display: flex; gap: 14px; }
+.bcm-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+.dot.teo { background: var(--brand-strong); }
+.dot.akt, .dot.ambang { background: #c98d33; }
+
+/* ---- kartu tren produksi ---- */
+.badge-hari {
+  flex: none;
+  background: var(--ok-soft);
+  color: var(--ok-strong);
+  font-size: 11.5px;
+  font-weight: 650;
+  border-radius: 999px;
+  padding: 3px 10px;
   white-space: nowrap;
 }
-.bahan-sub .num { text-align: right; white-space: nowrap; }
-.bahan-sub tbody tr:hover { background: var(--brand-softer); }
+.bahan-peak {
+  margin: 10px 0 0;
+  background: var(--grey-bg);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.bahan-peak strong { color: var(--ink); font-weight: 650; margin-right: 4px; }
 
+/* ---- kartu analisis & traceability: head + tabel + footer ---- */
+.an-head { align-items: flex-start; }
+.an-head .searchbox { position: relative; flex: none; width: 230px; }
+.an-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.an-threshold { display: inline-flex; align-items: center; gap: 6px; }
+
+/* proporsi kolom (table-layout fixed dari .dash-table global): angka rata
+   kanan dengan lebar pas; Bahan/Produk tanpa lebar menyerap sisa ruang —
+   lebar via headerClass+bodyClass (prop styleClass PrimeVue 4 = no-op) */
+.bahan-table td { vertical-align: middle; }
+.bahan-table .col-uom { width: 64px; }
+.bahan-table .col-angka { width: 110px; text-align: right; white-space: nowrap; }
+.bahan-table .col-selisih { width: 140px; text-align: right; white-space: nowrap; }
+.bahan-table .col-pct { width: 96px; text-align: right; white-space: nowrap; }
+.bahan-table .col-status2 { width: 96px; }
+.bahan-table .col-chev { width: 40px; }
+.bahan-table .col-wo2 { width: 150px; }
+.bahan-table .col-prod2 { overflow: hidden; }
+.bahan-table .col-bom { width: 170px; }
+.bahan-table .col-se { width: 170px; }
+.bahan-table .col-tgl { width: 100px; }
+.bahan-table .col-batch { width: 140px; }
+.bahan-chev { color: var(--faint); }
+.bahan-pill { border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 1.4; padding: 3px 10px; }
+.ytext-ok { color: var(--ok-strong); }
+.ytext-bad { color: var(--bad-ink); }
+.ytext-flat { color: var(--ink); }
+
+/* ---- traceability: kartu WO + panel "cara ini dihitung" ---- */
+.trace-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+.trace-list { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.trace-wo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+.trace-wo:hover { background: var(--brand-softer); border-color: var(--line2); }
+.trace-ico {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+  display: grid;
+  place-items: center;
+}
+.trace-wo .two { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.trace-wo .t1 { font-weight: 650; font-size: 13.5px; color: var(--ink); }
+.trace-wo .t2 { font-size: 12px; color: var(--muted); }
+.tmetrics { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+.tm { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.tm label { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.tm b { font-weight: 650; font-size: 13px; color: var(--ink); white-space: nowrap; }
+.tm b small { font-weight: 500; font-size: 11px; color: var(--muted); }
+.trace-info {
+  background: var(--grey-bg);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trace-info h3 { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink); }
+.trace-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 12.5px;
+  text-decoration: none;
+}
+.trace-link:hover { text-decoration: underline; }
+
+/* tab transaksi: chip filter bahan + penghitung */
+.txn-chips { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-height: 26px; }
+.txn-count { margin-left: auto; font-size: 12px; color: var(--muted); }
+.bahan-se { font-weight: 600; }
+
+/* skin SelectButton → segmen pill menyatu kartu (pelajaran .dseg FU78b) */
+.trace-tabs .p-selectbutton {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.trace-tabs .p-togglebutton { border: 0; border-radius: 6px; }
+.trace-tabs .p-togglebutton::before { display: none; } /* latar pseudo tema v4 */
+.trace-tabs .p-togglebutton-content { background: transparent; }
+.trace-tabs .p-togglebutton-label { font-size: 12.5px; font-weight: 600; }
+.trace-tabs .p-togglebutton:not(.p-togglebutton-checked) { background: transparent; color: var(--muted); }
+.trace-tabs .p-togglebutton.p-togglebutton-checked { background: var(--brand-soft); color: var(--brand-strong); }
+
+@media (max-width: 1240px) {
+  .bahan-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 1000px) {
+  .bahan-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bahan-row2 { grid-template-columns: 1fr; }
+  .trace-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 820px) {
+  .bahan-kpis { gap: 10px; }
+  .bcm-row { grid-template-columns: 92px minmax(0, 1fr) 56px; gap: 8px; }
+  .trace-wo { flex-wrap: wrap; }
+  .tmetrics { gap: 10px; }
+  /* tabel sempit: selisih & batch dipotong (persen + status cukup) */
+  .bahan-table .col-selisih, .bahan-table .col-batch { display: none; }
+}
 @media (max-width: 620px) {
   .bahan-date { flex: 1 1 46%; width: auto; }
-  .bahan-table .p-datatable-row-expansion > td { padding: 8px 10px 12px; }
+  .an-head { flex-wrap: wrap; }
+  .an-head .searchbox { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

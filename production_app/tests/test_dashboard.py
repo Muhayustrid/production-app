@@ -1988,3 +1988,85 @@ class TestDashboard(IntegrationTestCase):
 		row_rm = _mu_row(rows, self.mu_rm)
 		if row_rm:  # fallback: tanpa Default Inventory UOM → tetap stock UOM
 			self.assertEqual(row_rm["uom"], self.uom_mu)
+
+	# --------------------------------- FU79: trace halaman bahan (work_orders/transactions/series)
+
+	def test_62_trace_work_orders_shape(self):
+		"""FU79: aggregate(include_trace=True) membawa `work_orders` — WO scope
+		rentang+produk dgn planned/produced terkonversi display UOM (pola
+		_planned_qty), bom/status/tanggal ikut, urut tanggal desc. Tanpa flag,
+		kunci TIDAK ada (payload dashboard_summary tetap ramping)."""
+		wo = self._make_wo(self.bom_mu, 40, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 40)
+		polos = _mu(company=self.company_a)
+		self.assertNotIn("work_orders", polos)
+		self.assertNotIn("transactions", polos)
+		self.assertNotIn("series", polos)
+		trace = _mu(company=self.company_a, include_trace=True)
+		w = next((e for e in trace["work_orders"] if e["wo"] == wo.name), None)
+		self.assertIsNotNone(w)
+		self.assertEqual(w["produk"], f"{PREFIX} FGMU {self.suffix}")
+		self.assertEqual(w["bom"], self.bom_mu)
+		self.assertEqual(w["uom"], self.uom_mu)  # mu_fg tanpa inventory UOM → stock
+		self.assertAlmostEqual(w["planned_qty"], 40, places=6)
+		self.assertAlmostEqual(w["produced_qty"], 40, places=6)
+		self.assertEqual(w["tanggal"], str(getdate(today())))
+		self.assertEqual(w["status"], frappe.db.get_value("Work Order", wo.name, "status"))
+		tgl = [e["tanggal"] for e in trace["work_orders"]]
+		self.assertEqual(tgl, sorted(tgl, reverse=True))
+
+	def test_63_trace_transactions_konsumsi_saja(self):
+		"""FU79: `transactions` = baris konsumsi per SE Detail (purpose
+		Manufacture/MCFM, s_warehouse terisi) — MTFM & baris fg bukan transaksi;
+		qty terkonversi display UOM dan terjumlah benar (20 + 2 ad-hoc); batch
+		dibawa apa adanya (item test tanpa batch → None); urut tanggal+SE desc."""
+		wo = self._make_wo(self.bom_mu, 20, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)  # MTFM — bukan konsumsi
+		self._manufacture(wo, 20)  # satu baris bahan mu_rm
+		self._consume(wo, {self.mu_rm: 2})  # + satu baris konsumsi ad-hoc
+		trace = _mu(company=self.company_a, include_trace=True)
+		lines = [e for e in trace["transactions"] if e["wo"] == wo.name]
+		self.assertEqual(len(lines), 2)
+		for e in lines:
+			self.assertEqual(e["item_code"], self.mu_rm)
+			self.assertEqual(e["item_name"], f"{PREFIX} MU RM {self.suffix}")
+			self.assertEqual(e["uom"], self.uom_mu)
+			self.assertEqual(e["tanggal"], str(getdate(today())))
+			self.assertIsNone(e["batch"])
+		nama = [e["se"] for e in lines]
+		self.assertEqual(nama, sorted(nama, reverse=True))
+		self.assertAlmostEqual(sum(e["qty"] for e in lines), 22.0, places=6)
+
+	def test_64_series_harian_zero_fill_per_uom(self):
+		"""FU79: `series` = hasil harian per display UOM, zero-fill dari..sampai
+		(hari kosong tetap dikirim bernilai 0), hitungan WO unik per hari naik
+		+1 oleh WO baru; basis posting_date SE Manufacture."""
+		dari, sampai = str(add_days(today(), -1)), today()
+		sebelum = _mu(company=self.company_a, dari=dari, sampai=sampai, include_trace=True)
+		seri_sebelum = next(
+			(s for s in sebelum["series"] if s["uom"] == self.uom_mu), {"rows": []}
+		)
+		wo = self._make_wo(self.bom_mu, 8, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 8)
+		trace = _mu(company=self.company_a, dari=dari, sampai=sampai, include_trace=True)
+		seri = next((s for s in trace["series"] if s["uom"] == self.uom_mu), None)
+		self.assertIsNotNone(seri)
+		self.assertEqual(
+			[r["period"] for r in seri["rows"]], [dari, sampai]
+		)  # zero-fill penuh
+		def _ambillah(seri, period, kunci):
+			return next((r[kunci] for r in seri["rows"] if r["period"] == period), None)
+
+		sebelum_hari = _ambillah(seri_sebelum, sampai, "produced") or 0.0
+		sebelum_wo = _ambillah(seri_sebelum, sampai, "wo") or 0
+		hari_ini = _ambillah(seri, sampai, "produced")
+		kemarin = _ambillah(seri, dari, "produced") or 0.0
+		kemarin_sebelum = _ambillah(seri_sebelum, dari, "produced") or 0.0
+		self.assertAlmostEqual(hari_ini - sebelum_hari, 8.0, places=6)
+		self.assertAlmostEqual(kemarin - kemarin_sebelum, 0.0, places=6)  # delta kemarin 0
+		self.assertEqual(_ambillah(seri, sampai, "wo") - sebelum_wo, 1)

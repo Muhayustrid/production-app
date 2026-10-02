@@ -28,9 +28,22 @@
 # Permission native `frappe.get_list` cukup (User Permission otomatis);
 # PermissionError SENGAJA dibiarkan naik — pemanggil yang memutuskan
 # degradasinya (dashboard menyembunyikan panel, pola FU65/FU73).
+#
+# FU79 — trace halaman bahan: aggregate(include_trace=True) menambah 3 kunci
+# untuk kartu referensi baru di #/bahan (dashboard_summary sengaja TIDAK
+# lewat flag agar payload dashboard tidak berubah — dipatok test):
+# - work_orders  : WO dalam scope (rentang planned_start_date + produk +
+#   company) dengan planned/produced terkonversi display UOM (pola
+#   _planned_qty) — kartu "Penggunaan bahan"/"Work order";
+# - transactions : baris konsumsi per SE Detail (purpose konsumsi,
+#   s_warehouse terisi — definisi konsumsi yang sama dengan agregat) dengan
+#   batch_no apa adanya, urut tanggal+nama desc, cap TRACE_TXN_CAP;
+# - series       : hasil harian per display UOM zero-fill dari..sampai +
+#   hitungan WO unik per hari (_tren_series, basis posting_date SE
+#   Manufacture — beda basis dari work_orders, di-caption frontend).
 
 import frappe
-from frappe.utils import cint, flt, getdate, today
+from frappe.utils import add_days, cint, flt, getdate, today
 
 from production_app.api.production_plan import _conversion_factor
 
@@ -38,21 +51,47 @@ from production_app.api.production_plan import _conversion_factor
 MATERIAL_OVER_PCT = 5.0
 # Batas rentang query (dari..sampai) dalam hari — pelindung beban endpoint.
 MAX_RANGE_DAYS = 92
+# Batas baris `transactions` (pelindung payload; terbaru yang dipertahankan).
+TRACE_TXN_CAP = 1000
 
 # Konsumsi: bahan benar-benar terpakai produksi (query konsumsi WO native,
 # work_order.get_consumed_qty — tanpa pengurangan retur, lihat docstring).
 PURPOSIS_KONSUMSI = ("Manufacture", "Material Consumption for Manufacture")
 
 
+def _display_uom_fn():
+	"""Fungsi (item_code) → (satuan display, faktor) satu item — jembatan ke
+	dashboard._item_display_uom. Import LAZY: dashboard mengimpor aggregate
+	dari modul ini di level atas, import balik di level file melingkar."""
+
+	def ambil(code):
+		from production_app.api.dashboard import _item_display_uom
+
+		try:
+			item = frappe.get_cached_doc("Item", code)
+		except frappe.DoesNotExistError:
+			return None, None
+		return _item_display_uom(item)
+
+	return ambil
+
+
 @frappe.whitelist()
 def material_usage(
-	dari=None, sampai=None, company=None, production_item=None, search=None, over_only=None
+	dari=None,
+	sampai=None,
+	company=None,
+	production_item=None,
+	search=None,
+	over_only=None,
+	include_trace=None,
 ):
-	"""Endpoint FU74 — agregat pemakaian bahan per rentang tanggal WO.
+	"""Endpoint FU74 (+FU79) — agregat pemakaian bahan per rentang tanggal WO.
 	Read-only; kontrak shape dipatok frontend (tests/test_dashboard.py):
 	today/dari/sampai, companies, products (sebelum filter produk), rows
 	per bahan (planned/expected/consumed/variance/variance_pct/over/unlisted
-	+ breakdown work_orders per WO)."""
+	+ breakdown work_orders per WO); include_trace → +work_orders/
+	transactions/series untuk halaman #/bahan."""
 	return aggregate(
 		company=company,
 		dari=dari,
@@ -62,6 +101,7 @@ def material_usage(
 		# param HTTP datang sebagai string — '0' truthy kalau tak di-cint
 		# (review FU74 MAJOR-1; konvensi app bool(cint(...)), work_order.py)
 		over_only=cint(over_only),
+		include_trace=cint(include_trace),
 	)
 
 
@@ -111,13 +151,15 @@ def _kunci_varian(pct, nama):
 
 def aggregate(
 	company=None, dari=None, sampai=None, production_item=None, search=None, over_only=False,
-	max_days=None,
+	max_days=None, include_trace=False,
 ):
 	"""Inti FU74 — lihat docstring modul untuk semantik angka. WO scope:
 	docstatus < 2, planned_start_date dalam [dari, sampai 23:59:59], company
 	opsional (get_list, User Permission otomatis); production_item & search
 	& over_only meneruskan hasil agregasi (bukan query). `max_days` (FU76)
-	menimpa batas rentang default 92 hari — dashboard memakai 366."""
+	menimpa batas rentang default 92 hari — dashboard memakai 366.
+	`include_trace` (FU79) menambah kunci work_orders/transactions/series —
+	dipakai endpoint #/bahan, TIDAK oleh dashboard (payload tetap ramping)."""
 	dari, sampai = _validasi_rentang(dari, sampai, max_days)
 
 	filters = [
@@ -130,7 +172,19 @@ def aggregate(
 	wos = frappe.get_list(
 		"Work Order",
 		filters=filters,
-		fields=["name", "production_item", "item_name", "qty", "produced_qty", "company"],
+		fields=[
+			"name",
+			"production_item",
+			"item_name",
+			"qty",
+			"produced_qty",
+			"company",
+			# FU79: untuk kunci trace work_orders
+			"bom_no",
+			"status",
+			"stock_uom",
+			"planned_start_date",
+		],
 		limit_page_length=0,
 	)
 
@@ -171,6 +225,7 @@ def aggregate(
 	# tetap terhitung pada bahan yang direncanakan (pola get_consumed_qty).
 	gross = {}  # (wo, item) -> transfer_qty purpose konsumsi
 	se_name, se_uom = {}, {}  # item_code -> nama/satuan fallback dari SE
+	txn_raw = []  # FU79: baris konsumsi mentah (stock qty) utk kunci transactions
 	if wo_names:
 		ses = frappe.get_list(
 			"Stock Entry",
@@ -179,22 +234,43 @@ def aggregate(
 				["docstatus", "=", 1],
 				["purpose", "in", list(PURPOSIS_KONSUMSI)],
 			],
-			fields=["name", "work_order"],
+			fields=["name", "work_order", "posting_date"],
 			limit_page_length=0,
 		)
 		# parent = nama SE; WO asalnya ikut dibaca dari baris SE
 		se_wo_by = {s.name: s.work_order for s in ses}
+		se_tgl = {s.name: str(getdate(s.posting_date)) for s in ses}
 		if ses:
 			for d in frappe.get_all(
 				"Stock Entry Detail",
 				filters={"parent": ("in", [s.name for s in ses]), "s_warehouse": ("is", "set")},
-				fields=["parent", "item_code", "original_item", "transfer_qty", "item_name", "stock_uom"],
+				fields=[
+					"parent",
+					"item_code",
+					"original_item",
+					"transfer_qty",
+					"item_name",
+					"stock_uom",
+					"batch_no",
+				],
 			):
 				code = d.original_item or d.item_code
 				key = (se_wo_by[d.parent], code)  # parent dijamin anggota ses
 				gross[key] = gross.get(key, 0.0) + flt(d.transfer_qty)
 				se_name.setdefault(code, d.item_name)
 				se_uom.setdefault(code, d.stock_uom)
+				txn_raw.append(
+					{
+						"se": d.parent,
+						"wo": key[0],
+						"item_code": code,
+						"item_name": d.item_name,
+						"qty": flt(d.transfer_qty),
+						"stock_uom": d.stock_uom,
+						"batch": d.batch_no or None,
+						"tanggal": se_tgl.get(d.parent),
+					}
+				)
 
 	# ---- rangkai baris per bahan
 	per_item = {}
@@ -291,7 +367,7 @@ def aggregate(
 	if over_only:
 		rows = [r for r in rows if r["over"]]
 
-	return {
+	hasil = {
 		"today": today(),
 		"dari": dari,
 		"sampai": sampai,
@@ -302,3 +378,124 @@ def aggregate(
 		],
 		"rows": rows,
 	}
+
+	if include_trace:
+		hasil["work_orders"] = _trace_work_orders(wos, _display_uom_fn())
+		hasil["transactions"] = _trace_transactions(txn_raw, _display_uom_fn())
+		hasil["series"] = _tren_series(dari, sampai, company)
+	return hasil
+
+
+def _trace_work_orders(wos, display_uom):
+	"""FU79: WO scope rentang+produk → kartu trace #/bahan. planned/produced
+	dikonversi display UOM (pola _planned_qty: qty stock ÷ faktor; tanpa
+	faktor valid → tetap stock UOM, baris tidak dibuang). Urut tanggal mulai
+	desc lalu nama — baris terbaru di atas."""
+	out = []
+	for w in wos:
+		alternate, factor = display_uom(w.production_item)
+		f = factor or 1
+		out.append(
+			{
+				"wo": w.name,
+				"produk": w.item_name or w.production_item,
+				"bom": w.bom_no or "",
+				"status": w.status or "",
+				"tanggal": str(getdate(w.planned_start_date)),
+				"planned_qty": round(flt(w.qty) / f, 3),
+				"produced_qty": round(flt(w.produced_qty) / f, 3),
+				"uom": alternate or w.stock_uom or "",
+			}
+		)
+	out.sort(key=lambda e: (e["tanggal"], e["wo"]), reverse=True)
+	return out
+
+
+def _trace_transactions(txn_raw, display_uom):
+	"""FU79: baris konsumsi per SE Detail — definisi konsumsi yang SAMA dengan
+	aparit agregat (purpose konsumsi, s_warehouse terisi). Qty dikonversi
+	display UOM (pola _planned_qty; tanpa faktor → stock UOM). Urut tanggal
+	desc lalu nama SE desc, cap TRACE_TXN_CAP terbaru."""
+	out = []
+	for t in txn_raw:
+		alternate, factor = display_uom(t["item_code"])
+		f = factor or 1
+		out.append(
+			{
+				"se": t["se"],
+				"tanggal": t["tanggal"],
+				"wo": t["wo"],
+				"item_code": t["item_code"],
+				"item_name": t["item_name"] or t["item_code"],
+				"qty": round(t["qty"] / f, 3),
+				"uom": alternate or t["stock_uom"] or "",
+				"batch": t["batch"],
+			}
+		)
+	out.sort(key=lambda e: (e["tanggal"] or "", e["se"]), reverse=True)
+	return out[:TRACE_TXN_CAP]
+
+
+def _tren_series(dari, sampai, company):
+	"""FU79: hasil harian per display UOM untuk kartu "Tren produksi" — qty
+	fg SE Manufacture per posting_date + banyaknya WO unik yang memproduksi
+	hari itu (SE tanpa WO tidak masuk hitungan WO). Zero-fill penuh
+	dari..sampai agar label tanggal frontend tidak bolong. Basis tanggal
+	berbeda dari kunci work_orders (planned_start_date) — di-caption
+	frontend. PermissionError → [] (pola FU65)."""
+	span = (getdate(sampai) - getdate(dari)).days
+	periods = [str(add_days(getdate(dari), i)) for i in range(span + 1)]
+	se_filters = [
+		["purpose", "=", "Manufacture"],
+		["docstatus", "=", 1],
+		["posting_date", ">=", dari],
+		["posting_date", "<=", sampai],
+	]
+	if company:
+		se_filters.append(["company", "=", company])
+	try:
+		ses = frappe.get_list(
+			"Stock Entry",
+			filters=se_filters,
+			fields=["name", "posting_date", "work_order"],
+			limit_page_length=0,
+		)
+	except frappe.PermissionError:
+		return []
+	qty = {}  # (uom, period) -> total hasil (display)
+	wo_harian = {}  # (uom, period) -> set nama WO
+	if ses:
+		display_uom = _display_uom_fn()
+		se_meta = {s.name: s for s in ses}
+		for r in frappe.get_all(
+			"Stock Entry Detail",
+			filters={"parent": ("in", [s.name for s in ses]), "is_finished_item": 1},
+			fields=["parent", "item_code", "transfer_qty", "qty"],
+		):
+			alternate, factor = display_uom(r.item_code)
+			if not factor:
+				continue  # tanpa konversi valid: skip, jangan mengarang faktor
+			m = se_meta[r.parent]
+			k = (alternate, str(m.posting_date))
+			qty[k] = qty.get(k, 0.0) + flt(r.transfer_qty or r.qty) / factor
+			if m.work_order:
+				wo_harian.setdefault(k, set()).add(m.work_order)
+
+	def total(uom):
+		return sum(v for (u, _), v in qty.items() if u == uom)
+
+	uoms = sorted({u for u, _ in qty}, key=lambda u: (-total(u), u))
+	return [
+		{
+			"uom": uom,
+			"rows": [
+				{
+					"period": p,
+					"produced": flt(qty.get((uom, p))),
+					"wo": len(wo_harian.get((uom, p)) or ()),
+				}
+				for p in periods
+			],
+		}
+		for uom in uoms
+	]

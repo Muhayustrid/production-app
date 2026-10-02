@@ -424,3 +424,194 @@ export function isOverdue(row, nowMs) {
   const end = Date.parse(String(row?.plannedEnd || '').replace(' ', 'T'))
   return Number.isFinite(end) && end < nowMs
 }
+
+// ============================================================================
+// FU79: rombak halaman Bahan baku (#/bahan) gaya referensi — KPI 5 kartu,
+// perbandingan konsumsi, tren produksi, traceability. Semua murni & teruji;
+// aturan inti terwarisi: beda UOM TIDAK PERNAH dijumlahkan/dirata-ratakan.
+// ============================================================================
+
+// label status Work Order native → Indonesia (nilai tak dikenal apa adanya)
+const WO_STATUS_ID = {
+  Draft: 'Draft',
+  'Not Started': 'Belum mulai',
+  'In Process': 'Berjalan',
+  Stopped: 'Berhenti',
+  Completed: 'Selesai',
+  Cancelled: 'Dibatalkan'
+}
+
+export function woStatusText(status) {
+  return WO_STATUS_ID[status] || status || ''
+}
+
+// daftar WO trace → sub-KPI "Order produksi": kosong → "Tidak ada order";
+// semua selesai → "Semua selesai"; selain itu bagian non-nol terurut
+// "1 selesai · 2 berjalan · 1 belum mulai" (status asing ikut terhitung)
+export function woStatusSummary(list) {
+  const arr = Array.isArray(list) ? list : []
+  if (!arr.length) return 'Tidak ada order'
+  const hitung = {}
+  for (const w of arr) {
+    const k = woStatusText(w?.status) || 'Lain'
+    hitung[k] = (hitung[k] || 0) + 1
+  }
+  if ((hitung['Selesai'] || 0) === arr.length) return 'Semua selesai'
+  // urutan tetap; status asing (tak ada di daftar) tetap tampil di belakang
+  const urut = ['Selesai', 'Berjalan', 'Belum mulai', 'Draft', 'Berhenti', 'Dibatalkan', 'Lain']
+  return Object.keys(hitung)
+    .sort((a, b) => {
+      const ia = urut.indexOf(a)
+      const ib = urut.indexOf(b)
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+    })
+    .map((k) => `${hitung[k]} ${k.toLowerCase()}`)
+    .join(' · ')
+}
+
+// total per UOM dari daftar baris (kunci qty dapat diatur) — TIDAK pernah
+// menjumlah lintas UOM; urut total menurun (entri pertama = UOM utama)
+export function uomTotals(list, qtyKey, uomKey = 'uom') {
+  const by = new Map()
+  for (const r of Array.isArray(list) ? list : []) {
+    const k = r?.[uomKey] || ''
+    by.set(k, (by.get(k) || 0) + (Number(r?.[qtyKey]) || 0))
+  }
+  return [...by.entries()]
+    .map(([uom, qty]) => ({ uom, qty: bulatkan(qty, 3) }))
+    .sort((a, b) => b.qty - a.qty)
+}
+
+// % deviasi rata-rata tertimbang pada SATU UOM: Σvariance/Σexpected×100 —
+// bobot lintas UOM tidak bermakna, hanya baris uom itu yang ikut; uom kosong
+// MENOLAK (null) — menjumlah tanpa UOM = melanggar aturan inti; tanpa
+// expected > 0 → null
+export function weightedVarPct(rows, uom) {
+  if (!uom) return null
+  let varian = 0
+  let dasar = 0
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if ((r?.uom || '') !== uom) continue
+    const e = Number(r?.expected) || 0
+    if (e <= 0) continue
+    dasar += e
+    varian += Number(r?.variance) || 0
+  }
+  return dasar > 0 ? bulatkan((varian / dasar) * 100, 1) : null
+}
+
+// % efisiensi pada SATU UOM: Σexpected/Σconsumed×100; uom kosong → null
+// (alasan sama dengan weightedVarPct); konsumsi 0 → null
+export function efficiencyPct(rows, uom) {
+  if (!uom) return null
+  let dasar = 0
+  let pakai = 0
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if ((r?.uom || '') !== uom) continue
+    dasar += Number(r?.expected) || 0
+    pakai += Number(r?.consumed) || 0
+  }
+  return pakai > 0 ? bulatkan((dasar / pakai) * 100, 1) : null
+}
+
+// kartu perbandingan: baris dengan dasar (max dari expected/consumed) di atas
+// 0, urut menurun, dipotong cap; sisanya dihitung "extra" utk catatan footer
+export function comparisonRows(rows, cap = 8) {
+  const list = (Array.isArray(rows) ? rows : [])
+    .filter((r) => (Number(r?.expected) || 0) > 1e-9 || (Number(r?.consumed) || 0) > 1e-9)
+    .sort(
+      (a, b) =>
+        Math.max(Number(b?.expected) || 0, Number(b?.consumed) || 0) -
+        Math.max(Number(a?.expected) || 0, Number(a?.consumed) || 0)
+    )
+  const batas = Number(cap) || cap
+  return { list: list.slice(0, batas), extra: Math.max(0, list.length - batas) }
+}
+
+// lebar bar 0-100 dari nilai terhadap maksimum baris tampil; maks ≤ 0 → 0
+export function barPct(value, max) {
+  const m = Number(max) || 0
+  if (m <= 0) return 0
+  return Math.max(0, Math.min(100, bulatkan(((Number(value) || 0) / m) * 100, 1)))
+}
+
+// warna angka selisih: over → 'over' (merah), negatif → 'under' (hijau),
+// sisanya 'flat' (netral) — baris "tanpa dasar" (pct null) mengikuti row.over
+export function varianceTone(row) {
+  if (row?.over) return 'over'
+  const v = Number(row?.variance)
+  if (Number.isFinite(v) && v < -1e-9) return 'under'
+  return 'flat'
+}
+
+// "+1,5 Kg" / "−0,3 Kg" (minus asli U+2212, pola variancePctText); 0 tanpa
+// tanda; qty tak valid → '-'
+export function signedQtyText(qty, uom) {
+  const n = Number(qty)
+  if (!Number.isFinite(n)) return '-'
+  const tanda = n > 0 ? '+' : n < 0 ? '−' : ''
+  return `${tanda}${fmtId(Math.abs(n))}${uom ? ' ' + uom : ''}`
+}
+
+// satu seri tren {rows:[{period,produced,wo}]} → {labels, data} Chart bar;
+// label "2 Okt" manual TZ-safe (pola periodLabel), produced 2 desimal
+export function chartTrend(series) {
+  const rows = Array.isArray(series?.rows) ? series.rows : []
+  return {
+    labels: rows.map((r) => periodLabel(r?.period)),
+    data: rows.map((r) => bulatkan(r?.produced, 2))
+  }
+}
+
+// baris tren dgn hasil terbesar (seri → pertama); tanpa hasil > 0 → null
+export function peakDay(rows) {
+  let best = null
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if ((Number(r?.produced) || 0) <= 0) continue
+    if (!best || (Number(r.produced) || 0) > (Number(best.produced) || 0)) best = r
+  }
+  return best
+}
+
+// callout puncak: "Puncak output 2 Okt dengan 2.592 Nos dari 2 work order."
+// (1 WO tak memakai jamak); peak kosong → '' (callout disembunyikan)
+export function peakText(peak, uom) {
+  if (!peak) return ''
+  const n = Number(peak.wo) || 0
+  const wo = n === 1 ? '1 work order' : `${n} work order`
+  return `Puncak output ${periodLabel(peak.period)} dengan ${fmtId(Number(peak.produced) || 0)}${uom ? ' ' + uom : ''} dari ${wo}.`
+}
+
+// yield satu WO trace %: produced/planned_qty×100 (1 desimal); tanpa dasar → null
+export function woYieldPct(wo) {
+  const p = Number(wo?.planned_qty)
+  const d = Number(wo?.produced_qty)
+  if (!Number.isFinite(p) || p <= 0 || !Number.isFinite(d)) return null
+  return bulatkan((d / p) * 100, 1)
+}
+
+// kelas warna yield: ≥100 'ok' (hijau), <90 'bad' (merah), sisanya 'flat'.
+// NB: Number(null) === 0 — null dicek eksplisit (gotcha deltaPctText).
+export function yieldTone(pct) {
+  if (pct == null) return 'flat'
+  const p = Number(pct)
+  if (!Number.isFinite(p)) return 'flat'
+  if (p >= 100) return 'ok'
+  if (p < 90) return 'bad'
+  return 'flat'
+}
+
+// "2026-10-02" → "2 Okt 2026" (kartu WO trace); bukan ISO harian apa adanya
+export function tanggalPendek(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''))
+  if (!m) return String(iso || '')
+  const bl = BULAN_SINGKAT[Number(m[2]) - 1]
+  return bl ? `${Number(m[3])} ${bl} ${m[1]}` : String(iso)
+}
+
+// transaksi terfilter satu bahan (klik baris analisis → tab transaksi)
+export function txnOfMaterial(transactions, itemCode) {
+  return (Array.isArray(transactions) ? transactions : []).filter(
+    (t) => t?.item_code === itemCode
+  )
+}

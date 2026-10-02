@@ -409,3 +409,148 @@ test('isOverdue: target lewat & belum selesai; WO selesai tak pernah telat', asy
   assert.equal(isOverdue({ plannedEnd: '', stage: 'finish' }, now), false)
   assert.equal(isOverdue(null, now), false)
 })
+
+// ============================================================================
+// FU79: rombak halaman Bahan baku (#/bahan) — KPI 5 kartu, perbandingan
+// konsumsi, tren produksi, traceability. Semua helper murni teruji; aturan
+// inti terwarisi: beda UOM TIDAK PERNAH dijumlahkan/rata-ratakan bersama.
+// ============================================================================
+
+test('woStatusText & woStatusSummary: label Indonesia + ringkasan sub-KPI', async () => {
+  const { woStatusText, woStatusSummary } = await import('../src/dashboard.js')
+  assert.equal(woStatusText('Completed'), 'Selesai')
+  assert.equal(woStatusText('In Process'), 'Berjalan')
+  assert.equal(woStatusText('Not Started'), 'Belum mulai')
+  assert.equal(woStatusText('Stopped'), 'Berhenti')
+  assert.equal(woStatusText('Cancelled'), 'Dibatalkan')
+  assert.equal(woStatusText(''), '')
+  assert.equal(woStatusSummary([]), 'Tidak ada order')
+  assert.equal(
+    woStatusSummary([{ status: 'Completed' }, { status: 'Completed' }]),
+    'Semua selesai'
+  )
+  assert.equal(
+    woStatusSummary([
+      { status: 'Completed' }, { status: 'In Process' }, { status: 'In Process' },
+      { status: 'Not Started' }
+    ]),
+    '1 selesai · 2 berjalan · 1 belum mulai'
+  )
+  // status asing tak dikenal tetap terhitung, tidak menghilang
+  assert.equal(woStatusSummary([{ status: 'Weird' }]), '1 weird')
+})
+
+test('uomTotals: total per UOM tanpa mencampur, urut menurun', async () => {
+  const { uomTotals } = await import('../src/dashboard.js')
+  assert.deepEqual(
+    uomTotals(
+      [
+        { uom: 'Kg', produced_qty: 30 }, { uom: 'Pack', produced_qty: 12 },
+        { uom: 'Kg', produced_qty: 2 }
+      ],
+      'produced_qty'
+    ),
+    [{ uom: 'Kg', qty: 32 }, { uom: 'Pack', qty: 12 }]
+  )
+  assert.deepEqual(uomTotals([], 'consumed'), [])
+  assert.deepEqual(uomTotals(null, 'consumed'), [])
+  // konsumsi baris bahan: uom default key 'uom'
+  assert.deepEqual(
+    uomTotals([{ uom: 'Kg', consumed: 100.5 }, { uom: 'Kg', consumed: 1.5 }], 'consumed'),
+    [{ uom: 'Kg', qty: 102 }]
+  )
+})
+
+test('weightedVarPct & efficiencyPct: satu UOM saja; tanpa dasar → null', async () => {
+  const { weightedVarPct, efficiencyPct } = await import('../src/dashboard.js')
+  const rows = [
+    { uom: 'Kg', expected: 72, consumed: 73.5, variance: 1.5 },
+    { uom: 'Kg', expected: 8, consumed: 8.1, variance: 0.1 },
+    { uom: 'Pcs', expected: 500, consumed: 400, variance: -100 }
+  ]
+  // tertimbang Kg: (1,5+0,1)/(72+8) = 2% — Pcs 500 TIDAK ikut
+  assert.equal(weightedVarPct(rows, 'Kg'), 2)
+  // efisiensi Kg: 80/81,6 = 98,039...% → 98
+  assert.equal(efficiencyPct(rows, 'Kg'), 98)
+  assert.equal(efficiencyPct(rows, 'Pcs'), 125)
+  assert.equal(weightedVarPct([{ uom: 'Kg', expected: 0, consumed: 5, variance: 5 }], 'Kg'), null)
+  assert.equal(weightedVarPct([], 'Kg'), null)
+  assert.equal(efficiencyPct([], 'Kg'), null)
+  // tanpa UOM MENOLAK (null) — menjumlah tanpa UOM = melanggar aturan inti
+  assert.equal(weightedVarPct(rows, null), null)
+  assert.equal(efficiencyPct(rows, null), null)
+})
+
+test('comparisonRows & barPct: urut terbesar, cap + sisa, lebar 0-100', async () => {
+  const { comparisonRows, barPct } = await import('../src/dashboard.js')
+  const rows = [
+    { expected: 72, consumed: 73.5 },   // dasar 73,5
+    { expected: 0, consumed: 0 },       // dibuang (nol dua-duanya)
+    { expected: 10, consumed: 10.8 },   // dasar 10,8
+    { expected: 8, consumed: 0 }        // dasar 8
+  ]
+  const { list, extra } = comparisonRows(rows, 2)
+  assert.equal(list.length, 2)
+  assert.equal(list[0].expected, 72)
+  assert.equal(list[1].expected, 10)
+  assert.equal(extra, 1) // baris dasar-8 terpotong
+  assert.deepEqual(comparisonRows([]).extra, 0)
+  assert.equal(barPct(73.5, 73.5), 100)
+  assert.equal(barPct(36.75, 73.5), 50)
+  assert.equal(barPct(0, 73.5), 0)
+  assert.equal(barPct(10, 0), 0)
+  assert.equal(barPct(-5, 73.5), 0)
+  assert.equal(barPct(200, 100), 100)
+})
+
+test('varianceTone & signedQtyText: warna selisih + tanda minus asli', async () => {
+  const { varianceTone, signedQtyText } = await import('../src/dashboard.js')
+  assert.equal(varianceTone({ over: true, variance: 1 }), 'over')
+  assert.equal(varianceTone({ over: false, variance: -0.3 }), 'under')
+  assert.equal(varianceTone({ over: false, variance: 0 }), 'flat')
+  assert.equal(varianceTone({ over: true, variance_pct: null }), 'over') // tanpa dasar
+  assert.equal(signedQtyText(1.5, 'Kg'), '+1,5 Kg')
+  assert.equal(signedQtyText(-0.3, 'Kg'), '−0,3 Kg')
+  assert.equal(signedQtyText(0, 'Kg'), '0 Kg')
+  assert.equal(signedQtyText(NaN, 'Kg'), '-')
+  assert.equal(signedQtyText(2), '+2') // selisih selalu bertanda
+})
+
+test('chartTrend & peakDay & peakText: label tanggal + kalimat puncak', async () => {
+  const { chartTrend, peakDay, peakText } = await import('../src/dashboard.js')
+  const seri = { rows: [{ period: '2026-10-01', produced: 100, wo: 2 }, { period: '2026-10-02', produced: 2592, wo: 2 }] }
+  assert.deepEqual(chartTrend(seri), { labels: ['1 Okt', '2 Okt'], data: [100, 2592] })
+  assert.deepEqual(chartTrend(null), { labels: [], data: [] })
+  assert.deepEqual(peakDay(seri.rows), { period: '2026-10-02', produced: 2592, wo: 2 })
+  assert.equal(peakDay([{ period: '2026-10-01', produced: 0, wo: 0 }]), null)
+  assert.equal(peakDay([]), null)
+  assert.equal(
+    peakText({ period: '2026-10-02', produced: 2592, wo: 2 }, 'Nos'),
+    'Puncak output 2 Okt dengan 2.592 Nos dari 2 work order.'
+  )
+  assert.equal(
+    peakText({ period: '2026-10-02', produced: 1300, wo: 1 }, 'Pcs'),
+    'Puncak output 2 Okt dengan 1.300 Pcs dari 1 work order.'
+  )
+  assert.equal(peakText(null, 'Nos'), '')
+})
+
+test('woYieldPct & yieldTone & tanggalPendek & txnOfMaterial', async () => {
+  const { woYieldPct, yieldTone, tanggalPendek, txnOfMaterial } = await import('../src/dashboard.js')
+  assert.equal(woYieldPct({ planned_qty: 1296, produced_qty: 1300 }), 100.3)
+  assert.equal(woYieldPct({ planned_qty: 0, produced_qty: 10 }), null)
+  assert.equal(woYieldPct(null), null)
+  assert.equal(yieldTone(100.3), 'ok')
+  assert.equal(yieldTone(95), 'flat')
+  assert.equal(yieldTone(85), 'bad')
+  assert.equal(yieldTone(null), 'flat')
+  assert.equal(tanggalPendek('2026-10-02'), '2 Okt 2026')
+  assert.equal(tanggalPendek(''), '')
+  assert.equal(tanggalPendek('2026-10'), '2026-10')
+  const txns = [
+    { se: 'A', item_code: 'RM1' }, { se: 'B', item_code: 'RM2' }, { se: 'C', item_code: 'RM1' }
+  ]
+  assert.deepEqual(txnOfMaterial(txns, 'RM1').map((t) => t.se), ['A', 'C'])
+  assert.deepEqual(txnOfMaterial(txns, 'XX'), [])
+  assert.deepEqual(txnOfMaterial(null, 'RM1'), [])
+})
