@@ -3,8 +3,9 @@
 // LOKAL di sini, tidak register global). Urutan layar: head + filter rentang
 // + company, ringkasan 3 angka, papan 7 tahap, grid panel "Hasil per produk"
 // + "Perlu perhatian", panel "Penggunaan bahan baku" (FU74), tabel WO dalam
-// rentang (FU76: preset tanggal server-resolved + kustom). Perilaku klik
-// tahap/tabel/seret konteks (pendingStageFilter) tetap seperti FU72.
+// rentang (FU76: preset tanggal server-resolved + kustom; FU77: dipaginasi
+// 10 baris/halaman via Paginator lazy). Perilaku klik tahap/tabel/seret
+// konteks (pendingStageFilter) tetap seperti FU72.
 import { computed, onMounted, ref } from 'vue'
 import { Check, ChevronDown, ChevronRight, SearchX } from 'lucide-vue-next'
 import Button from 'primevue/button'
@@ -12,10 +13,11 @@ import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
 import MeterGroup from 'primevue/metergroup'
 import Popover from 'primevue/popover'
+import Paginator from 'primevue/paginator'
 import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
-import { dashboardState, loadDashboard, pendingStageFilter, STAGE_LABELS } from './store.js'
+import { dashboardState, DASH_PAGE_SIZE, loadDashboard, loadDashboardPage, pendingStageFilter, STAGE_LABELS } from './store.js'
 import { fmtId } from './format.js'
 import {
   STAGES, YIELD_LEGEND, RANGE_PRESETS, attentionText, bahanHref, materialRowText, materialSummaryText,
@@ -77,13 +79,18 @@ const stageList = computed(() => STAGES.map((s) => ({
     ? selesaiTileLabel(summary.value?.preset)
     : s.label
 })))
-// judul tabel & tombol "tampilkan semua" mengikuti rentang
+// judul tabel mengikuti rentang
 const rangeScoped = computed(() => summary.value?.preset && summary.value.preset !== 'hari_ini')
 const tableTitle = computed(() => (rangeScoped.value ? 'Work Order dalam rentang' : 'Work Order hari ini'))
-const showAllLabel = computed(() => (rangeScoped.value ? 'Tampilkan semua WO dalam rentang' : 'Tampilkan semua WO hari ini'))
-// tabel hari ini dibatasi 20 baris server; bila total lebih besar, tawarkan
-// daftar lengkap — angka ringkasan dan isi tabel tidak saling menyangkal
-const rowsTruncated = computed(() => (dashboardState.total || 0) > dashboardState.rows.length)
+// FU77: tabel dipaginasi DASH_PAGE_SIZE baris/halaman — lazy via wo_list
+// (start/page_len); pager hanya tampil bila total melebihi satu halaman
+const pageSize = DASH_PAGE_SIZE
+const dashFirst = ref(0)
+function onPage(e) { loadDashboardPage(e.page) }
+function retryPage() {
+  dashboardState.rowsError = ''
+  loadDashboardPage(dashboardState.page)
+}
 
 // FU73: dua panel baru — kontrak summary.product_yield / summary.attention
 const productYield = computed(() => summary.value?.product_yield || [])
@@ -105,6 +112,7 @@ const muOver = computed(() => muRows.value.filter((r) => !!r?.over))
 const muOverExtra = computed(() => Math.max(0, muOver.value.length - 3))
 
 function reload() {
+  dashFirst.value = 0 // ganti rentang/company = kembali ke halaman pertama
   if (preset.value === 'kustom' && !kustomReady.value) return // draft belum lengkap/valid
   loadDashboard(companyParam(), rangeParams(preset.value, customDari.value, customSampai.value))
 }
@@ -140,14 +148,6 @@ function openStage(stage) {
     pendingStageFilter.from = summary.value?.dari || summary.value?.today || ''
     pendingStageFilter.to = summary.value?.sampai || pendingStageFilter.from
   }
-  window.location.hash = '#/wo'
-}
-// tabel terpotong 20 baris — satu-shot seluruh WO rentang tanpa tahap
-function openAllToday() {
-  pendingStageFilter.stage = ''
-  pendingStageFilter.company = companyParam()
-  pendingStageFilter.from = summary.value?.dari || summary.value?.today || ''
-  pendingStageFilter.to = summary.value?.sampai || pendingStageFilter.from
   window.location.hash = '#/wo'
 }
 function open(id) { window.location.hash = '#/wo/' + id }
@@ -374,7 +374,7 @@ onMounted(reload)
     <section aria-label="Work Order hari ini">
       <h2 class="dash-sec-title">{{ tableTitle }}</h2>
       <div class="panel dash-tablewrap">
-        <DataTable :value="dashboardState.rows" dataKey="id" class="dash-table" @row-click="(e) => open(e.data.id)">
+        <DataTable :value="dashboardState.rows" dataKey="id" class="dash-table" :loading="dashboardState.rowsLoading" @row-click="(e) => open(e.data.id)">
           <Column field="id" header="WO" style="width: 150px">
             <template #body="{ data }">
               <button type="button" class="linklike" @click.stop="open(data.id)">{{ data.id }}</button>
@@ -422,9 +422,21 @@ onMounted(reload)
           </template>
         </DataTable>
       </div>
-      <p v-if="rowsTruncated" class="dash-more">
-        <Button :label="showAllLabel" size="small" severity="secondary" variant="outlined" @click="openAllToday" />
-      </p>
+      <div v-if="dashboardState.rowsError" class="callout bad dash-page-error" role="alert">
+        <p>Gagal memuat halaman tabel.</p>
+        <Button label="Coba lagi" size="small" severity="secondary" variant="outlined" @click="retryPage" />
+      </div>
+      <!-- FU77: lazy pagination 10/halaman — pindah halaman memanggil wo_list
+         ringan, bukan menghitung ulang seluruh summary -->
+      <Paginator
+        v-if="dashboardState.total > pageSize"
+        :rows="pageSize"
+        :totalRecords="dashboardState.total || 0"
+        v-model:first="dashFirst"
+        template="PrevPageLink PageLinks NextPageLink"
+        class="dash-pager"
+        @page="onPage"
+      />
     </section>
   </template>
 </template>

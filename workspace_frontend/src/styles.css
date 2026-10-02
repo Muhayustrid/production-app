@@ -2412,9 +2412,9 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .linklike:hover { text-decoration: underline; }
 
-/* Button PrimeVue (error + tampilkan semua) mengikuti .btn app */
+/* Button PrimeVue (error + gagal-muat-halaman) mengikuti .btn app */
 .dash-error .p-button,
-.dash-more .p-button {
+.dash-page-error .p-button {
   height: 34px;
   border-radius: var(--radius);
   background: var(--surface);
@@ -2424,8 +2424,19 @@ textarea.input { height: auto; padding: 8px 10px; }
   font-weight: 600;
 }
 .dash-error .p-button:hover,
-.dash-more .p-button:hover { background: #f5f5f0; border-color: var(--line2); color: var(--ink); }
-.dash-more { margin: 2px 2px 0; }
+.dash-page-error .p-button:hover { background: #f5f5f0; border-color: var(--line2); color: var(--ink); }
+.dash-page-error { margin: 10px 2px 0; }
+
+/* FU77: pagination tabel dashboard — rata kanan mengikuti angka kolom,
+   telanjang (tanpa latar pita bawaan tema) supaya menyatu dengan panel */
+.dash-pager.p-paginator {
+  margin: 10px 2px 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  justify-content: flex-end;
+  gap: 2px;
+}
 
 /* error inline dengan tombol coba lagi */
 .dash-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

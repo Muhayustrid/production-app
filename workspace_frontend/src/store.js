@@ -279,6 +279,13 @@ export async function saveSuggestionPreferences(enabled) {
   return suggestionPreferences.enabled
 }
 
+// pemetaan baris wo_list → komponen: pakai detail WO yang sudah termuat
+// bila ada (dipakai loadList dan tabel dashboard)
+function mapWoRows(rows) {
+  const details = new Map(workOrders.filter(w => w.requiredItemsLoaded).map(w => [w.id, w]))
+  return rows.map(r => details.get(r.name) || { ...mapDetail(r), hasOperations: !!r.has_operations, requiredItemsLoaded: false })
+}
+
 export async function loadList(filters = {}) {
   state.loading = true
   state.error = null
@@ -298,9 +305,7 @@ export async function loadList(filters = {}) {
     const rows = result.rows || []
     listState.total = result.total ?? rows.length
     listState.page = Math.floor((result.start || 0) / (result.page_len || listState.pageSize)) + 1
-    const details = new Map(workOrders.filter(w => w.requiredItemsLoaded).map(w => [w.id, w]))
-    const mapped = rows.map(r => details.get(r.name) || { ...mapDetail(r), hasOperations: !!r.has_operations, requiredItemsLoaded: false })
-    workOrders.splice(0, workOrders.length, ...mapped)
+    workOrders.splice(0, workOrders.length, ...mapWoRows(rows))
     state.loaded = true
   } catch (e) {
     state.error = e.message
@@ -311,7 +316,14 @@ export async function loadList(filters = {}) {
 
 // FU72: Dashboard "Hari Ini" — ringkasan + tabel WO hari ini, satu sumber
 // untuk Dashboard.vue; error inline di halaman (bukan dialog aksi).
-export const dashboardState = reactive({ summary: null, rows: [], total: 0, loading: false, error: '' })
+// FU77: tabel dipaginasi DASH_PAGE_SIZE baris/halaman — halaman pertama
+// datang bareng loadDashboard; pindah halaman = wo_list ringan (tanpa
+// summary); company/range terakhir disimpan untuk fetch halaman berikut.
+export const DASH_PAGE_SIZE = 10
+export const dashboardState = reactive({
+  summary: null, rows: [], total: 0, page: 0, loading: false, error: '',
+  rowsLoading: false, rowsError: '', company: '', range: null
+})
 // konteks satu-shot dari Dashboard (klik tahap / "tampilkan semua") —
 // dikonsumsi & dikosongkan WorkOrderList saat mount (runtime saja, tidak
 // masuk preferensi tersimpan); from/to membatasi kartu "Selesai hari ini"
@@ -327,26 +339,58 @@ export async function loadDashboard(company = '', range = null) {
     const summary = await call('production_app.api.dashboard.dashboard_summary',
       { company: company || null, ...(range || {}) })
     dashboardState.summary = summary
+    dashboardState.company = company || ''
+    dashboardState.range = range || null
     // tanggal resolved server untuk tabel WO dalam rentang (endpoint existing)
     const result = await call('production_app.api.work_order.wo_list', {
       start_date: summary.dari || summary.today,
       end_date: summary.sampai || summary.today,
       stage: null,
       start: 0,
-      page_len: 20,
+      page_len: DASH_PAGE_SIZE,
       meta: 1,
       company: company || null
     })
     const rows = result.rows || []
     dashboardState.total = result.total ?? rows.length
-    // pemetaan sama dengan loadList: pakai detail termuat bila sudah ada
-    const details = new Map(workOrders.filter(w => w.requiredItemsLoaded).map(w => [w.id, w]))
-    dashboardState.rows = rows.map(r => details.get(r.name) || { ...mapDetail(r), hasOperations: !!r.has_operations, requiredItemsLoaded: false })
+    dashboardState.page = 0
+    dashboardState.rowsError = ''
+    dashboardState.rows = mapWoRows(rows)
   } catch (e) {
     dashboardState.error = e.message
   } finally {
     dashboardState.loading = false
     uiTopLoading.active = false
+  }
+}
+
+// FU77: pindah halaman tabel dashboard — wo_list ringan dgn filter rentang +
+// company TERAKHIR (disimpan loadDashboard); summary tidak dihitung ulang.
+// Gagal fetch halaman TIDAK membongkar layar (summary tetap tampil) —
+// ditandai rowsError, dicoba ulang di halaman yang sama.
+export async function loadDashboardPage(page = 0) {
+  const summary = dashboardState.summary
+  if (!summary) return
+  dashboardState.rowsLoading = true
+  dashboardState.rowsError = ''
+  try {
+    const result = await call('production_app.api.work_order.wo_list', {
+      start_date: summary.dari || summary.today,
+      end_date: summary.sampai || summary.today,
+      stage: null,
+      start: Math.max(0, page) * DASH_PAGE_SIZE,
+      page_len: DASH_PAGE_SIZE,
+      meta: 1,
+      company: dashboardState.company || null
+    })
+    const rows = result.rows || []
+    dashboardState.total = result.total ?? rows.length
+    dashboardState.page = Math.floor((result.start || 0) / (result.page_len || DASH_PAGE_SIZE))
+    dashboardState.rows = mapWoRows(rows)
+  } catch (e) {
+    dashboardState.rowsError = e.message
+  } finally {
+    dashboardState.rowsLoading = false
   }
 }
 
