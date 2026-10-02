@@ -547,12 +547,12 @@ onMounted(reload)
         <span v-if="adonanText" class="dchip">Adonan terakhir ke-{{ adonanText }}</span>
       </div>
       <DataTable :value="dashboardState.rows" dataKey="id" class="dash-table" :loading="dashboardState.rowsLoading" @row-click="(e) => open(e.data.id)">
-        <Column field="id" header="WO" style="width: 130px">
+        <Column field="id" header="WO" headerClass="col-wo" bodyClass="col-wo">
           <template #body="{ data }">
             <button type="button" class="linklike" @click.stop="open(data.id)">{{ data.id }}</button>
           </template>
         </Column>
-        <Column field="product" header="Produk" styleClass="col-prod">
+        <Column field="product" header="Produk" headerClass="col-prod" bodyClass="col-prod">
           <template #body="{ data }">
             <span class="wo-prod">
               {{ data.product }}
@@ -560,7 +560,7 @@ onMounted(reload)
             </span>
           </template>
         </Column>
-        <Column header="Progres" style="width: 170px">
+        <Column header="Progres" headerClass="col-prog" bodyClass="col-prog">
           <template #body="{ data }">
             <span class="dprog">
               <ProgressBar :value="woProgressPct(data)" :showValue="false" class="dash-prog" />
@@ -568,12 +568,12 @@ onMounted(reload)
             </span>
           </template>
         </Column>
-        <Column field="stage" header="Status" style="width: 132px">
+        <Column field="stage" header="Status" headerClass="col-status" bodyClass="col-status">
           <template #body="{ data }">
             <Tag :value="stageLabel(data)" :severity="pillSeverity(data)" class="dash-tag" />
           </template>
         </Column>
-        <Column header="Target selesai" style="width: 128px" styleClass="col-target">
+        <Column header="Target selesai" headerClass="col-target" bodyClass="col-target">
           <template #body="{ data }">
             <span class="dtarget" :class="{ late: overdue(data) }">
               <TriangleAlert v-if="overdue(data)" :size="14" :stroke-width="2" aria-hidden="true" />
@@ -581,7 +581,7 @@ onMounted(reload)
             </span>
           </template>
         </Column>
-        <Column header="Rencana" style="width: 140px" headerStyle="text-align: right" bodyStyle="text-align: right">
+        <Column header="Rencana" headerClass="col-rencana" bodyClass="col-rencana" headerStyle="text-align: right" bodyStyle="text-align: right">
           <template #body="{ data }">
             <span class="wo-qty">
               <span class="qmain">{{ woQtyText(data.plannedStockQty, data).main }}</span>
@@ -589,7 +589,7 @@ onMounted(reload)
             </span>
           </template>
         </Column>
-        <Column header="Hasil" style="width: 140px" headerStyle="text-align: right" bodyStyle="text-align: right">
+        <Column header="Hasil" headerClass="col-hasil" bodyClass="col-hasil" headerStyle="text-align: right" bodyStyle="text-align: right">
           <template #body="{ data }">
             <span class="wo-qty">
               <span class="qmain">{{ woQtyText(data.producedStockQty, data).main }}</span>

@@ -2548,7 +2548,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 
 /* tabel WO hari ini (DataTable): dipipihkan ke bahasa visual app */
 .dash-table .p-datatable-table-container { overflow-x: auto; }
-.dash-table .p-datatable-table { min-width: 680px; }
+.dash-table .p-datatable-table { min-width: 680px; table-layout: fixed; } /* proporsi kolom dipatuhi persis — bukan tebakan konten */
 .dash-table .p-datatable-thead > tr > th {
   background: transparent;
   border-top: 0;
@@ -2631,6 +2631,15 @@ textarea.input { height: auto; padding: 8px 10px; }
 /* ================= FU78: kartu antrean produksi (tabel WO) ================ */
 .dash-queue { margin-bottom: 14px; overflow: hidden; }
 .dash-queue .dash-table { border-top: 1px solid var(--line); }
+/* proporsi kolom (table-layout fixed): kolom pendek diberi lebar pas —
+   Produk & Progres TANPA lebar berbagi sisa ruang, jadi layar lebar
+   memanjangkan bar progres alih-alih menciptakan lorong kosong di tengah
+   (keluhan user FU78b: "banyak ruang malah mepet-mepet, header mencar") */
+.dash-table .col-wo { width: 180px; overflow: hidden; }
+.dash-table .col-wo .linklike { white-space: nowrap; } /* nomor WO satu baris */
+.dash-table .col-status { width: 130px; }
+.dash-table .col-target { width: 120px; }
+.dash-table .col-rencana, .dash-table .col-hasil { width: 130px; }
 
 /* progress bar kolom Progres: tipis, pill, di samping angka persen */
 .dprog { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -2750,8 +2759,12 @@ textarea.input { height: auto; padding: 8px 10px; }
   .donut-flex { flex-direction: column; align-items: stretch; }
   .donut-wrap { margin: 0 auto 8px; width: 168px; height: 168px; }
   .dchart-box { min-height: 210px; }
-  /* tabel antrean sempit: buang Produk & Target — WO/status/progres/qty cukup */
+  /* tabel antrean sempit: buang Produk & Target — WO/status/progres/qty cukup;
+     WO kembali dua baris & bar progres diberi lebar tetap (Produk yang fleksibel) */
   .dash-table .col-prod, .dash-table .col-target { display: none; }
+  .dash-table .col-wo { width: 120px; }
+  .dash-table .col-wo .linklike { white-space: normal; }
+  .dash-table .col-prog { width: 150px; }
 }
 @media (max-width: 620px) {
   .dash-yield-row { grid-template-columns: 1fr; }
