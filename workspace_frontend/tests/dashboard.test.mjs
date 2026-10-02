@@ -238,3 +238,151 @@ test('presetLabel: label tombol filter — tak dikenal jatuh ke Hari ini', () =>
   assert.equal(presetLabel('tidak_ada'), 'Hari ini')
   assert.equal(presetLabel(undefined), 'Hari ini')
 })
+
+// ============================================================================
+// FU78: KPI, chart, donut, kualitas per-UOM, bahan teratas, aktivitas, tabel
+// ============================================================================
+
+test('periodLabel: harian "2 Okt", bulanan "Okt 2026" — tanpa Date (TZ-safe)', async () => {
+  const { periodLabel } = await import('../src/dashboard.js')
+  assert.equal(periodLabel('2026-10-02', 'harian'), '2 Okt')
+  assert.equal(periodLabel('2026-01-09', 'harian'), '9 Jan')
+  assert.equal(periodLabel('2026-10', 'bulanan'), 'Okt 2026')
+  assert.equal(periodLabel('2026-01', 'bulanan'), 'Jan 2026')
+  assert.equal(periodLabel('', 'harian'), '')
+})
+
+test('chartSeries memetakan daily ke labels/planned/produced (2 desimal)', async () => {
+  const { chartSeries } = await import('../src/dashboard.js')
+  assert.deepEqual(
+    chartSeries({
+      granularity: 'harian',
+      rows: [
+        { period: '2026-10-01', planned: 100.456, produced: 90 },
+        { period: '2026-10-02', planned: 0, produced: 83.333 }
+      ]
+    }),
+    { labels: ['1 Okt', '2 Okt'], planned: [100.46, 0], produced: [90, 83.33] }
+  )
+  assert.deepEqual(chartSeries(null), { labels: [], planned: [], produced: [] })
+  assert.deepEqual(chartSeries({}), { labels: [], planned: [], produced: [] })
+})
+
+test('uomPrimaryText memilih UOM dominan + sisa digabung; kosong jujur "0"', async () => {
+  const { uomPrimaryText } = await import('../src/dashboard.js')
+  assert.deepEqual(
+    uomPrimaryText([{ uom: 'Nos', qty: 310 }, { uom: 'Pack', qty: 110.5 }], 'Pack'),
+    { main: '110,5 Pack', rest: '310 Nos' }
+  )
+  // dominan tak ada di list → jatuh ke entri pertama
+  assert.deepEqual(uomPrimaryText([{ uom: 'Nos', qty: 310 }], 'Pack'), { main: '310 Nos', rest: '' })
+  assert.deepEqual(uomPrimaryText([], 'Pack'), { main: '0', rest: '' })
+  assert.deepEqual(uomPrimaryText(null, null), { main: '0', rest: '' })
+})
+
+test('achievementPct: hasil/rencana pada UOM dominan; rencana 0 → null jujur', async () => {
+  const { achievementPct } = await import('../src/dashboard.js')
+  assert.equal(achievementPct([{ uom: 'Pack', qty: 100 }], [{ uom: 'Pack', qty: 83.333 }], 'Pack'), 83.3)
+  assert.equal(achievementPct([{ uom: 'Pack', qty: 0 }], [{ uom: 'Pack', qty: 5 }], 'Pack'), null)
+  assert.equal(achievementPct([], [{ uom: 'Pack', qty: 5 }], 'Pack'), null)
+  assert.equal(achievementPct(null, null, 'Pack'), null)
+  // UOM dominan tak ada di salah satu list → null (jangan mengarang pasangan)
+  assert.equal(achievementPct([{ uom: 'Nos', qty: 5 }], [{ uom: 'Pack', qty: 5 }], 'Pack'), null)
+})
+
+test('deltaPctText: +/− (U+2212)/0; pembanding tak valid → string kosong', async () => {
+  const { deltaPctText } = await import('../src/dashboard.js')
+  assert.equal(deltaPctText(106.4, 100), '+6,4%')
+  assert.equal(deltaPctText(95, 100), '−5%')
+  assert.equal(deltaPctText(100, 100), '0%')
+  assert.equal(deltaPctText(5, 0), '')
+  assert.equal(deltaPctText(10, null), '')
+  assert.equal(deltaPctText(null, 10), '')
+})
+
+test('donutData: segmen 0 dibuang, total = jumlah segmen tampil, warna ada', async () => {
+  const { donutData } = await import('../src/dashboard.js')
+  const { segments, total } = donutData({ persiapan: 2, operasi: 1, selesai_hari_ini: 3 })
+  assert.equal(total, 6)
+  assert.deepEqual(segments.map((s) => s.key), ['persiapan', 'operasi', 'selesai_hari_ini'])
+  assert.deepEqual(segments.map((s) => s.value), [2, 1, 3])
+  assert.ok(segments.every((s) => /^#[0-9a-f]{6}$/i.test(s.color)))
+  assert.deepEqual(donutData({}), { segments: [], total: 0 })
+})
+
+test('qualityPerUom mengelompokkan per UOM — TIDAK menjumlah lintas UOM', async () => {
+  const { qualityPerUom } = await import('../src/dashboard.js')
+  const out = qualityPerUom([
+    { uom: 'Nos', good: 10, planned: 12 },
+    { uom: 'Pack', good: 5, planned: 6, reject: 1 },
+    { uom: 'Nos', good: 2 }
+  ])
+  // Nos good 12 > Pack 5 → Nos dulu; angka Pack tak pernah bercampur Nos
+  assert.deepEqual(out, [
+    { uom: 'Nos', planned: 12, good: 12, reject: 0, trial: 0, sisa: 0 },
+    { uom: 'Pack', planned: 6, good: 5, reject: 1, trial: 0, sisa: 0 }
+  ])
+  assert.deepEqual(qualityPerUom([]), [])
+  assert.deepEqual(qualityPerUom(null), [])
+})
+
+test('topMaterialRows: tanpa dasar paling atas lalu |variance %|, dibatasi n', async () => {
+  const { topMaterialRows } = await import('../src/dashboard.js')
+  const rows = [
+    { item_code: 'a', variance_pct: 5, consumed: 3 },
+    { item_code: 'b', variance_pct: -20, consumed: 3 },
+    { item_code: 'c', variance_pct: null, consumed: 3 },
+    { item_code: 'd', variance_pct: 2, consumed: 0 } // tak dipakai → dibuang
+  ]
+  assert.deepEqual(topMaterialRows(rows, 2).map((r) => r.item_code), ['c', 'b'])
+  assert.deepEqual(topMaterialRows(null, 3), [])
+})
+
+test('activityText merangkai judul & detail per kind (+N item lain)', async () => {
+  const { activityText } = await import('../src/dashboard.js')
+  assert.deepEqual(
+    activityText({
+      kind: 'manufacture',
+      items: [
+        { item_name: 'Roti Tawar', qty: 120, uom: 'Nos' },
+        { item_name: 'Donat', qty: 2, uom: 'Pack' }
+      ],
+      item_lain: 1
+    }),
+    { title: 'Hasil diposting', detail: 'Roti Tawar 120 Nos, Donat 2 Pack, +1 item lain' }
+  )
+  assert.deepEqual(
+    activityText({ kind: 'transfer', items: [{ item_name: 'Tepung', qty: 50, uom: 'Kg' }], item_lain: 0 }),
+    { title: 'Bahan diserahkan', detail: 'Tepung 50 Kg' }
+  )
+  assert.deepEqual(activityText({ kind: 'manufacture', items: [], item_lain: 0 }),
+    { title: 'Hasil diposting', detail: '' })
+})
+
+test('activityTime memecah ts jadi jam & tanggal tanpa new Date', async () => {
+  const { activityTime } = await import('../src/dashboard.js')
+  assert.deepEqual(activityTime('2026-10-02 10:05:00'), { time: '10:05', date: '2 Okt' })
+  // frappe Time bisa jam 1 digit -> dipad 2 digit
+  assert.deepEqual(activityTime('2026-10-02 9:00:00'), { time: '09:00', date: '2 Okt' })
+  assert.deepEqual(activityTime('2026-01-09 07:30:12.345'), { time: '07:30', date: '9 Jan' })
+  assert.deepEqual(activityTime(''), { time: '', date: '' })
+  assert.deepEqual(activityTime(null), { time: '', date: '' })
+})
+
+test('woProgressPct: produced/qty dibatasi 100; qty tak valid → 0', async () => {
+  const { woProgressPct } = await import('../src/dashboard.js')
+  assert.equal(woProgressPct({ plannedStockQty: 100, producedStockQty: 91 }), 91)
+  assert.equal(woProgressPct({ plannedStockQty: 100, producedStockQty: 120 }), 100)
+  assert.equal(woProgressPct({ plannedStockQty: 0, producedStockQty: 0 }), 0)
+  assert.equal(woProgressPct(null), 0)
+})
+
+test('isOverdue: target lewat & belum selesai; WO selesai tak pernah telat', async () => {
+  const { isOverdue } = await import('../src/dashboard.js')
+  const now = Date.parse('2026-10-02T10:00:00')
+  assert.equal(isOverdue({ plannedEnd: '2026-10-02 09:00:00', stage: 'finish' }, now), true)
+  assert.equal(isOverdue({ plannedEnd: '2026-10-02 11:00:00', stage: 'finish' }, now), false)
+  assert.equal(isOverdue({ plannedEnd: '2026-10-02 09:00:00', stage: 'completed' }, now), false)
+  assert.equal(isOverdue({ plannedEnd: '', stage: 'finish' }, now), false)
+  assert.equal(isOverdue(null, now), false)
+})

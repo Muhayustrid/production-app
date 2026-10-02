@@ -124,6 +124,9 @@ export function mapDetail(d) {
     product: d.production_item_name || d.production_item,
     itemCode: d.production_item,
     plannedDate: (d.planned_start_date || '').slice(0, 10),
+    // FU78 tabel dashboard: jam mulai + target selesai (indikator telat)
+    plannedStartHHMM: hhmm(d.planned_start_date),
+    plannedEnd: d.planned_end_date || '',
     status: d.status,
     stage: STAGE_UI[d.stage] || d.stage,
     // FU46: server memutuskan bolehkah sesi ini mengoreksi Data Adonan

@@ -32,6 +32,8 @@
 import frappe
 from frappe.utils import cint, flt, getdate, today
 
+from production_app.api.production_plan import _conversion_factor
+
 # Ambang `over` (% varian terhadap expected) — keputusan owner via mockup.
 MATERIAL_OVER_PCT = 5.0
 # Batas rentang query (dari..sampai) dalam hari — pelindung beban endpoint.
@@ -254,6 +256,29 @@ def aggregate(
 			}
 		)
 	rows.sort(key=lambda r: _kunci_varian(r["variance_pct"], r["item_code"]))
+
+	# FU78: konversi baris ke Default Inventory UOM item (rantai W21 →
+	# stock_uom, pola dashboard) — dashboard DAN halaman bahan menampilkan
+	# satuan yang sama (keputusan owner FU78). Tanpa faktor valid → baris
+	# TETAP stock UOM (baris tidak pernah dibuang); variance_pct kebal
+	# konversi karena pembilang & penyebut terbagi faktor sama.
+	for row in rows:
+		try:
+			item = frappe.get_cached_doc("Item", row["item_code"])
+		except frappe.DoesNotExistError:
+			continue
+		alternate = item.get("custom_default_inventory_unit_of_measure") or item.stock_uom
+		factor = _conversion_factor(item, alternate)
+		if not factor or alternate == row["uom"]:
+			continue
+		for k in ("planned", "expected", "consumed"):
+			row[k] = round(flt(row[k]) / factor, 3)
+		row["variance"] = round(row["consumed"] - row["expected"], 3)
+		row["uom"] = alternate
+		for w in row["work_orders"]:
+			for k in ("planned", "expected", "consumed"):
+				w[k] = round(flt(w[k]) / factor, 3)
+			w["variance"] = round(w["consumed"] - w["expected"], 3)
 
 	# search & over_only menyaring HASIL agregasi (nilai baris tetap penuh)
 	if search:

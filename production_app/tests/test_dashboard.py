@@ -68,6 +68,12 @@ SHAPE_KEYS = {
 	"product_yield",
 	"attention",
 	"material_usage",
+	# FU78: KPI rencana + chart + delta + aktivitas
+	"planned_qty",
+	"dominant_uom",
+	"daily",
+	"output_prev",
+	"recent_activity",
 }
 STAGE_KEYS = {
 	STAGE_PERSIAPAN,
@@ -1707,3 +1713,218 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(s_kemarin["adonan_terakhir"], 99)
 		self.assertEqual(_summary(company=self.company_a)["adonan_terakhir"], s_hari["adonan_terakhir"])
 
+
+	# ------------------------------------------------- FU78 kunci baru
+
+	def _pack_plan(self, summary):
+		"""Qty planned_qty satu UOM (0 bila tak ada entri) — delta antar-panggil
+		menetralkan residu test sebelumnya (runner tak rollback antar method)."""
+		return next(
+			(e["qty"] for e in summary["planned_qty"] if e["uom"] == self.uom_pack), 0.0
+		)
+
+	def test_54_planned_qty_konversi_dan_paritas_count(self):
+		"""planned_qty (FU78): total rencana WO rentang per satuan display item
+		(faktor 12 → 1000 Pcs = 83,33 Pack) — sumber baris SAMA dengan hitungan
+		wo_planned_today sehingga angka KPI dan sub-teks 'dari N WO' konsisten;
+		WO cancelled tidak masuk keduanya; item tanpa faktor valid di-skip."""
+		sebelum = _summary()
+		wo = self._make_wo(self.bom_pack, 1000, self.fg_pack)
+		wo.submit()
+		s = _summary()
+		self._assert_full_shape(s)
+		self.assertIsInstance(s["planned_qty"], list)
+		# paritas: WO yang sama menaikkan hitungan WO 1 dan planned_qty 1000 Pcs
+		self.assertEqual(s["wo_planned_today"] - sebelum["wo_planned_today"], 1)
+		self.assertAlmostEqual(
+			self._pack_plan(s) - self._pack_plan(sebelum), round(1000 / 12, 6), places=6
+		)
+		# company B tak pernah punya WO fg_pack (BOM fixture hanya company A) —
+		# entry uom_pack pasti absen di sana apa pun residu lintas suite
+		s_b = _summary(company=self.company_b)
+		self.assertFalse(any(e["uom"] == self.uom_pack for e in s_b["planned_qty"]))
+
+	def test_55_dominant_uom_satu_sumber_di_server(self):
+		"""dominant_uom (FU78): hasil terbesar dulu, kosong → rencana terbesar,
+		dua-duanya kosong → None; dihitung SEKALI di server — chart & KPI
+		pencapaian frontend memakai nilai ini, bukan menghitung ulang."""
+		from production_app.api.dashboard import _dominant_uom
+
+		self.assertEqual(
+			_dominant_uom([{"uom": "A", "qty": 5}, {"uom": "B", "qty": 9}], [{"uom": "A", "qty": 50}]),
+			"B",
+		)
+		self.assertEqual(_dominant_uom([], [{"uom": "A", "qty": 50}]), "A")
+		self.assertEqual(_dominant_uom([], []), None)
+		s = _summary()
+		out, plan = s["output_today"], s["planned_qty"]
+		self.assertEqual(
+			s["dominant_uom"],
+			out[0]["uom"] if out else (plan[0]["uom"] if plan else None),
+		)
+
+	def test_56_daily_harian_filter_uom_dominan(self):
+		"""daily (FU78): granularity harian utk rentang ≤31 hari; HANYA item
+		ber-UOM dominan yang masuk KEDUA seri — rencana fg_plain (UOM lain)
+		tereksklusi saat dominan Pack, dan sebaliknya (aturan inti: beda UOM
+		tidak pernah dijumlahkan); period naik & berformat ISO."""
+		def _baris(s):
+			return next((r for r in s["daily"]["rows"] if r["period"] == today()), {})
+
+		sebelum = _summary()
+		wo_pack = self._make_wo(self.bom_pack, 1200, self.fg_pack)  # 1200 Pcs = 100 Pack
+		wo_pack.submit()
+		self._make_wo(self.bom_plain, 50, self.fg_plain)  # 50 Nos — UOM lain
+		self._transfer(wo_pack)
+		self._manufacture(wo_pack, 1200)
+		s = _summary()
+		self.assertEqual(s["daily"]["uom"], s["dominant_uom"])
+		self.assertEqual(s["daily"]["granularity"], "harian")
+		# dominan Pack → rencana +100 (fg_plain dikecualikan), hasil +100;
+		# dominan UOM lain → keduanya 0 (item saya bukan dominan)
+		ekspektasi = {self.uom_pack: (100.0, 100.0)}.get(s["dominant_uom"], (0.0, 0.0))
+		baris, sb = _baris(s), _baris(sebelum)
+		self.assertAlmostEqual(
+			baris.get("planned", 0) - sb.get("planned", 0), ekspektasi[0], places=6
+		)
+		self.assertAlmostEqual(
+			baris.get("produced", 0) - sb.get("produced", 0), ekspektasi[1], places=6
+		)
+		periods = [r["period"] for r in s["daily"]["rows"]]
+		self.assertEqual(periods, sorted(periods))
+
+	def test_57_daily_bulanan_span_panjang(self):
+		"""daily (FU78): rentang > 31 hari (tahun ini) → bucket bulanan dengan
+		period berformat YYYY-MM; UOM tetap dominan milik server."""
+		s = _summary_range(preset="tahun_ini")
+		self.assertEqual(s["daily"]["granularity"], "bulanan")
+		self.assertEqual(s["daily"]["uom"], s["dominant_uom"])
+		self.assertTrue(all(len(r["period"]) == 7 and r["period"][4] == "-" for r in s["daily"]["rows"]))
+
+	def _prev_yest(self, summary):
+		"""Qty output_prev satu UOM kemarin (0 bila tak ada entri)."""
+		return next(
+			(e["qty"] for e in summary["output_prev"] if e["uom"] == self.uom_yest), 0.0
+		)
+
+	def test_58_output_prev_hanya_preset_hari_ini(self):
+		"""output_prev (FU78): dasar chip '+x% vs kemarin' — terisi pada preset
+		hari_ini (window kemarin, konversi display sama dgn output_today);
+		preset lain → [] (tanpa dasar perbandingan, jangan mengarang)."""
+		kemarin = add_days(today(), -1)
+		sebelum = _summary()
+		wo = self._make_wo(self.bom_yest, 100, self.fg_yest, planned=f"{kemarin} 06:00:00")
+		wo.submit()
+		self._transfer(wo, kemarin)
+		self._manufacture(wo, 100, posting_date=kemarin)  # 100 Pcs = 20 UYest
+		s = _summary()
+		self.assertAlmostEqual(self._prev_yest(s) - self._prev_yest(sebelum), 20.0, places=6)
+		self.assertEqual(_summary_range(preset="kemarin")["output_prev"], [])
+
+	def test_59_recent_activity_manufacture_transfer_retur(self):
+		"""recent_activity (FU78): Manufacture = hasil diposting, MTFM = bahan
+		diserahkan; retur (is_return=1) bukan aktivitas; link menunjuk WO;
+		item fg terbawa (data mentah — judul dirangkai frontend); urut waktu
+		menurun."""
+		wo = self._make_wo(self.bom_plain, 10, self.fg_plain)
+		wo.submit()
+		self._transfer(wo)  # 09:00
+		self._manufacture(wo, 10)  # 10:00
+		wo_ret = self._make_wo(self.bom_plain, 5, self.fg_plain)
+		wo_ret.submit()
+		self._transfer(wo_ret)
+		se_ret = self._return_se(wo_ret, self.rm, 1)  # retur → dibuang
+		s = _summary()
+		act = s["recent_activity"]
+		self.assertIsInstance(act, list)
+		self.assertTrue(act)
+		self.assertNotIn(se_ret.name, {e["se"] for e in act})
+		mf = next(e for e in act if e["kind"] == "manufacture" and e.get("wo") == wo.name)
+		self.assertEqual(mf["link"], f"#/wo/{wo.name}")
+		self.assertIn(self.fg_plain, [i["item_code"] for i in mf["items"]])
+		# cap 10 + residu lintas test: event transfer 09:00 milik test ini bisa
+		# tergeser puluhan manufacture 10:00 — kind transfer dibuktikan di
+		# test_60 (SE manual terbaru), di sini cukup jamin kind dikenal
+		self.assertTrue(all(e["kind"] in ("manufacture", "transfer") for e in act))
+		ts = [e["ts"] for e in act]
+		self.assertEqual(ts, sorted(ts, reverse=True))
+
+	def test_60_recent_activity_tanpa_wo_dan_gate_izin(self):
+		"""SE MTFM manual TANPA work_order sah secara native → event tanpa link
+		(link None — frontend jangan render jangkar mati); tanpa izin baca SE
+		(Guest) → recent_activity [] dan material_usage None (degradasi jujur)."""
+		se = frappe.get_doc(
+			{
+				"doctype": "Stock Entry",
+				"stock_entry_type": "Material Transfer for Manufacture",
+				"company": self.company_a,
+				"from_warehouse": self.src_wh,
+				"to_warehouse": self.wip_wh,
+				"items": [
+					{
+						"item_code": self.rm,
+						"qty": 2,
+						"basic_rate": 10,
+						"s_warehouse": self.src_wh,
+						"t_warehouse": self.wip_wh,
+						"uom": self.uom_base,
+						"stock_uom": self.uom_base,
+					}
+				],
+			}
+		)
+		self._pin_posting(se, today(), "11:00:00")
+		se.insert()
+		se.submit()
+		s = _summary()
+		bar = next(e for e in s["recent_activity"] if e["se"] == se.name)
+		# kind transfer terbukti di sini: SE manual jam 11:00 = terbaru, pasti
+		# lolos cap 10 apa pun residunya; tanpa WO → tanpa link (jangkar mati)
+		self.assertEqual(bar["kind"], "transfer")
+		self.assertTrue(bar["ts"].endswith("11:00:00"))
+		self.assertEqual(bar["items"][0]["item_code"], self.rm)
+		self.assertIsNone(bar["link"])
+		self.assertIsNone(bar.get("wo"))
+		try:
+			frappe.set_user("Guest")
+			kosong = _summary()
+			self.assertEqual(kosong["recent_activity"], [])
+			self.assertIsNone(kosong["material_usage"])
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_61_aggregate_konversi_inventory_uom_dan_fallback_stock(self):
+		"""FU78: aggregate() mengonversi baris bahan ke Default Inventory UOM
+		(faktor 10 → angka tampil /10) — terbaca sama dari dashboard dan
+		endpoint #/bahan (satu implementasi); breakdown per WO ikut; bahan
+		tanpa Default Inventory UOM tetap stock UOM (baris tidak dibuang)."""
+		uom_inv = (
+			frappe.get_doc({"doctype": "UOM", "uom_name": f"{PREFIX} UInv {self.suffix}"})
+			.insert()
+			.name
+		)
+		bahan = self._make_item("MUConv", self.uom_mu)
+		item = frappe.get_cached_doc("Item", bahan)
+		item.custom_default_inventory_unit_of_measure = uom_inv
+		item.append("uoms", {"uom": uom_inv, "conversion_factor": 10})
+		item.save()
+		self._receipt(bahan, 300, self.src_wh)
+		bom = self._make_bom(self.mu_fg, material=bahan)
+		wo = self._make_wo(bom, 10, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 10)  # konsumsi rencana 10 sesuai transfer
+		self._consume(wo, {bahan: 2})  # over 2 → varian +20%
+		rows = _mu(dari=today(), sampai=today())["rows"]
+		row = _mu_row(rows, bahan)
+		self.assertIsNotNone(row)
+		self.assertEqual(row["uom"], uom_inv)
+		self.assertAlmostEqual(row["planned"], 1.0, places=6)  # 10 stock / 10
+		self.assertAlmostEqual(row["expected"], 1.0, places=6)
+		self.assertAlmostEqual(row["consumed"], 1.2, places=6)  # 12 stock / 10
+		self.assertAlmostEqual(row["variance"], 0.2, places=6)
+		self.assertAlmostEqual(row["variance_pct"], 20.0, places=6)
+		self.assertAlmostEqual(row["work_orders"][0]["consumed"], 1.2, places=6)
+		row_rm = _mu_row(rows, self.mu_rm)
+		if row_rm:  # fallback: tanpa Default Inventory UOM → tetap stock UOM
+			self.assertEqual(row_rm["uom"], self.uom_mu)

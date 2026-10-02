@@ -232,3 +232,170 @@ export function presetLabel(preset) {
 export function selesaiTileLabel(preset) {
   return preset === 'hari_ini' ? 'Selesai hari ini' : 'Selesai dalam rentang'
 }
+
+// ============================================================================
+// FU78: redesign dashboard — KPI, chart, donut, kualitas per-UOM, bahan
+// teratas, aktivitas, tabel WO. Semua helper murni teruji node; aturan inti:
+// beda UOM TIDAK PERNAH dijumlahkan — satu UOM utama (dominant_uom server)
+// untuk chart & KPI, kualitas dikelompokkan per UOM.
+// ============================================================================
+
+// bulan singkat id-ID utk label kategori chart/timeline — parsing manual dari
+// string ISO (tanpa new Date agar zona waktu browser tidak menggeser hari)
+const BULAN_SINGKAT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+
+// "2026-10-02" + 'harian' → "2 Okt"; "2026-10" + 'bulanan' → "Okt 2026";
+// tak dikenal → apa adanya
+export function periodLabel(period, granularity) {
+  if (!period) return ''
+  const bagian = String(period).split('-')
+  const bl = BULAN_SINGKAT[Number(bagian[1]) - 1]
+  if (!bl) return String(period)
+  if (granularity === 'bulanan') return `${bl} ${bagian[0]}`
+  return `${Number(bagian[2])} ${bl}`
+}
+
+const bulatkan = (n, desimal) => {
+  const f = 10 ** desimal
+  return Math.round((Number(n) || 0) * f) / f
+}
+
+// daily FU78 → {labels, planned, produced} untuk Chart bar (2 desimal)
+export function chartSeries(daily) {
+  const rows = Array.isArray(daily?.rows) ? daily.rows : []
+  return {
+    labels: rows.map((r) => periodLabel(r?.period, daily?.granularity)),
+    planned: rows.map((r) => bulatkan(r?.planned, 2)),
+    produced: rows.map((r) => bulatkan(r?.produced, 2))
+  }
+}
+
+// daftar {uom, qty} → angka UOM utama (dominant / entri pertama) + sisa
+// digabung " · " — panel yang butuh SATU angka besar tanpa menyembunyikan
+// UOM lain (tidak pernah dijumlah)
+export function uomPrimaryText(list, dominant) {
+  const arr = Array.isArray(list) ? list : []
+  if (!arr.length) return { main: '0', rest: '' }
+  const pri = arr.find((e) => e.uom === dominant) || arr[0]
+  const rest = arr
+    .filter((e) => e !== pri)
+    .map((e) => `${fmtId(e.qty)} ${e.uom}`)
+    .join(' · ')
+  return { main: `${fmtId(pri.qty)} ${pri.uom}`, rest }
+}
+
+// % pencapaian = hasil/rencana pada UOM dominan (server satu sumber);
+// rencana 0 / pasangan UOM tak lengkap → null (pemanggil menampilkan "-")
+export function achievementPct(plannedQty, outputToday, dominant) {
+  if (!dominant) return null
+  const p = (Array.isArray(plannedQty) ? plannedQty : []).find((e) => e.uom === dominant)
+  const o = (Array.isArray(outputToday) ? outputToday : []).find((e) => e.uom === dominant)
+  if (!p || !o || !(Number(p.qty) > 0)) return null
+  return bulatkan((Number(o.qty) / Number(p.qty)) * 100, 1)
+}
+
+// chip delta "+6,4%" / "−5%" (minus U+2212, pola variancePctText); prev/cur
+// absen (null/undefined) atau prev 0 → '' (tanpa dasar perbandingan).
+// NB: Number(null) === 0 — null dicek eksplisit sebelum Number.
+export function deltaPctText(cur, prev) {
+  if (cur == null || prev == null) return ''
+  const c = Number(cur)
+  const p = Number(prev)
+  if (!Number.isFinite(c) || !Number.isFinite(p) || !(p > 0)) return ''
+  const pct = bulatkan(((c - p) / p) * 100, 1)
+  return pct > 0 ? `+${fmtId(pct)}%` : pct < 0 ? `−${fmtId(Math.abs(pct))}%` : '0%'
+}
+
+// warna segmen tahap donut — palet app yang sudah ada (brand family + ok/
+// warn/sisa), kontras di atas permukaan putih kartu
+export const STAGE_COLORS = {
+  persiapan: '#9bbdd8',
+  material: '#b8860b',
+  operasi: '#3368a0',
+  pre_packing: '#66a3bf',
+  post_packing: '#7e8c99',
+  finish: '#2a5585',
+  selesai_hari_ini: '#2f5940'
+}
+
+// stages papan → {segments, total} utk donut chart.js; segmen 0 dibuang
+// (donut tetap benar), total = jumlah segmen yang tampil (pusat kartu)
+export function donutData(stages) {
+  const segments = STAGES.map((s) => ({
+    key: s.key,
+    label: s.label,
+    value: Number(stages?.[s.key]) || 0,
+    color: STAGE_COLORS[s.key]
+  })).filter((s) => s.value > 0)
+  return { segments, total: segments.reduce((t, s) => t + s.value, 0) }
+}
+
+// baris product_yield dikelompokkan per UOM — TIDAK pernah menjumlah lintas
+// UOM (aturan inti FU78). Urut total good menurun; grup pertama = utama kartu
+// kualitas, sisanya diringkas kecil.
+export function qualityPerUom(rows) {
+  const by = new Map()
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const k = r?.uom || ''
+    const acc = by.get(k) || { uom: k, planned: 0, good: 0, reject: 0, trial: 0, sisa: 0 }
+    for (const f of ['planned', 'good', 'reject', 'trial', 'sisa']) acc[f] += Number(r?.[f]) || 0
+    by.set(k, acc)
+  }
+  return [...by.values()].sort((a, b) => b.good - a.good)
+}
+
+// panel bahan: ±n baris paling menonjol — tanpa dasar (pct null) paling atas,
+// lalu |variance_pct| menurun (persen = dimensi netral lintas UOM); bahan
+// yang belum terpakai (consumed 0) tidak menempati baris
+export function topMaterialRows(rows, n = 6) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => (Number(r?.consumed) || 0) > 1e-9)
+    .sort((a, b) => {
+      const ka = a?.variance_pct == null ? -1 : 0
+      const kb = b?.variance_pct == null ? -1 : 0
+      if (ka !== kb) return ka - kb
+      return Math.abs(Number(b?.variance_pct) || 0) - Math.abs(Number(a?.variance_pct) || 0)
+    })
+    .slice(0, Number(n) || n)
+}
+
+// event recent_activity → {title, detail}: "Nama 12 Nos, Garam 2 Kg" (server
+// sudah membatasi 2 item + penghitung sisanya)
+function ringkasItem(event) {
+  const items = Array.isArray(event?.items) ? event.items : []
+  const parts = items.map((i) => `${i.item_name || i.item_code} ${fmtId(i.qty)} ${i.uom || ''}`.trim())
+  if (event?.item_lain) parts.push(`+${fmtId(event.item_lain)} item lain`)
+  return parts.join(', ')
+}
+
+export function activityText(event) {
+  if (event?.kind === 'transfer') return { title: 'Bahan diserahkan', detail: ringkasItem(event) }
+  if (event?.kind === 'manufacture') return { title: 'Hasil diposting', detail: ringkasItem(event) }
+  return { title: event?.kind ? String(event.kind) : '', detail: ringkasItem(event) }
+}
+
+// ts "2026-10-02 10:05:00" → {time:"10:05", date:"2 Okt"} — manual, TZ-safe.
+// NB: frappe Time bisa "9:00:00" (jam 1 digit) → dipad ke "09:00"
+export function activityTime(ts) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})/.exec(String(ts || ''))
+  if (!m) return { time: '', date: '' }
+  const bl = BULAN_SINGKAT[Number(m[2]) - 1] || ''
+  return { time: `${m[4].padStart(2, '0')}:${m[5]}`, date: bl ? `${Number(m[3])} ${bl}` : '' }
+}
+
+// % progres WO utk kolom tabel = produced/qty (1 desimal, dibatasi 100);
+// qty tak valid/0 → 0 (bar tanpa dasar tetap tampil kosong, bukan mengarang)
+export function woProgressPct(row) {
+  const qty = Number(row?.plannedStockQty)
+  const done = Number(row?.producedStockQty)
+  if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(done)) return 0
+  return Math.min(100, bulatkan((done / qty) * 100, 1))
+}
+
+// target selesai telat: planned_end lewat & WO belum selesai. nowMs dari
+// pemanggil agar helper murni dan teruji.
+export function isOverdue(row, nowMs) {
+  if (row?.stage === 'completed') return false
+  const end = Date.parse(String(row?.plannedEnd || '').replace(' ', 'T'))
+  return Number.isFinite(end) && end < nowMs
+}

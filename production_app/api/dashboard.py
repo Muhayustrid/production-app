@@ -30,6 +30,15 @@
 # ikut rentang (label dinamis di frontend). Nama kunci lama dipertahankan
 # (wo_planned_today/output_today/adonan_terakhir) — bermakna "dalam
 # rentang terpilih", bukan hanya hari ini.
+#
+# FU78 menambah kunci KPI & grafik: planned_qty (total rencana per satuan
+# display — satu sumber baris dengan hitungan wo_planned_today agar KPI dan
+# sub-teks "dari N WO" berparitas), dominant_uom (satu UOM utama untuk chart
+# & KPI pencapaian, dihitung SEKALI di server), daily (seri rencana vs hasil
+# per hari/bulan — HANYA item ber-UOM dominan di KEDUA seri, beda UOM tidak
+# pernah dijumlahkan), output_prev (window sebelumnya, hanya preset hari
+# ini — dasar chip "+x% vs kemarin") dan recent_activity (Manufacture/MTFM
+# terbaru dalam rentang, retur dibuang).
 
 from datetime import timedelta
 
@@ -90,6 +99,8 @@ DASHBOARD_PRESETS = (
 	PRESET_TAHUN_INI,
 )
 DASHBOARD_MAX_DAYS = 366
+# FU78: batas granularitas harian kartu grafik — lebih panjang → bucket bulanan.
+DAILY_MAX_DAYS = 31
 
 # Kolom baris WO papan — satu sumber untuk _stages dan attention FU73
 # (custom field lewat get_list + .get(), bukan db.get_value berdaftar kolom
@@ -116,6 +127,7 @@ RANGE_WO_FIELDS = (
 	"production_item",
 	"item_name",
 	"qty",
+	"planned_start_date",
 	"custom_adonan_ke",
 	"custom_postpacking_confirmed",
 	"custom_good_qty_postpacking",
@@ -182,6 +194,11 @@ def dashboard_summary(company=None, preset=None, dari=None, sampai=None):
 	handover = _handover_mrs(company)
 	form_orders = _form_order_mrs(company)
 	planned, adonan = _wo_today(range_rows)
+	# FU78: satu rantai konversi display untuk output & rencana; UOM utama
+	# (chart + KPI pencapaian) dihitung sekali di sini.
+	output = _output_range(dari, sampai, company)
+	planned_qty = _planned_qty(range_rows)
+	dominant = _dominant_uom(output, planned_qty)
 	# FU74: agregat pemakaian bahan per rentang. Tanpa izin baca WO/SE →
 	# None: frontend menyembunyikan panelnya (degradasi jujur, pola
 	# FU65/FU73), endpoint tetap hidup — PermissionError sengaja TIDAK
@@ -200,7 +217,17 @@ def dashboard_summary(company=None, preset=None, dari=None, sampai=None):
 		"preset": preset,
 		"companies": _companies(),
 		"wo_planned_today": planned,
-		"output_today": _output_range(dari, sampai, company),
+		"output_today": output,
+		# FU78: dasar chip "+x% vs kemarin" — hanya hari ini yang punya window
+		# pembanding alami; preset lain kosong (jangan mengarang perbandingan)
+		"output_prev": (
+			_output_range(add_days(getdate(dari), -1), add_days(getdate(dari), -1), company)
+			if preset == PRESET_HARI_INI
+			else []
+		),
+		"planned_qty": planned_qty,
+		"dominant_uom": dominant,
+		"daily": _daily(dari, sampai, company, dominant, range_rows),
 		"adonan_terakhir": adonan,
 		"stages": _stages(dari, sampai, company, rows),
 		"handover_menunggu": len(handover),
@@ -208,6 +235,7 @@ def dashboard_summary(company=None, preset=None, dari=None, sampai=None):
 		"product_yield": _product_yield(range_rows),
 		"attention": _attention(rows, range_rows, handover, form_orders),
 		"material_usage": material_usage,
+		"recent_activity": _recent_activity(dari, sampai, company),
 	}
 
 
@@ -362,6 +390,15 @@ def _finished_range_rows(dari, sampai, company):
 		return []
 
 
+def _item_display_uom(item):
+	"""(satuan display, faktor) satu item: rantai item-level W21 → stock_uom.
+	faktor None bila konversi tidak valid — pemanggil memutuskan skip atau
+	fallback stock (jangan mengarang faktor). Dipakai semua agregat FU78 agar
+	konversi tidak bisa berbeda antar-panel."""
+	alternate = item.get("custom_default_inventory_unit_of_measure") or item.stock_uom
+	return alternate, _conversion_factor(item, alternate)
+
+
 def _output_range(dari, sampai, company):
 	"""Total hasil Manufacture dalam rentang per satuan tampil gudang. Qty SED
 	dijumlah per item dalam stock UOM (transfer_qty = qty stock), lalu tiap
@@ -404,10 +441,7 @@ def _output_range(dari, sampai, company):
 			item = frappe.get_cached_doc("Item", code)
 		except frappe.DoesNotExistError:
 			continue  # SE riwayat memegang item terhapus — skip baris itu saja
-		alternate = (
-			item.get("custom_default_inventory_unit_of_measure") or item.stock_uom
-		)
-		factor = _conversion_factor(item, alternate)
+		alternate, factor = _item_display_uom(item)
 		if not factor:
 			continue  # tanpa konversi valid: skip, jangan mengarang faktor
 		by_uom[alternate] = by_uom.get(alternate, 0.0) + qty / factor
@@ -416,6 +450,206 @@ def _output_range(dari, sampai, company):
 		key=lambda e: e["qty"],
 		reverse=True,
 	)
+
+
+def _planned_qty(range_rows):
+	"""Total rencana WO dalam rentang per satuan display item (FU78) — sumber
+	baris SAMA dengan hitungan wo_planned_today (`range_rows`) sehingga angka
+	KPI dan sub-teks "dari N WO" berparitas. Konversi & skip mengikuti pola
+	_output_range; item beda UOM tidak pernah dijumlahkan."""
+	totals = {}
+	for row in range_rows:
+		totals[row.production_item] = totals.get(row.production_item, 0.0) + flt(row.qty)
+	by_uom = {}
+	for code, qty in totals.items():
+		try:
+			item = frappe.get_cached_doc("Item", code)
+		except frappe.DoesNotExistError:
+			continue
+		alternate, factor = _item_display_uom(item)
+		if not factor:
+			continue
+		by_uom[alternate] = by_uom.get(alternate, 0.0) + qty / factor
+	return sorted(
+		({"uom": uom, "qty": qty} for uom, qty in by_uom.items()),
+		key=lambda e: e["qty"],
+		reverse=True,
+	)
+
+
+def _dominant_uom(output, planned):
+	"""Satu UOM utama untuk kartu grafik & KPI pencapaian (FU78): total hasil
+	terbesar dulu; tanpa hasil → rencana terbesar; dua-duanya kosong → None.
+	Dihitung SEKALI di server — chart, KPI, dan caption memakai nilai yang
+	sama agar tidak bisa berbeda. max() + tie-break nama: tidak bergantung
+	urutan list dan deterministik saat seri."""
+	if output:
+		return max(output, key=lambda e: (flt(e["qty"]), e["uom"]))["uom"]
+	if planned:
+		return max(planned, key=lambda e: (flt(e["qty"]), e["uom"]))["uom"]
+	return None
+
+
+def _daily(dari, sampai, company, dominant, range_rows):
+	"""Seri rencana vs hasil untuk kartu grafik (FU78). Granularitas harian
+	(span <= DAILY_MAX_DAYS) atau bulanan; period ISO "YYYY-MM-DD" / "YYYY-MM".
+	HANYA item yang satuan display-nya == `dominant` yang masuk KEDUA seri —
+	beda UOM tidak pernah dijumlahkan (caption frontend menyebut UOM dan
+	pengecualian item UOM lain). Basis tanggal sengaja berbeda: hasil =
+	posting_date SE Manufacture, rencana = planned_start_date WO — bar hasil
+	tanpa rencana / pencapaian >100% dimungkinkan; di-caption, bukan
+	dikoreksi (penyelarasan = mesin alokasi WO-per-hari, tidak sebanding)."""
+	if not dominant:
+		return {"uom": None, "granularity": "harian", "rows": []}
+	bulanan = (getdate(sampai) - getdate(dari)).days > DAILY_MAX_DAYS
+
+	def bucket(d):
+		return str(d)[:7] if bulanan else str(d)
+
+	def display_uom(code):
+		try:
+			item = frappe.get_cached_doc("Item", code)
+		except frappe.DoesNotExistError:
+			return None, None
+		return _item_display_uom(item)
+
+	# ---- hasil: baris fg SE Manufacture per tanggal posting (pola _output_range)
+	se_filters = [
+		["purpose", "=", "Manufacture"],
+		["docstatus", "=", 1],
+		["posting_date", ">=", dari],
+		["posting_date", "<=", sampai],
+	]
+	if company:
+		se_filters.append(["company", "=", company])
+	try:
+		ses = frappe.get_list(
+			"Stock Entry", filters=se_filters, fields=["name", "posting_date"], limit_page_length=0
+		)
+	except frappe.PermissionError:
+		ses = []
+	produced = {}
+	if ses:
+		se_date = {s.name: s.posting_date for s in ses}
+		totals = {}
+		for r in frappe.get_all(
+			"Stock Entry Detail",
+			filters={"parent": ("in", [s.name for s in ses]), "is_finished_item": 1},
+			fields=["parent", "item_code", "transfer_qty", "qty"],
+		):
+			key = (r.parent, r.item_code)
+			totals[key] = totals.get(key, 0.0) + flt(r.transfer_qty or r.qty)
+		for (se_name, code), qty in totals.items():
+			alternate, factor = display_uom(code)
+			if not factor or alternate != dominant:
+				continue  # UOM lain tidak masuk seri (jangan pernah dijumlah)
+			k = bucket(se_date[se_name])
+			produced[k] = produced.get(k, 0.0) + qty / factor
+
+	# ---- rencana: qty WO per tanggal mulai, item ber-UOM dominan saja
+	planned = {}
+	uom_by_item = {}
+	for row in range_rows:
+		if row.production_item not in uom_by_item:
+			uom_by_item[row.production_item] = display_uom(row.production_item)
+		alternate, factor = uom_by_item[row.production_item]
+		if not factor or alternate != dominant:
+			continue
+		k = bucket(getdate(row.planned_start_date))
+		planned[k] = planned.get(k, 0.0) + flt(row.qty) / factor
+
+	periods = sorted(set(planned) | set(produced))
+	return {
+		"uom": dominant,
+		"granularity": "bulanan" if bulanan else "harian",
+		"rows": [
+			{"period": p, "planned": flt(planned.get(p)), "produced": flt(produced.get(p))}
+			for p in periods
+		],
+	}
+
+
+def _recent_activity(dari, sampai, company, limit=10):
+	"""Aktivitas terbaru dalam rentang (FU78): SE submitted yang terikat
+	pekerjaan — purpose Manufacture (hasil diposting; baris fg-nya) dan
+	Material Transfer for Manufacture (bahan diserahkan; baris keluar-nya).
+	Retur (is_return=1) dibuang — itu pembalikan transfer, bukan kejadian
+	serah terima (semantik FU74). work_order bisa kosong (SE manual sah
+	secara native) → link None; frontend tidak boleh merender jangkar mati.
+	Data mentah terstruktur; judul dirangkai frontend (pola attention FU73).
+	Tanpa izin baca SE → [] (pola _finished_range_rows)."""
+	se_filters = [
+		["purpose", "in", ["Manufacture", "Material Transfer for Manufacture"]],
+		["docstatus", "=", 1],
+		["posting_date", ">=", dari],
+		["posting_date", "<=", sampai],
+		["is_return", "=", 0],
+	]
+	if company:
+		se_filters.append(["company", "=", company])
+	try:
+		ses = frappe.get_list(
+			"Stock Entry",
+			filters=se_filters,
+			fields=["name", "purpose", "posting_date", "posting_time", "work_order"],
+			order_by="posting_date desc, posting_time desc, creation desc",
+			limit_page_length=limit,
+		)
+	except frappe.PermissionError:
+		return []
+	if not ses:
+		return []
+
+	def display_uom(code):
+		try:
+			item = frappe.get_cached_doc("Item", code)
+		except frappe.DoesNotExistError:
+			return None, None
+		return _item_display_uom(item)
+
+	# baris SED per event: fg utk Manufacture, baris keluar utk MTFM
+	details = {}  # se -> {item_code: (qty, item_name)}
+	for purpose, baris_fg in (("Manufacture", True), ("Material Transfer for Manufacture", False)):
+		parents = [s.name for s in ses if s.purpose == purpose]
+		if not parents:
+			continue
+		extra = {"is_finished_item": 1} if baris_fg else {"s_warehouse": ("is", "set")}
+		for d in frappe.get_all(
+			"Stock Entry Detail",
+			filters={"parent": ("in", parents), **extra},
+			fields=["parent", "item_code", "item_name", "transfer_qty", "qty"],
+		):
+			per = details.setdefault(d.parent, {})
+			qty, nama = per.get(d.item_code, (0.0, None))
+			per[d.item_code] = (qty + flt(d.transfer_qty or d.qty), d.item_name or nama)
+
+	out = []
+	for s in ses:
+		items, others = [], 0
+		for code, (qty, nama) in sorted(
+			details.get(s.name, {}).items(), key=lambda kv: kv[1][0], reverse=True
+		):
+			if len(items) >= 2:
+				others += 1
+				continue
+			alternate, factor = display_uom(code)
+			if not factor:
+				continue  # tanpa konversi valid: baris item ini dilewati
+			items.append(
+				{"item_code": code, "item_name": nama or code, "qty": round(qty / factor, 3), "uom": alternate}
+			)
+		out.append(
+			{
+				"se": s.name,
+				"kind": "manufacture" if s.purpose == "Manufacture" else "transfer",
+				"ts": f"{s.posting_date} {s.posting_time or '00:00:00'}",
+				"wo": s.work_order or None,
+				"link": f"#/wo/{s.work_order}" if s.work_order else None,
+				"items": items,
+				"item_lain": others,
+			}
+		)
+	return out
 
 
 def _mr_menunggu_rows(filters, butuh_se=False):
@@ -525,8 +759,7 @@ def _product_yield(today_rows):
 			item = frappe.get_cached_doc("Item", row.production_item)
 		except frappe.DoesNotExistError:
 			continue  # WO memegang item master terhapus — skip baris WO itu saja
-		alternate = item.get("custom_default_inventory_unit_of_measure") or item.stock_uom
-		factor = _conversion_factor(item, alternate)
+		alternate, factor = _item_display_uom(item)
 		if not factor:
 			continue  # tanpa konversi valid: skip, jangan mengarang faktor
 		acc = per_item.setdefault(
