@@ -14,11 +14,10 @@ import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
 import Drawer from 'primevue/drawer'
 import Paginator from 'primevue/paginator'
-import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import {
-  Boxes, CheckCircle2, ChevronRight, PackageX, RotateCw, Search, SearchX, TriangleAlert
+  Boxes, CheckCircle2, ChevronRight, Filter, PackageX, Search, SearchX, TriangleAlert
 } from 'lucide-vue-next'
 import { stockAvailabilityState, loadStockAvailability } from './store.js'
 import { fmtId, fmtStampShort } from './format.js'
@@ -28,14 +27,18 @@ const q = ref('')
 const grup = ref('ALL')
 const status = ref('ALL')
 const gudang = ref('')
+// FU86: pola filter WorkOrderList — satu tombol Filter ber-badge + popover;
+// gudang/grup/status masuk panel, pencarian tetap di toolbar. "Basis" =
+// kondisi awal halaman (gudang pertama dari data) untuk hitungan badge &
+// "Hapus semua filter" (konvensi FU75: satu aksi bersih)
+const basis = ref({ gudang: '' })
+const filterOpen = ref(false)
 const diperbarui = ref('')
 
 const data = computed(() => stockAvailabilityState.data)
 const items = computed(() => data.value?.items || [])
 const summary = computed(() => data.value?.summary || { total: 0, aman: 0, menipis: 0, habis: 0 })
-const warehouseOptions = computed(() =>
-  (data.value?.warehouses || []).map((w) => ({ label: w, value: w }))
-)
+const gudangOptions = computed(() => data.value?.warehouses || [])
 const grupOptions = computed(() =>
   [...new Set(items.value.map((r) => r.item_group))].sort()
 )
@@ -57,18 +60,29 @@ const terfilter = computed(() => {
 
 const PAGE = 10
 const first = ref(0)
-watch([q, grup, status], () => { first.value = 0 })
+watch([q, grup, status, gudang], () => { first.value = 0 })
 const halaman = computed(() => terfilter.value.slice(first.value, first.value + PAGE))
 
-function resetFilter() {
+function clearFilters() {
   q.value = ''
   grup.value = 'ALL'
   status.value = 'ALL'
+  gudang.value = basis.value.gudang
+  filterOpen.value = false
 }
+
+const activeFilters = computed(() =>
+  (grup.value !== 'ALL') +
+  (status.value !== 'ALL') +
+  (gudang.value !== basis.value.gudang)
+)
 
 async function reload() {
   await loadStockAvailability()
-  if (!gudang.value && data.value?.warehouses?.length) gudang.value = data.value.warehouses[0]
+  if (!gudang.value && data.value?.warehouses?.length) {
+    gudang.value = data.value.warehouses[0]
+    basis.value = { gudang: gudang.value }
+  }
   diperbarui.value = new Date().toISOString()
 }
 onMounted(reload)
@@ -95,24 +109,12 @@ const STATUS_SEVERITY = { aman: 'success', menipis: 'warn', habis: 'danger' }
     </div>
     <div class="ph-right">
       <span v-if="diperbarui" class="ph-date">Diperbarui {{ fmtStampShort(diperbarui) }}</span>
-      <Select
-        v-if="warehouseOptions.length"
-        v-model="gudang"
-        :options="warehouseOptions"
-        optionLabel="label"
-        optionValue="value"
-        inputId="sa-gudang"
-        aria-label="Pilih gudang"
-        class="ph-pselect"
-      />
-      <button class="btn" type="button" aria-label="Muat ulang data" @click="reload">
-        <RotateCw :size="14" :stroke-width="2" />
-        <span class="btext">Refresh</span>
-      </button>
     </div>
   </div>
 
-  <div class="toolbar sa-toolbar">
+  <!-- FU86: filter satu tombol gaya WorkOrderList/Stock Entry — gudang, grup,
+       dan status di popover; pencarian tetap di toolbar -->
+  <div class="toolbar">
     <div class="searchbox">
       <Search :size="15" :stroke-width="2" class="search-ico" />
       <input
@@ -123,17 +125,41 @@ const STATUS_SEVERITY = { aman: 'success', menipis: 'warn', habis: 'danger' }
         aria-label="Cari item code atau nama"
       />
     </div>
-    <select v-model="grup" class="select sa-select" aria-label="Filter item group">
-      <option value="ALL">Semua Item Group</option>
-      <option v-for="g in grupOptions" :key="g" :value="g">{{ g }}</option>
-    </select>
-    <select v-model="status" class="select sa-select" aria-label="Filter status stock">
-      <option value="ALL">Semua Status</option>
-      <option value="aman">Aman</option>
-      <option value="menipis">Menipis</option>
-      <option value="habis">Habis</option>
-    </select>
-    <button class="btn" type="button" aria-label="Reset filter" @click="resetFilter">Reset Filter</button>
+    <div class="filterwrap">
+      <button class="btn filterbtn" :class="{ active: activeFilters }" aria-label="Filter" @click="filterOpen = !filterOpen">
+        <Filter :size="14" :stroke-width="2" />
+        <span class="btext">Filter</span>
+        <span v-if="activeFilters" class="filtercount">{{ activeFilters }}</span>
+      </button>
+      <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
+      <Transition name="pop">
+        <div v-if="filterOpen" class="filterpanel">
+          <div class="ffield">
+            <label>Gudang</label>
+            <select v-model="gudang" class="select" aria-label="Filter gudang">
+              <option v-for="g in gudangOptions" :key="g" :value="g">{{ g }}</option>
+            </select>
+          </div>
+          <div class="ffield">
+            <label>Item Group</label>
+            <select v-model="grup" class="select" aria-label="Filter item group">
+              <option value="ALL">Semua Item Group</option>
+              <option v-for="g in grupOptions" :key="g" :value="g">{{ g }}</option>
+            </select>
+          </div>
+          <div class="ffield">
+            <label>Stock Status</label>
+            <select v-model="status" class="select" aria-label="Filter status stock">
+              <option value="ALL">Semua Status</option>
+              <option value="aman">Aman</option>
+              <option value="menipis">Menipis</option>
+              <option value="habis">Habis</option>
+            </select>
+          </div>
+          <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
+        </div>
+      </Transition>
+    </div>
   </div>
 
   <div v-if="stockAvailabilityState.error" class="callout bad dash-error" role="alert">

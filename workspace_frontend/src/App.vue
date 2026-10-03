@@ -14,7 +14,7 @@ import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
 import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
 import { activeTotal } from './dashboard.js'
-import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, MoreHorizontal, PackageSearch, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
+import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, MoreHorizontal, PackageSearch, RotateCw, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
 
 // router hash minimal: '#/' (dashboard, FU72), '#/wo' (daftar), '#/wo/<id>'
 // (work order), '#/handover' (stock entry), '#/penggunaan-bahan' (FU74; FU82
@@ -208,6 +208,12 @@ function closeError() {
 function onNavClick() {
   navOpen.value = false
 }
+
+// FU86: refresh global dekat profil — muat ulang seluruh SPA (hash terjaga,
+// semua data halaman aktif diambil ulang); ikon saja tanpa tulisan
+function muatUlangHalaman() {
+  window.location.reload()
+}
 </script>
 
 <template>
@@ -231,6 +237,9 @@ function onNavClick() {
         </div>
       </div>
       <div class="topuser">
+        <button class="topbtn" type="button" aria-label="Muat ulang halaman" title="Muat ulang" @click="muatUlangHalaman">
+          <RotateCw :size="15" :stroke-width="2" />
+        </button>
         <button
           type="button"
           class="userbtn"
