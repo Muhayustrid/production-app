@@ -638,92 +638,6 @@ test('materialUsageXlsxFilename: ISO ber-tanggal; produk jadi slug; satu hari ta
   assert.equal(materialUsageXlsxFilename('', ''), 'penggunaan-bahan.xlsx')
 })
 
-// ---- FU83: ketersediaan stock — status dari angka, mock dataset 128 item ----
-test('stockStatus: habis ≤ 0, menipis di bawah minimum, sisanya aman', async () => {
-  const { stockStatus } = await import('../src/dashboard.js')
-  assert.equal(stockStatus(105, 100), 'aman')
-  assert.equal(stockStatus(100, 100), 'aman') // pas di ambang masih aman
-  assert.equal(stockStatus(38, 50), 'menipis')
-  assert.equal(stockStatus(0, 25), 'habis')
-  assert.equal(stockStatus(-5, 10), 'habis') // retur lebih dari stok
-  assert.equal(stockStatus(0, 0), 'habis') // stok nol tetap habis walau tanpa ambang
-  assert.equal(stockStatus(10, null), 'aman') // item tanpa minimum
-  assert.equal(stockStatus(0, null), 'habis')
-  assert.equal(stockStatus(null, 10), 'habis') // data Bin belum ada
-})
-
-test('stockMockDataset: 128 item, distribusi kartu 96/21/11, ringkasan = hitungan item', async () => {
-  const { stockMockDataset } = await import('../src/dashboard.js')
-  const d = stockMockDataset()
-  assert.equal(d.items.length, 128)
-  assert.equal(d.warehouse, 'Gudang Produksi')
-  const hitung = { aman: 0, menipis: 0, habis: 0 }
-  for (const it of d.items) hitung[it.status]++
-  assert.deepEqual(hitung, { aman: 96, menipis: 21, habis: 11 })
-  assert.deepEqual(d.summary, { total: 128, aman: 96, menipis: 21, habis: 11 })
-})
-
-test('stockMockDataset: 8 item kurasi persis spesifikasi + invarian semua item', async () => {
-  const { stockMockDataset } = await import('../src/dashboard.js')
-  const d = stockMockDataset()
-  const byCode = Object.fromEntries(d.items.map((it) => [it.item_code, it]))
-  // angka persis prompt (status MENURUN dari angka — Mentega 34<40 = menipis)
-  const kurasi = [
-    ['RM-FLOUR-001', 'Tepung Terigu', 125, 20, 100, 'aman', 4],
-    ['RM-SUGAR-002', 'Gula Pasir', 74, 36, 50, 'menipis', 2],
-    ['RM-BUTTER-003', 'Mentega Tawar', 46, 12, 40, 'menipis', 5],
-    ['RM-COCOA-004', 'Bubuk Kakao', 18, 18, 25, 'habis', 0],
-    ['RM-CHEESE-005', 'Keju Cheddar', 32, 10, 25, 'menipis', 3],
-    ['RM-YEAST-006', 'Ragi Instan', 22, 4, 15, 'aman', 8]
-  ]
-  for (const [kode, nama, stok, reserved, min, status, cap] of kurasi) {
-    const it = byCode[kode]
-    assert.ok(it, `${kode} ada`)
-    assert.equal(it.item_name, nama)
-    assert.equal(it.actual_qty, stok, `${kode} stok`)
-    assert.equal(it.reserved_qty, reserved, `${kode} reserved`)
-    assert.equal(it.min_stock, min, `${kode} minimum`)
-    assert.equal(it.status, status, `${kode} status`)
-    assert.equal(it.capacity_batch, cap, `${kode} kapasitas`)
-    assert.equal(it.warehouse, 'Gudang Produksi')
-  }
-  // invarian seluruh 128 item: available = stok − reserved, kode unik,
-  // kapasitas = maks detail resep, rantai saldo movement berakhir di stok kini
-  const kode = new Set()
-  for (const it of d.items) {
-    assert.equal(it.available, it.actual_qty - it.reserved_qty, it.item_code)
-    assert.ok(!kode.has(it.item_code), `kode unik ${it.item_code}`)
-    kode.add(it.item_code)
-    assert.ok(it.capacity_detail.length >= 1, `resep ada ${it.item_code}`)
-    for (const r of it.capacity_detail) {
-      assert.equal(typeof r.product, 'string', `resep.product ${it.item_code}`)
-      assert.ok(Number.isInteger(r.batches) && r.batches >= 0, `resep.batches ${it.item_code}`)
-    }
-    const maxCap = it.capacity_detail.reduce((m, r) => Math.max(m, r.batches), 0)
-    assert.ok(Number.isFinite(it.capacity_batch), `capacity_batch finite ${it.item_code}`)
-    assert.equal(it.capacity_batch, maxCap, it.item_code)
-    const akhir = it.movements[it.movements.length - 1]
-    assert.equal(akhir.saldo, it.actual_qty, `saldo akhir ${it.item_code}`)
-    for (let i = 1; i < it.movements.length; i++) {
-      const prev = it.movements[i - 1]
-      const cur = it.movements[i]
-      assert.equal(cur.saldo, prev.saldo + cur.masuk - cur.keluar, `rantai ${it.item_code} #${i}`)
-    }
-    assert.ok(it.movements.every((m) => m.tanggal <= '2026-10-03'), `tanggal ≤ hari ini ${it.item_code}`)
-  }
-  // FU88: subset item ber-DIU — display_uom ≠ stock_uom, faktor integer ≥ 2;
-  // 8 item kurasi tanpa DIU (kg — angka spesifikasi dipertahankan)
-  const diu = d.items.filter((it) => it.display_uom)
-  assert.ok(diu.length >= 10, `item DIU cukup banyak (${diu.length})`)
-  for (const it of diu) {
-    assert.notEqual(it.display_uom, it.stock_uom, it.item_code)
-    assert.ok(Number.isInteger(it.qty_in_pack) && it.qty_in_pack >= 2, `faktor ${it.item_code}`)
-  }
-  for (const kode of ['RM-FLOUR-001', 'RM-SUGAR-002', 'RM-BUTTER-003', 'RM-COCOA-004', 'RM-CHEESE-005', 'RM-YEAST-006']) {
-    assert.ok(!byCode[kode].display_uom, `kurasi tanpa DIU ${kode}`)
-  }
-})
-
 // ---- FU87: nama file ekspor XLSX ketersediaan stock (paritas server) ----
 test('stockXlsxFilename: slug gudang + tanggal; kosong-tanggal generik', async () => {
   const { stockXlsxFilename } = await import('../src/dashboard.js')
@@ -731,4 +645,99 @@ test('stockXlsxFilename: slug gudang + tanggal; kosong-tanggal generik', async (
   assert.equal(stockXlsxFilename('', '2026-10-03'), 'ketersediaan-stock-2026-10-03.xlsx')
   assert.equal(stockXlsxFilename('Kedai "Kopi", Timur', '2026-10-03'), 'ketersediaan-stock-kedai-kopi-timur-2026-10-03.xlsx')
   assert.equal(stockXlsxFilename('Gudang Produksi', ''), 'ketersediaan-stock.xlsx')
+})
+
+// ---- FU90: integrasi endpoint ketersediaan stock (store, mock global fetch) ----
+function mockFetch(calls, payload) {
+  const asli = globalThis.fetch
+  globalThis.window = { csrf_token: 'tes' }
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, body: JSON.parse(opts.body) })
+    return { ok: true, json: async () => ({ message: payload }) }
+  }
+  return () => {
+    globalThis.fetch = asli
+    delete globalThis.window
+  }
+}
+
+test('loadStockAvailability memanggil endpoint & mengisi state (tanpa/dgn gudang)', async () => {
+  const { loadStockAvailability, stockAvailabilityState } = await import('../src/store.js')
+  const calls = []
+  const payload = {
+    warehouse: 'Gudang Produksi', warehouses: ['Gudang Produksi'], generated_at: '2026-10-03T08:00:00',
+    summary: { total: 1, aman: 1, menipis: 0, habis: 0 },
+    items: [{ item_code: 'RM-A', item_name: 'A', item_group: 'Bahan Baku', stock_uom: 'kg',
+      actual_qty: 10, reserved_qty: 2, available: 8, display_uom: null, qty_in_pack: null,
+      min_stock: null, status: 'aman', capacity_batch: null, capacity_detail: [],
+      warehouse: 'Gudang Produksi' }]
+  }
+  const pulih = mockFetch(calls, payload)
+  try {
+    stockAvailabilityState.data = null
+    stockAvailabilityState.loaded = false
+    await loadStockAvailability()
+    assert.equal(calls[0].url, '/api/method/production_app.api.stock_availability.stock_availability')
+    assert.deepEqual(calls[0].body, {}) // tanpa gudang = server resolve default
+    assert.deepEqual(stockAvailabilityState.data, payload)
+    assert.equal(stockAvailabilityState.loaded, true)
+    assert.equal(stockAvailabilityState.error, '')
+    await loadStockAvailability('Gudang Bahan')
+    assert.deepEqual(calls[1].body, { warehouse: 'Gudang Bahan' })
+  } finally {
+    pulih()
+  }
+})
+
+test('loadStockAvailability: respons stale tidak menimpa permintaan lebih baru (FU90 review P1-1)', async () => {
+  const { loadStockAvailability, stockAvailabilityState } = await import('../src/store.js')
+  const asli = globalThis.fetch
+  globalThis.window = { csrf_token: 'tes' }
+  const tunda = []
+  globalThis.fetch = async () => {
+    let lepas, gagal
+    const p = new Promise((res, rej) => { lepas = res; gagal = rej })
+    tunda.push({ lepas, gagal })
+    return { ok: true, json: async () => p }
+  }
+  try {
+    stockAvailabilityState.data = null
+    stockAvailabilityState.loaded = false
+    const p1 = loadStockAvailability()
+    const p2 = loadStockAvailability('Gudang Bahan')
+    // stale selesai duluan (gagal) setelah permintaan baru mulai → error & loading tidak menyentuh state
+    tunda[0].gagal(new Error('respons lama'))
+    await p1
+    assert.equal(stockAvailabilityState.error, '')
+    assert.equal(stockAvailabilityState.data, null)
+    assert.equal(stockAvailabilityState.loading, true) // masih dimiliki p2
+    // respons baru masuk → menang
+    tunda[1].lepas({ message: { warehouse: 'Gudang Bahan', items: [], summary: { total: 0, aman: 0, menipis: 0, habis: 0 } } })
+    await p2
+    assert.equal(stockAvailabilityState.data.warehouse, 'Gudang Bahan')
+    assert.equal(stockAvailabilityState.loading, false)
+    assert.equal(stockAvailabilityState.error, '')
+  } finally {
+    globalThis.fetch = asli
+    delete globalThis.window
+  }
+})
+
+test('loadStockMovements mengisi cache key gudang|item_code', async () => {
+  const { loadStockMovements, stockMovementsState } = await import('../src/store.js')
+  const calls = []
+  const rows = [{ tanggal: '2026-10-03', jenis: 'Material Receipt', referensi: 'STE-001',
+    masuk: 100, keluar: 0, saldo: 100 }]
+  const pulih = mockFetch(calls, rows)
+  try {
+    await loadStockMovements('RM-FLOUR-001', 'Gudang Produksi')
+    assert.equal(calls[0].url, '/api/method/production_app.api.stock_availability.stock_movements')
+    assert.deepEqual(calls[0].body, { item_code: 'RM-FLOUR-001', warehouse: 'Gudang Produksi' })
+    const entri = stockMovementsState['Gudang Produksi|RM-FLOUR-001']
+    assert.equal(entri.loading, false)
+    assert.equal(entri.error, '')
+    assert.deepEqual([...entri.data], rows)
+  } finally {
+    pulih()
+  }
 })

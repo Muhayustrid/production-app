@@ -22,7 +22,7 @@ const halaman = computed(() => {
     {
       href: '#/ketersediaan-stock',
       label: 'Ketersediaan Stock',
-      desc: 'Stok, reserved, dan kapasitas produksi di Gudang Produksi.',
+      desc: 'Stok, reserved, dan kapasitas produksi.',
       ico: PackageSearch,
       tone: 'kblue'
     }

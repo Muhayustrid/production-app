@@ -1,13 +1,15 @@
 <script setup>
 // FU83: halaman "Ketersediaan Stock" (#/ketersediaan-stock) — monitoring bahan
-// baku di Gudang Produksi untuk PPIC/Produksi/Gudang; pertanyaan inti: apakah
-// bahan tersedia dan cukup untuk kebutuhan produksi? Data MASIH MOCK (FU83)
-// dari store.loadStockAvailability dengan struktur item = respons ERPNext
-// nanti (Bin actual/reserved + Item grup/uom + Stock Ledger Entry movement) —
-// penukaran ke endpoint server tidak mengubah halaman. Status diturunkan dari
-// angka di dataset (dashboard.stockStatus): habis ≤ 0, menipis < minimum,
-// sisanya aman. Tersedia (available) = stok − reserved, ditonjolkan di tabel.
-// Kapasitas produksi = estimasi batch per resep dari data (belum kalkulasi BOM).
+// baku produksi untuk PPIC/Produksi/Gudang; pertanyaan inti: apakah
+// bahan tersedia dan cukup untuk kebutuhan produksi? FU90: data dari endpoint
+// server (store.loadStockAvailability — Bin ERPNext: stok/reserved; Item
+// Reorder: minimum; BOM aktif: kapasitas batch). Pilih gudang = fetch ulang
+// server-side (data lama tampil sampai respons); pencarian/grup/status tetap
+// client-side. Movement drawer dimuat lazy per gudang|item (cache di store).
+// FU90: status diturunkan SERVER (habis ≤ 0, menipis < minimum, sisanya aman)
+// — mock dashboard.stockStatus/stockMockDataset sudah dipensiunkan (arsip di
+// backup/dashboard-stock-mock FU83-89.mjs). Tersedia (available) = stok −
+// reserved, ditonjolkan.
 import { computed, onMounted, ref, watch } from 'vue'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
@@ -19,7 +21,9 @@ import Tag from 'primevue/tag'
 import {
   Boxes, CheckCircle2, ChevronRight, FileSpreadsheet, Filter, PackageX, Search, SearchX, TriangleAlert
 } from 'lucide-vue-next'
-import { stockAvailabilityState, loadStockAvailability } from './store.js'
+import {
+  loadStockAvailability, loadStockMovements, stockAvailabilityState, stockMovementsState
+} from './store.js'
 import { fmtId, fmtStampShort } from './format.js'
 import { harusKeLogin, loginRedirectUrl, stockXlsxFilename, tanggalPendek, woQtyText } from './dashboard.js'
 
@@ -46,8 +50,7 @@ const amanPct = computed(() =>
   summary.value.total ? Math.round((summary.value.aman / summary.value.total) * 100) : 0
 )
 
-// filter klien (mock): kode ATAU nama, grup, status — saat integrasi nanti
-// parameter yang sama dikirim ke endpoint
+// filter klien: kode ATAU nama, grup, status — item per gudang jumlahnya kecil
 const terfilter = computed(() => {
   const kata = q.value.trim().toLowerCase()
   return items.value.filter((r) => {
@@ -63,12 +66,19 @@ const first = ref(0)
 watch([q, grup, status, gudang], () => { first.value = 0 })
 const halaman = computed(() => terfilter.value.slice(first.value, first.value + PAGE))
 
+// FU90: gudang server-side — pilih di popover memicu fetch ulang (data lama
+// tampil sampai respons); respons default saat load/clear tidak memicu ulang
+watch(gudang, (val) => {
+  if (val && val !== (data.value?.warehouse || '')) loadStockAvailability(val)
+})
+
 function clearFilters() {
   q.value = ''
   grup.value = 'ALL'
   status.value = 'ALL'
-  gudang.value = basis.value.gudang
+  gudang.value = ''
   filterOpen.value = false
+  reload()
 }
 
 const activeFilters = computed(() =>
@@ -97,7 +107,7 @@ async function exportXlsx() {
           // 2 desimal); stok mentah stock UOM tetap dikirim utk kolom terakhir
           const f = Number(it.qty_in_pack)
           const ada = Number.isFinite(f) && f > 0 && it.display_uom && it.display_uom !== it.stock_uom
-          const conv = (q) => (ada ? Math.round((q / f) * 100) / 100 : q)
+          const conv = (q) => (q == null ? null : ada ? Math.round((q / f) * 100) / 100 : q)
           return {
             item_code: it.item_code,
             item_name: it.item_name,
@@ -143,11 +153,13 @@ async function exportXlsx() {
   }
 }
 
+// FU90: reload memakai gudang terpilih bila ada (ulang setelah gagal);
+// respons tanpa argumen = gudang default server → menjadi basis badge filter
 async function reload() {
-  await loadStockAvailability()
-  if (!gudang.value && data.value?.warehouses?.length) {
-    gudang.value = data.value.warehouses[0]
-    basis.value = { gudang: gudang.value }
+  await loadStockAvailability(gudang.value)
+  if (!gudang.value && data.value?.warehouse) {
+    gudang.value = data.value.warehouse
+    basis.value = { gudang: data.value.warehouse }
   }
   diperbarui.value = new Date().toISOString()
 }
@@ -156,10 +168,16 @@ onMounted(reload)
 // ---- drawer detail item (klik baris / chevron) ----
 const drawerOpen = ref(false)
 const itemTerpilih = ref(null)
+// FU90: movement lazy per gudang|item — dimuat saat drawer dibuka bila cache
+// belum ada (atau percobaan sebelumnya gagal); teks kecil selama memuat/gagal
+const mvKey = (it) => `${it.warehouse || data.value?.warehouse || ''}|${it.item_code}`
+const mvEntry = computed(() => (itemTerpilih.value ? stockMovementsState[mvKey(itemTerpilih.value)] || null : null))
 function bukaItem(row) {
   if (!row?.item_code) return
   itemTerpilih.value = row
   drawerOpen.value = true
+  const cache = stockMovementsState[mvKey(row)]
+  if (!cache || cache.error) loadStockMovements(row.item_code, row.warehouse || data.value?.warehouse || '')
 }
 
 const STATUS_LABEL = { aman: 'Aman', menipis: 'Menipis', habis: 'Habis' }
@@ -179,8 +197,8 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
   <div class="page-head">
     <div class="ph-left">
       <p class="ph-eye">Ketersediaan stock</p>
-      <h1>Ketersediaan Stock Bahan Baku</h1>
-      <p class="sub">Monitoring ketersediaan bahan baku pada {{ data?.warehouse || 'Gudang Produksi' }}.</p>
+      <h1>Ketersediaan Stock</h1>
+      <p class="sub">Monitoring ketersediaan stok pada {{ data?.warehouse || '…' }}.</p>
     </div>
     <div class="ph-right">
       <span v-if="diperbarui" class="ph-date">Diperbarui {{ fmtStampShort(diperbarui) }}</span>
@@ -261,7 +279,7 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
       <div class="panel dash-kpi">
         <div class="khead">
           <span class="kico kblue"><Boxes :size="17" :stroke-width="2" aria-hidden="true" /></span>
-          <span class="klabel">Total bahan baku</span>
+          <span class="klabel">Total item</span>
         </div>
         <p class="knum">{{ fmtId(summary.total) }}</p>
         <p class="ksub">item di {{ data?.warehouse || 'gudang ini' }}</p>
@@ -293,11 +311,11 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
     </section>
 
     <!-- ===== tabel stock bahan baku ===== -->
-    <section class="panel mu-card" aria-label="Stock bahan baku">
+    <section class="panel mu-card" aria-label="Stock item">
       <div class="dcard-head an-head">
         <div>
-          <p class="deye">Stock bahan baku</p>
-          <h2>Daftar Bahan Baku</h2>
+          <p class="deye">Stock Item</p>
+          <h2>Daftar Item</h2>
           <p class="dsub">{{ fmtId(terfilter.length) }} item ditampilkan dari {{ fmtId(items.length) }} total item</p>
         </div>
       </div>
@@ -359,7 +377,8 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
           </Column>
           <Column header="Kapasitas" headerClass="col-kapas" bodyClass="col-kapas">
             <template #body="{ data: r }">
-              <span :class="{ 'tone-bad': !r.capacity_batch }">{{ fmtId(r.capacity_batch) }} <small class="kuom">Batch</small></span>
+              <span v-if="r.capacity_batch == null">-</span>
+              <span v-else :class="{ 'tone-bad': !r.capacity_batch }">{{ fmtId(r.capacity_batch) }} <small class="kuom">Batch</small></span>
             </template>
           </Column>
           <Column headerClass="col-chev" bodyClass="col-chev">
@@ -378,7 +397,7 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
           :totalRecords="terfilter.length"
           v-model:first="first"
           class="dash-pager"
-          aria-label="Halaman daftar bahan baku"
+          aria-label="Halaman daftar item"
         >
           <template #start><span /></template>
           <template #end><span /></template>
@@ -389,12 +408,12 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
     </section>
 
     <p class="srcnote">
-      Sumber data: mock FU83 — saat integrasi ERPNext dibaca dari Bin (actual/reserved), Item
-      (grup, UOM), dan Stock Ledger Entry (movement) per gudang. Tersedia = stok − reserved.
-      Status: habis bila tersedia ≤ 0, menipis di bawah stok minimum, sisanya aman. Kapasitas
-      produksi = estimasi batch dari resep terdaftar (belum kalkulasi BOM nyata). Stok, reserved,
-      tersedia, dan minimum tampil dalam Default Inventory UOM item (FU78 — fallback stock UOM
-      bila DIU kosong; angka kecil = stock UOM); tabel movement memakai stock UOM (ledger SLE).
+      Sumber data: Bin ERPNext (stok dan reserved; tersedia = stok − reserved), Item Reorder
+      (stok minimum), BOM aktif (kapasitas batch per resep), dan Stock Ledger Entry untuk
+      movement di drawer detail item. Status: habis bila tersedia ≤ 0, menipis di bawah stok
+      minimum, sisanya aman. Stok, reserved, tersedia, dan minimum tampil dalam Default
+      Inventory UOM item (FU78 — fallback stock UOM bila DIU kosong; angka kecil = stock UOM);
+      tabel movement memakai stock UOM (ledger SLE).
     </p>
   </template>
 
@@ -440,17 +459,19 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
 
       <p class="deye sa-sect">Production capacity</p>
       <div class="sa-cap">
-        <div v-for="c in itemTerpilih.capacity_detail" :key="c.product" class="sa-cap-row">
+        <div v-for="c in itemTerpilih.capacity_detail || []" :key="c.product" class="sa-cap-row">
           <span>{{ c.product }}</span>
           <b :class="{ 'tone-bad': !c.batches }">{{ fmtId(c.batches) }} Batch</b>
         </div>
       </div>
-      <p v-if="!itemTerpilih.capacity_batch" class="sa-cap-note">
+      <p v-if="itemTerpilih.capacity_batch === 0" class="sa-cap-note">
         Tidak ada bahan tersedia untuk produksi — segera ajukan pengisian ulang.
       </p>
 
       <p class="deye sa-sect">Stock movement</p>
-      <DataTable :value="itemTerpilih.movements" dataKey="referensi" class="dash-table sa-mv">
+      <p v-if="!mvEntry || mvEntry.loading" class="sa-cap-note">Memuat movement…</p>
+      <p v-else-if="mvEntry.error" class="sa-cap-note">Gagal memuat movement</p>
+      <DataTable v-else :value="mvEntry.data || []" dataKey="referensi" class="dash-table sa-mv">
         <Column header="Tanggal" headerClass="col-tgl" bodyClass="col-tgl">
           <template #body="{ data: m }">{{ tanggalPendek(m.tanggal) }}</template>
         </Column>

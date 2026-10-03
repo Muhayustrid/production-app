@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 
 import { applyFontScale } from './ui-preferences.js'
-import { harusKeLogin, loginRedirectUrl, stockMockDataset } from './dashboard.js'
+import { harusKeLogin, loginRedirectUrl } from './dashboard.js'
 
 // ============================================================================
 // ADAPTER SERVER (T13/T14) — menggantikan mock store.
@@ -450,23 +450,46 @@ export async function loadMaterialUsage(params = {}) {
   }
 }
 
-// FU83: ketersediaan stock — MASIH MOCK (dashboard.stockMockDataset, struktur
-// item = respons ERPNext nanti: Bin actual/reserved + Item grup/uom + SLE
-// movement). Saat integrasi: ganti isi try menjadi
-//   stockAvailabilityState.data = await call('production_app.api.stock_availability', { warehouse: ... })
-// — bentuk state & halaman StockAvailabilityPage tidak berubah.
+// FU90: ketersediaan stock dari server — Bin ERPNext (stok/reserved), Item
+// Reorder (minimum), BOM aktif (kapasitas batch). warehouse kosong → server
+// resolve gudang default; bentuk state & halaman StockAvailabilityPage tetap.
 export const stockAvailabilityState = reactive({ loading: false, error: '', loaded: false, data: null })
 
-export async function loadStockAvailability() {
+let saSeq = 0
+export async function loadStockAvailability(warehouse) {
+  const seq = ++saSeq
   stockAvailabilityState.loading = true
   stockAvailabilityState.error = ''
   try {
-    stockAvailabilityState.data = stockMockDataset()
+    const data = await call('production_app.api.stock_availability.stock_availability', warehouse ? { warehouse } : {})
+    if (seq !== saSeq) return // guard stale-response: respons lama tak boleh menimpa permintaan lebih baru
+    stockAvailabilityState.data = data
     stockAvailabilityState.loaded = true
   } catch (e) {
+    if (seq !== saSeq) return
     stockAvailabilityState.error = e.message
   } finally {
-    stockAvailabilityState.loading = false
+    if (seq === saSeq) stockAvailabilityState.loading = false
+  }
+}
+
+// FU90: movement drawer item — endpoint terpisah, dimuat lazy saat drawer
+// dibuka (keputusan user). Cache reactive key `warehouse|item_code`; gagal
+// ditandai di entri (halaman menawarkan coba lagi lewat buka ulang drawer).
+export const stockMovementsState = reactive({})
+
+export async function loadStockMovements(itemCode, warehouse) {
+  const key = `${warehouse || ''}|${itemCode}`
+  stockMovementsState[key] = { loading: true, error: '', data: null }
+  try {
+    stockMovementsState[key].data = await call('production_app.api.stock_availability.stock_movements', {
+      item_code: itemCode,
+      warehouse: warehouse || null
+    })
+  } catch (e) {
+    stockMovementsState[key].error = e.message
+  } finally {
+    stockMovementsState[key].loading = false
   }
 }
 
