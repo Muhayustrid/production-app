@@ -2433,6 +2433,11 @@ textarea.input { height: auto; padding: 8px 10px; }
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
+  /* FU92: flex memusatkan LINE BOX, bukan ink — digit tanpa descender
+     duduk ~0.03em di bawah pusat lubang (terukur 1-1,5px); angkat sebesar
+     itu agar ink "4" tepat di pusat ring (0px). em = proporsional saat
+     font-size pengguna berubah (FU70 zoom) */
+  transform: translateY(-0.03em);
 }
 .dcenter span {
   position: absolute;

@@ -285,7 +285,7 @@ function muatUlangHalaman() {
           </div>
         </div>
 
-        <div class="navsection">Workspace</div>
+        <div class="navsection">Ringkasan</div>
         <a
           href="#/"
           class="navitem"
@@ -296,6 +296,8 @@ function muatUlangHalaman() {
           <LayoutGrid :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Dashboard</span>
         </a>
+
+        <div class="navsection">Produksi</div>
         <a
           href="#/wo"
           class="navitem"
@@ -318,6 +320,18 @@ function muatUlangHalaman() {
           <span class="nlabel">Stock Entry</span>
           <span v-if="handoverCount" class="navbadge">{{ handoverCount }}</span>
         </a>
+
+        <div class="navsection">Bahan Baku</div>
+        <a
+          href="#/ketersediaan-stock"
+          class="navitem"
+          :class="{ on: section === 'stock-availability' }"
+          :aria-current="section === 'stock-availability' ? 'page' : undefined"
+          @click="onNavClick"
+        >
+          <PackageSearch :size="18" :stroke-width="1.9" class="nicon" />
+          <span class="nlabel">Ketersediaan Stock</span>
+        </a>
         <a
           v-if="canFormOrder"
           href="#/form-order"
@@ -338,16 +352,6 @@ function muatUlangHalaman() {
         >
           <Wheat :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Penggunaan bahan baku</span>
-        </a>
-        <a
-          href="#/ketersediaan-stock"
-          class="navitem"
-          :class="{ on: section === 'stock-availability' }"
-          :aria-current="section === 'stock-availability' ? 'page' : undefined"
-          @click="onNavClick"
-        >
-          <PackageSearch :size="18" :stroke-width="1.9" class="nicon" />
-          <span class="nlabel">Ketersediaan Stock</span>
         </a>
         <div class="navsection">Sistem</div>
         <a
