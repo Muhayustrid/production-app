@@ -23,14 +23,14 @@ import SelectButton from 'primevue/selectbutton'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import {
-  Boxes, ChevronRight, ClipboardList, ExternalLink, Factory, Filter, FlaskConical,
+  Boxes, ChevronRight, ClipboardList, ExternalLink, Factory, Filter, FileSpreadsheet, FlaskConical,
   Gauge, HelpCircle, Search, SearchX, TrendingUp, X
 } from 'lucide-vue-next'
 import { bahanState, loadBahan } from './store.js'
 import { fmtId } from './format.js'
 import {
-  barPct, chartTrend, comparisonRows, efficiencyPct, materialCounts, peakDay,
-  peakText, signedQtyText, tanggalPendek, txnOfMaterial, uomTotals,
+  bahanXlsxFilename, barPct, chartTrend, comparisonRows, efficiencyPct, materialCounts,
+  peakDay, peakText, signedQtyText, tanggalDmy, tanggalPendek, txnOfMaterial, uomTotals,
   variancePctText, varianceTone, weightedVarPct, woStatusSummary, woStatusText, woYieldPct,
   yieldPctText, yieldTone
 } from './dashboard.js'
@@ -241,6 +241,44 @@ function clearFilters() {
   sampai.value = basis.value.sampai
   filterOpen.value = false
 }
+
+// FU80c: unduh .xlsx = laporan tampilan aktif (rentang + semua filter) yang
+// dibangun SERVER (4 sheet: Info/Ringkasan per Bahan/Work Order/Transaksi —
+// angka mentah numerik, bisa dihitung ulang di Excel/Sheets); pilih Produk di
+// filter = laporan pemakaian bahan satu produk dalam rentang (nama file ikut
+// produk). Gagal unduh ditandai kecil di samping tombol, layar tak dibongkar
+const exportGagal = ref(false)
+async function exportXlsx() {
+  const d = dari.value || data.value?.dari || ''
+  const s = sampai.value || data.value?.sampai || ''
+  const produk = product.value === 'ALL'
+    ? ''
+    : ((data.value?.products || []).find((p) => p.item_code === product.value)?.item_name || product.value)
+  const params = new URLSearchParams({
+    dari: d || '',
+    sampai: s || '',
+    company: company.value === 'ALL' ? '' : company.value,
+    production_item: product.value === 'ALL' ? '' : product.value,
+    search: q.value.trim(),
+    over_only: overOnly.value ? '1' : '0'
+  })
+  exportGagal.value = false
+  try {
+    const r = await fetch(`/api/method/production_app.api.material_usage.material_usage_xlsx?${params}`)
+    if (!r.ok) throw new Error(String(r.status))
+    const blob = await r.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = bahanXlsxFilename(d, s, produk)
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch {
+    exportGagal.value = true
+  }
+}
 </script>
 
 <template>
@@ -314,6 +352,11 @@ function clearFilters() {
         </div>
       </Transition>
     </div>
+    <button class="btn exportbtn" type="button" aria-label="Export XLSX" @click="exportXlsx">
+      <FileSpreadsheet :size="14" :stroke-width="2" />
+      <span class="btext">Export</span>
+    </button>
+    <span v-if="exportGagal" class="export-gagal" role="alert">Export gagal — coba lagi</span>
   </div>
 
   <div v-if="bahanState.error" class="callout bad dash-error" role="alert">

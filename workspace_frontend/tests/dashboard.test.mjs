@@ -599,3 +599,13 @@ test('rentangSetelahPilih: fase sampai — tukar bila to < from, lewat normalisa
   assert.deepEqual(rentangSetelahPilih('2026-10-01', '', '2026-10-03', 'sampai'), ['2026-10-01', '2026-10-03'])
   assert.deepEqual(rentangSetelahPilih('2026-10-01', '', '2026-10-01', 'sampai'), ['2026-10-01', '2026-10-01'])
 })
+
+// ---- FU80c: ekspor .xlsx (endpoint server; frontend hanya menyusun nama file)
+test('bahanXlsxFilename: ISO ber-tanggal; produk jadi slug; satu hari tanpa _sd_; kosong generik', async () => {
+  const { bahanXlsxFilename } = await import('../src/dashboard.js')
+  assert.equal(bahanXlsxFilename('2026-10-01', '2026-10-02', 'Roti Tawar'), 'penggunaan-bahan-roti-tawar-2026-10-01_sd_2026-10-02.xlsx')
+  assert.equal(bahanXlsxFilename('2026-10-01', '2026-10-02', 'Kue "Keju", Manis'), 'penggunaan-bahan-kue-keju-manis-2026-10-01_sd_2026-10-02.xlsx')
+  assert.equal(bahanXlsxFilename('2026-10-02', '2026-10-02', 'Roti Tawar'), 'penggunaan-bahan-roti-tawar-2026-10-02.xlsx')
+  assert.equal(bahanXlsxFilename('2026-10-02', '2026-10-02'), 'penggunaan-bahan-2026-10-02.xlsx')
+  assert.equal(bahanXlsxFilename('', ''), 'penggunaan-bahan.xlsx')
+})

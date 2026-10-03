@@ -648,3 +648,23 @@ export function rentangDmyText(dari, sampai) {
   const tglA = tanggalDmy(a)
   return b && b !== a ? `${tglA} to ${tanggalDmy(b)}` : tglA
 }
+
+// ---- FU80c: ekspor .xlsx penggunaan bahan — file dibangun SERVER
+// (endpoint material_usage_xlsx, 4 sheet: Info/Ringkasan/Work Order/
+// Transaksi, angka mentah numerik); frontend hanya menyusun nama unduhan.
+
+// nama file unduhan: rentang → penggunaan-bahan-[<produk>-]<dari>_sd_<sampai>
+// .xlsx (ISO, non-angka dibuang; produk jadi slug lowercase); satu hari tanpa
+// _sd_; keduanya kosong → generik (paritas _nama_file_xlsx server)
+export function bahanXlsxFilename(dari, sampai, produk) {
+  const bersih = (v) => String(v || '').replace(/[^0-9-]/g, '')
+  const slug = String(produk || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  const a = bersih(dari)
+  const b = bersih(sampai)
+  const inti = a && b && a !== b ? `${a}_sd_${b}` : a
+  if (!inti) return 'penggunaan-bahan.xlsx'
+  return `penggunaan-bahan-${slug ? slug + '-' : ''}${inti}.xlsx`
+}

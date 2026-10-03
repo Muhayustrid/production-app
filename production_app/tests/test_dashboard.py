@@ -2070,3 +2070,128 @@ class TestDashboard(IntegrationTestCase):
 		self.assertAlmostEqual(hari_ini - sebelum_hari, 8.0, places=6)
 		self.assertAlmostEqual(kemarin - kemarin_sebelum, 0.0, places=6)  # delta kemarin 0
 		self.assertEqual(_ambillah(seri, sampai, "wo") - sebelum_wo, 1)
+
+	# --------------------------------- FU80c: ekspor .xlsx laporan bahan (ganti CSV FU80)
+
+	@staticmethod
+	def _xlsx(**kwargs):
+		"""Import lambat endpoint ekspor — RED terukur per-kasus (pola _mu)."""
+		from production_app.api.material_usage import material_usage_xlsx
+
+		return material_usage_xlsx(**kwargs)
+
+	def _wb(self, **kwargs):
+		"""Panggil endpoint ekspor lalu buka workbook-nya; frappe.response
+		diisi provide_binary_file (type binary + filecontent bytes + nama)."""
+		from io import BytesIO
+
+		from openpyxl import load_workbook
+
+		self._xlsx(company=self.company_a, **kwargs)
+		self.assertEqual(frappe.response["type"], "binary")
+		content = frappe.response["filecontent"]
+		self.assertIsInstance(content, bytes)
+		self.assertTrue(content.startswith(b"PK"))  # magic zip .xlsx
+		nama = frappe.response["filename"]
+		self.assertTrue(nama.startswith("penggunaan-bahan"), nama)
+		self.assertTrue(nama.endswith(".xlsx"), nama)
+		return load_workbook(BytesIO(content)), nama
+
+	def test_65_xlsx_empat_sheet_dan_isi(self):
+		"""FU80c: ekspor .xlsx berisi 4 sheet (Info/Ringkasan per Bahan/Work
+		Order/Transaksi) — header sesuai kontrak CSV FU80, angka MENTAH
+		numerik (bukan teks), yield 1 desimal, status WO diterjemahkan
+		Indonesia, transaksi = daftar penuh aggregate(include_trace)."""
+		wo = self._make_wo(self.bom_mu, 10, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 10)
+		wb, nama = self._wb()
+		# tanpa filter produk → nama file tanpa slug produk
+		self.assertNotIn(f"fu72-fgmu-{self.suffix.lower()}", nama)
+		self.assertEqual(
+			wb.sheetnames, ["Info", "Ringkasan per Bahan", "Work Order", "Transaksi"]
+		)
+		# Info: judul di A1 + meta rentang
+		info = wb["Info"]
+		self.assertEqual(info["A1"].value, "Ekspor Penggunaan Bahan Baku")
+		label = {r[0].value: r[1].value for r in info.iter_rows(min_row=2, max_col=2)}
+		self.assertEqual(label["Rentang"], getdate(today()).strftime("%d-%m-%Y"))
+		self.assertIn("Dicetak", label)
+		# Ringkasan per Bahan: header kontrak + baris mu_rm numerik
+		ws = wb["Ringkasan per Bahan"]
+		self.assertEqual(
+			[c.value for c in ws[1]],
+			["Kode", "Nama", "UOM", "Teoritis", "Aktual", "Selisih", "Selisih %", "Status", "Keterangan"],
+		)
+		baris = {}
+		for r in ws.iter_rows(min_row=2, values_only=True):
+			baris[r[0]] = r
+		self.assertIn(self.mu_rm, baris)
+		b = baris[self.mu_rm]
+		self.assertIsInstance(b[3], (int, float))  # teoritis numerik
+		self.assertIsInstance(b[4], (int, float))  # aktual numerik
+		# status Over/Normal mengikuti data kelas penuh (test lain ikut
+		# memproduksi hari ini — disiplin delta test_61); keterangan kosong
+		self.assertIn(b[7], ("Normal", "Over"))
+		self.assertIsNone(b[8])
+		# Work Order: satu baris per WO dgn yield 1 desimal + status Indonesia
+		wsw = wb["Work Order"]
+		self.assertEqual(
+			[c.value for c in wsw[1]],
+			["Work Order", "Tanggal", "Produk", "BOM", "Rencana", "Hasil", "UOM", "Yield %", "Status"],
+		)
+		wo_rows = {r[0]: r for r in wsw.iter_rows(min_row=2, values_only=True)}
+		self.assertIn(wo.name, wo_rows)
+		w = wo_rows[wo.name]
+		self.assertEqual(w[1], str(getdate(today())))
+		self.assertEqual(w[2], f"{PREFIX} FGMU {self.suffix}")
+		self.assertIsInstance(w[4], (int, float))
+		self.assertIsInstance(w[5], (int, float))
+		self.assertAlmostEqual(w[7], 100.0, places=6)
+		self.assertEqual(w[8], "Selesai")
+		# Transaksi = daftar sumber penuh (sama dgn aggregate include_trace)
+		wst = wb["Transaksi"]
+		self.assertEqual(
+			[c.value for c in wst[1]],
+			["Stock Entry", "Tanggal", "Work Order", "Bahan", "Kode", "Qty", "UOM", "Batch"],
+		)
+		trace = _mu(company=self.company_a, include_trace=True)
+		self.assertEqual(wst.max_row - 1, len(trace["transactions"]))
+		ws_kolom = [r[2] for r in wst.iter_rows(min_row=2, values_only=True)]
+		self.assertIn(wo.name, ws_kolom)  # WO baru muncul di daftar sumber
+		for r in wst.iter_rows(min_row=2, values_only=True):
+			# bahan lintas test ikut (kelas penuh — disiplin delta): cukup
+			# pastikan qty numerik & SE dari rentang hari ini
+			self.assertIsInstance(r[5], (int, float))
+			self.assertEqual(r[1], str(getdate(today())))
+
+	def test_66_xlsx_scope_produk_dan_nama_file(self):
+		"""FU80c: filter produk men-scope seluruh sheet (laporan per produk —
+		produksi hasil, konsumsi bahan, transaksi) + nama file membawa slug
+		produk; Info mencantumkan produk terpilih."""
+		wo = self._make_wo(self.bom_mu, 5, self.mu_fg)
+		wo.submit()
+		self._transfer(wo)
+		self._manufacture(wo, 5)
+		wb, nama = self._wb(production_item=self.mu_fg)
+		produk = f"{PREFIX} FGMU {self.suffix}"
+		self.assertIn(f"fu72-fgmu-{self.suffix.lower()}", nama)
+		info = wb["Info"]
+		label = {r[0].value: r[1].value for r in info.iter_rows(min_row=2, max_col=2)}
+		self.assertEqual(label["Produk"], produk)
+		# Work Order sheet: semua baris produk itu
+		wsw = wb["Work Order"]
+		for r in wsw.iter_rows(min_row=2, values_only=True):
+			self.assertEqual(r[2], produk)
+		# ringkasan hanya bahan dari BOM produk itu (mu_rm)
+		ws = wb["Ringkasan per Bahan"]
+		kode = [r[0] for r in ws.iter_rows(min_row=2, values_only=True)]
+		self.assertIn(self.mu_rm, kode)
+		self.assertNotIn(self.fg_plain, kode)
+
+	def test_67_xlsx_rentang_tidak_valid_ditolak(self):
+		"""FU80c: rentang terbalik → ValidationError (konsisten endpoint
+		halaman; jangan diam-diam membuat file kosong)."""
+		with self.assertRaises(frappe.ValidationError):
+			self._wb(dari=today(), sampai=add_days(today(), -1))

@@ -481,6 +481,8 @@ textarea.input { height: auto; padding: 8px 10px; }
 /* filter ala ERPNext: satu tombol, panel dropdown */
 .filterwrap { position: relative; }
 .filterbtn { display: inline-flex; align-items: center; gap: 7px; }
+.exportbtn { display: inline-flex; align-items: center; gap: 7px; }
+.export-gagal { color: var(--danger, #b3261e); font-size: 12px; font-weight: 500; }
 .filterbtn.active { border-color: var(--brand); color: var(--brand); }
 .filtercount {
   min-width: 17px;
@@ -2565,8 +2567,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   color: var(--ink);
 }
 .dash-table .p-datatable-tbody > tr:last-child > td { border-bottom: 0; }
-.dash-table .p-datatable-tbody > tr:hover { background: var(--brand-softer); cursor: pointer; }
-.dash-table .wo-prod small.mono { color: var(--faint); font-weight: 400; }
+.dash-table .p-datatable-tbody > tr:hover { background: var(--brand-softer); cursor: pointer; }.dash-table .wo-prod small.mono { color: var(--faint); font-weight: 400; }
 .dash-table .p-tag {
   border-radius: 999px;
   background: var(--grey-bg);

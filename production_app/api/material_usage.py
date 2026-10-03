@@ -42,8 +42,11 @@
 #   hitungan WO unik per hari (_tren_series, basis posting_date SE
 #   Manufacture — beda basis dari work_orders, di-caption frontend).
 
+import re
+from io import BytesIO
+
 import frappe
-from frappe.utils import add_days, cint, flt, getdate, today
+from frappe.utils import add_days, cint, flt, getdate, now_datetime, today
 
 from production_app.api.production_plan import _conversion_factor
 
@@ -499,3 +502,165 @@ def _tren_series(dari, sampai, company):
 		}
 		for uom in uoms
 	]
+
+
+# ---- FU80c: ekspor .xlsx laporan pemakaian bahan (mengganti CSV FU80
+# atas permintaan user) ------------------------------------------------------
+
+# Terjemahan status WO utk laporan (paritas woStatusText frontend).
+STATUS_WO_ID = {
+	"Draft": "Draft",
+	"Not Started": "Belum mulai",
+	"In Process": "Berjalan",
+	"Stopped": "Berhenti",
+	"Completed": "Selesai",
+	"Cancelled": "Dibatalkan",
+}
+
+
+def _yield_persen(planned, produced):
+	"""Persen hasil thd rencana (1 desimal, pola woYieldPct frontend);
+	rencana 0 → None (sel kosong, bukan nol palsu)."""
+	p, h = flt(planned), flt(produced)
+	if p <= 0:
+		return None
+	return round(h / p * 100, 1)
+
+
+def _keterangan_bahan(r):
+	"""Keterangan baris ringkasan — paritas Keterangan CSV FU80."""
+	if r.get("unlisted"):
+		return "tanpa rencana"
+	if r.get("variance_pct") is None:
+		return "tanpa dasar"
+	return ""
+
+
+def _nama_file_xlsx(produk, dari, sampai):
+	"""penggunaan-bahan-[<produk-slug>-]<dari|dari_sd_sampai> — paritas
+	bahanXlsxFilename frontend (slug lowercase, non-alfanumerik → '-')."""
+	slug = re.sub(r"[^a-z0-9]+", "-", (produk or "").lower()).strip("-")
+	inti = dari if dari == sampai else f"{dari}_sd_{sampai}"
+	return "penggunaan-bahan" + (f"-{slug}" if slug else "") + f"-{inti}"
+
+
+@frappe.whitelist()
+def material_usage_xlsx(
+	dari=None,
+	sampai=None,
+	company=None,
+	production_item=None,
+	search=None,
+	over_only=None,
+):
+	"""FU80c — unduh .xlsx laporan pemakaian bahan (ganti CSV FU80): 4 sheet
+	Info (meta filter + waktu cetak), Ringkasan per Bahan, Work Order
+	(riwayat produksi per order), Transaksi (konsumsi per SE Detail).
+	Data = aggregate(include_trace) dgn parameter SAMA dgn halaman #/bahan →
+	angka file = angka layar. Angka mentah numerik (bukan teks berformat)
+	supaya bisa dihitung ulang di Excel/Sheets; rentang di-validasi sama
+	(ValidationError 417 bila terbalik/terlalu panjang)."""
+	data = aggregate(
+		company=company,
+		dari=dari,
+		sampai=sampai,
+		production_item=production_item,
+		search=search,
+		over_only=cint(over_only),
+		include_trace=True,
+	)
+
+	d, s = data["dari"], data["sampai"]
+	tgl = lambda t: getdate(t).strftime("%d-%m-%Y")  # noqa: E731
+	rentang = tgl(d) if d == s else f"{tgl(d)} s.d. {tgl(s)}"
+	nama_produk = None
+	for p in data.get("products") or []:
+		if p.get("item_code") == production_item:
+			nama_produk = p.get("item_name") or production_item
+			break
+	nama_produk = nama_produk or production_item or ""
+
+	info = [
+		["Ekspor Penggunaan Bahan Baku", ""],
+		["Rentang", rentang],
+		["Company", company or "Semua company"],
+		["Produk", nama_produk or "Semua produk"],
+	]
+	if (search or "").strip():
+		info.append(["Pencarian", search.strip()])
+	if cint(over_only):
+		info.append(["Hanya di atas rencana", "Ya"])
+	info.append(["Dicetak", now_datetime().strftime("%d-%m-%Y %H:%M")])
+
+	ringkasan = [
+		["Kode", "Nama", "UOM", "Teoritis", "Aktual", "Selisih", "Selisih %", "Status", "Keterangan"]
+	]
+	for r in data.get("rows") or []:
+		pct = r.get("variance_pct")
+		ringkasan.append(
+			[
+				r.get("item_code") or "",
+				r.get("item_name") or r.get("item_code") or "",
+				r.get("uom") or "",
+				flt(r.get("expected")),
+				flt(r.get("consumed")),
+				flt(r.get("variance")),
+				round(flt(pct), 3) if pct is not None else None,
+				"Over" if r.get("over") else "Normal",
+				_keterangan_bahan(r),
+			]
+		)
+
+	wo_rows = [
+		["Work Order", "Tanggal", "Produk", "BOM", "Rencana", "Hasil", "UOM", "Yield %", "Status"]
+	]
+	for w in data.get("work_orders") or []:
+		wo_rows.append(
+			[
+				w.get("wo") or "",
+				w.get("tanggal") or "",
+				w.get("produk") or "",
+				w.get("bom") or "",
+				flt(w.get("planned_qty")),
+				flt(w.get("produced_qty")),
+				w.get("uom") or "",
+				_yield_persen(w.get("planned_qty"), w.get("produced_qty")),
+				STATUS_WO_ID.get(w.get("status"), w.get("status") or ""),
+			]
+		)
+
+	trx = [["Stock Entry", "Tanggal", "Work Order", "Bahan", "Kode", "Qty", "UOM", "Batch"]]
+	for t in data.get("transactions") or []:
+		trx.append(
+			[
+				t.get("se") or "",
+				t.get("tanggal") or "",
+				t.get("wo") or "",
+				t.get("item_name") or "",
+				t.get("item_code") or "",
+				flt(t.get("qty")),
+				t.get("uom") or "",
+				t.get("batch") or "",
+			]
+		)
+
+	# multi-sheet: satu workbook di-share ke make_xlsx (frappe menutup hanya
+	# workbook buatannya sendiri — punya sendiri ditutup manual di sini);
+	# import berat hanya saat benar-benar mengekspor
+	import xlsxwriter
+	from frappe.desk.utils import provide_binary_file
+	from frappe.utils.xlsxutils import make_xlsx
+
+	bio = BytesIO()
+	wb = xlsxwriter.Workbook(bio, {"in_memory": True})
+	for nama_sheet, baris in (
+		("Info", info),
+		("Ringkasan per Bahan", ringkasan),
+		("Work Order", wo_rows),
+		("Transaksi", trx),
+	):
+		make_xlsx(baris, nama_sheet, wb=wb)
+	wb.close()
+	provide_binary_file(
+		_nama_file_xlsx(nama_produk, d, s), "xlsx", bio.getvalue()
+	)
