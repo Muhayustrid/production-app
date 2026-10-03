@@ -173,7 +173,6 @@ const unitsOf = (it) => ({
   stockUom: it.stock_uom
 })
 const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
-const uomTampilan = (it) => it.display_uom || it.stock_uom
 </script>
 
 <template>
@@ -344,9 +343,6 @@ const uomTampilan = (it) => it.display_uom || it.stock_uom
                 <span v-if="qtyText(r, 'available').sub" class="qsub">{{ qtyText(r, 'available').sub }}</span>
               </b>
             </template>
-          </Column>
-          <Column header="UOM" headerClass="col-uom" bodyClass="col-uom">
-            <template #body="{ data: r }">{{ uomTampilan(r) }}</template>
           </Column>
           <Column header="Minimum" headerClass="col-angka" bodyClass="col-angka">
             <template #body="{ data: r }">

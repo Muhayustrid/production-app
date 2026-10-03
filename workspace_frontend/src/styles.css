@@ -3204,9 +3204,10 @@ textarea.input { height: auto; padding: 8px 10px; }
 /* select inline toolbar (native, pola filterpanel) */
 .sa-select { width: 172px; flex: none; }
 
-/* tabel 11 kolom: lebar pas kolom pendek, Nama Item menyerap sisa;
-   tablet/HP = scroll horizontal via container dash-table (tidak ditumpuk) */
-.sa-table .p-datatable-table { min-width: 1080px; }
+/* tabel 10 kolom (FU89: kolom UOM dihapus — satuan menempel di sel qty):
+   lebar pas kolom pendek, Nama Item menyerap sisa; tablet/HP = scroll
+   horizontal via container dash-table (tidak ditumpuk) */
+.sa-table .p-datatable-table { min-width: 1020px; }
 .sa-table .col-kode { width: 150px; overflow: hidden; }
 .sa-table .col-grup { width: 118px; }
 .sa-table .col-tersedia { width: 112px; text-align: right; white-space: nowrap; }
