@@ -27,8 +27,8 @@ import {
   STAGES, YIELD_LEGEND, RANGE_PRESETS, DAILY_MODES, achievementPct, activeTotal, activityText,
   activityTime, attentionText, bahanHref, chartDaily, deltaPctText, donutData, isOverdue,
   materialRowText, materialSummaryText, presetLabel, qualityPerUom, rangeParams, rangeLabel,
-  selesaiTileLabel, topMaterialRows, uomPrimaryText, variancePctText, woProgressPct, woQtyText,
-  yieldPctText, yieldSegments
+  selesaiTileLabel, targetText, topMaterialRows, uomPrimaryText, variancePctText, woProgressPct,
+  woQtyText, yieldPctText, yieldSegments
 } from './dashboard.js'
 import RangeField from './RangeField.vue'
 
@@ -204,11 +204,6 @@ function retryPage() {
 // telat = target selesai lewat saat data dimuat & WO belum selesai
 const loadedAtMs = ref(Date.now())
 const overdue = (row) => isOverdue(row, loadedAtMs.value)
-const jamText = (v) => {
-  const m = /(?:^|[ T])(\d{1,2}:\d{2})/.exec(String(v || ''))
-  return m ? m[1] : ''
-}
-const targetText = (row) => jamText(row?.plannedEnd) || String(row?.plannedEnd || '').slice(0, 10) || '-'
 // pill status: hijau selesai, amber belum mulai (draft), merah dibatalkan,
 // biru proses — warna token app, pola referensi
 function pillSeverity(w) {
@@ -577,7 +572,7 @@ onMounted(reload)
           <template #body="{ data }">
             <span class="dtarget" :class="{ late: overdue(data) }">
               <TriangleAlert v-if="overdue(data)" :size="14" :stroke-width="2" aria-hidden="true" />
-              {{ targetText(data) }}
+              {{ targetText(data?.plannedEnd, summary?.today) }}
             </span>
           </template>
         </Column>

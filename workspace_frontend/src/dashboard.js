@@ -425,6 +425,20 @@ export function isOverdue(row, nowMs) {
   return Number.isFinite(end) && end < nowMs
 }
 
+// kolom "Target selesai" dashboard: hari yang sama dgn hari ini (server) →
+// jam saja ("14:00"); hari lain → tanggal singkat ("1 Okt 2026") — jam tanpa
+// tanggal menyesatkan di rentang multi-hari; kosong → '-' (FU80e)
+export function targetText(plannedEnd, today) {
+  const s = String(plannedEnd || '')
+  if (!s) return '-'
+  const hari = s.slice(0, 10)
+  if (today && hari === String(today)) {
+    const m = /(?:^|[ T])(\d{1,2}:\d{2})/.exec(s)
+    return m ? m[1] : s
+  }
+  return tanggalPendek(hari)
+}
+
 // ============================================================================
 // FU79: rombak halaman Bahan baku (#/bahan) gaya referensi — KPI 5 kartu,
 // perbandingan konsumsi, tren produksi, traceability. Semua murni & teruji;

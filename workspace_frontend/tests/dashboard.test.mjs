@@ -410,6 +410,16 @@ test('isOverdue: target lewat & belum selesai; WO selesai tak pernah telat', asy
   assert.equal(isOverdue(null, now), false)
 })
 
+test('targetText: hari ini jam saja, hari lain tanggal singkat, kosong strip (FU80e)', async () => {
+  const { targetText } = await import('../src/dashboard.js')
+  assert.equal(targetText('2026-10-03 14:00:00', '2026-10-03'), '14:00')
+  assert.equal(targetText('2026-10-03 21:30', '2026-10-03'), '21:30')
+  assert.equal(targetText('2026-10-01 10:00:00', '2026-10-03'), '1 Okt 2026')
+  assert.equal(targetText('', '2026-10-03'), '-')
+  assert.equal(targetText(null, '2026-10-03'), '-')
+  assert.equal(targetText('2026-10-03 14:00:00', ''), '3 Okt 2026')
+})
+
 // ============================================================================
 // FU79: rombak halaman Bahan baku (#/bahan) — KPI 5 kartu, perbandingan
 // konsumsi, tren produksi, traceability. Semua helper murni teruji; aturan

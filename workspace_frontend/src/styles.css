@@ -2567,7 +2567,17 @@ textarea.input { height: auto; padding: 8px 10px; }
   color: var(--ink);
 }
 .dash-table .p-datatable-tbody > tr:last-child > td { border-bottom: 0; }
-.dash-table .p-datatable-tbody > tr:hover { background: var(--brand-softer); cursor: pointer; }.dash-table .wo-prod small.mono { color: var(--faint); font-weight: 400; }
+.dash-table .p-datatable-tbody > tr:hover { background: var(--brand-softer); cursor: pointer; }
+/* PrimeVue 4 membungkus teks header dgn div flex (.p-datatable-column-header-content)
+   — text-align pada th tidak ber efek atas posisinya. Kolom angka yang td-nya
+   rata kanan butuh justify-end agar header flush tepat di atas angka
+   (keluhan user FU80e: "header rata kiri, data rata kanan"). */
+.dash-table .col-rencana .p-datatable-column-header-content,
+.dash-table .col-hasil .p-datatable-column-header-content,
+.bahan-table .col-angka .p-datatable-column-header-content,
+.bahan-table .col-selisih .p-datatable-column-header-content,
+.bahan-table .col-pct .p-datatable-column-header-content { justify-content: flex-end; }
+.dash-table .wo-prod small.mono { color: var(--faint); font-weight: 400; }
 .dash-table .p-tag {
   border-radius: 999px;
   background: var(--grey-bg);
@@ -2638,7 +2648,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 .dash-table .col-wo { width: 180px; overflow: hidden; }
 .dash-table .col-wo .linklike { white-space: nowrap; } /* nomor WO satu baris */
 .dash-table .col-status { width: 130px; }
-.dash-table .col-target { width: 120px; }
+.dash-table .col-target { width: 140px; } /* ikon telat + "2 Okt 2026" satu baris */
 .dash-table .col-rencana, .dash-table .col-hasil { width: 130px; }
 
 /* progress bar kolom Progres: tipis, pill, di samping angka persen */
@@ -2663,7 +2673,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 
 /* target selesai: telat = oranye + ikon peringatan (pola referensi) */
-.dtarget { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.dtarget { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); }
 .dtarget.late { color: #b0720f; font-weight: 600; }
 .dtarget.late svg { color: #b8860b; }
 
@@ -2991,19 +3001,22 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .an-threshold { display: inline-flex; align-items: center; gap: 6px; }
 
-/* proporsi kolom (table-layout fixed dari .dash-table global): angka rata
-   kanan dengan lebar pas; Bahan/Produk tanpa lebar menyerap sisa ruang —
-   lebar via headerClass+bodyClass (prop styleClass PrimeVue 4 = no-op) */
+/* FU80e perapian: Bahan/Produk dipatok pas konten (nama pendek jangan
+   menyerap seluruh sisa — koridor kosong 370px+ sebelum kolom berikutnya);
+   sisa lebar panel terbagi proporsional ke semua kolom, nomor WO & BOM
+   satu baris */
 .bahan-table td { vertical-align: middle; }
+.bahan-table .col-bahan { width: 240px; }
 .bahan-table .col-uom { width: 64px; }
 .bahan-table .col-angka { width: 110px; text-align: right; white-space: nowrap; }
 .bahan-table .col-selisih { width: 140px; text-align: right; white-space: nowrap; }
 .bahan-table .col-pct { width: 96px; text-align: right; white-space: nowrap; }
 .bahan-table .col-status2 { width: 96px; }
 .bahan-table .col-chev { width: 40px; }
-.bahan-table .col-wo2 { width: 150px; }
-.bahan-table .col-prod2 { overflow: hidden; }
-.bahan-table .col-bom { width: 170px; }
+.bahan-table .col-wo2 { width: 190px; }
+.bahan-table .col-wo2 .linklike { white-space: nowrap; } /* nomor WO satu baris */
+.bahan-table .col-prod2 { width: 240px; overflow: hidden; }
+.bahan-table .col-bom { width: 210px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bahan-table .col-se { width: 170px; }
 .bahan-table .col-tgl { width: 100px; }
 .bahan-table .col-batch { width: 140px; }
