@@ -711,6 +711,17 @@ test('stockMockDataset: 8 item kurasi persis spesifikasi + invarian semua item',
     }
     assert.ok(it.movements.every((m) => m.tanggal <= '2026-10-03'), `tanggal ≤ hari ini ${it.item_code}`)
   }
+  // FU88: subset item ber-DIU — display_uom ≠ stock_uom, faktor integer ≥ 2;
+  // 8 item kurasi tanpa DIU (kg — angka spesifikasi dipertahankan)
+  const diu = d.items.filter((it) => it.display_uom)
+  assert.ok(diu.length >= 10, `item DIU cukup banyak (${diu.length})`)
+  for (const it of diu) {
+    assert.notEqual(it.display_uom, it.stock_uom, it.item_code)
+    assert.ok(Number.isInteger(it.qty_in_pack) && it.qty_in_pack >= 2, `faktor ${it.item_code}`)
+  }
+  for (const kode of ['RM-FLOUR-001', 'RM-SUGAR-002', 'RM-BUTTER-003', 'RM-COCOA-004', 'RM-CHEESE-005', 'RM-YEAST-006']) {
+    assert.ok(!byCode[kode].display_uom, `kurasi tanpa DIU ${kode}`)
+  }
 })
 
 // ---- FU87: nama file ekspor XLSX ketersediaan stock (paritas server) ----

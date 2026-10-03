@@ -32,10 +32,12 @@ def _siapkan_sheet(items, summary, warehouse):
 		["Stock Habis", cint(summary.get("habis"))],
 		["Dicetak", now_datetime().strftime("%d-%m-%Y %H:%M")],
 	]
+	# FU88: 4 kolom qty mengikuti layar = UOM tampilan (Default Inventory UOM,
+	# dikonversi klien); kolom terakhir menyimpan stok mentah stock UOM (ledger)
 	baris = [
 		[
 			"Kode Item", "Nama Item", "Grup Item", "Stok", "Reserved", "Tersedia",
-			"UOM", "Stok Minimum", "Status", "Kapasitas (Batch)",
+			"UOM", "Stok Minimum", "Status", "Kapasitas (Batch)", "Stok (Stock UOM)",
 		]
 	]
 	kapasitas = [["Kode Item", "Nama Item", "Produk Resep", "Kapasitas (Batch)"]]
@@ -45,13 +47,14 @@ def _siapkan_sheet(items, summary, warehouse):
 				it.get("item_code") or "",
 				it.get("item_name") or "",
 				it.get("item_group") or "",
-				flt(it.get("actual_qty")),
-				flt(it.get("reserved_qty")),
-				flt(it.get("available")),
-				it.get("stock_uom") or "",
-				flt(it.get("min_stock")),
+				flt(it.get("stok_diu")),
+				flt(it.get("reserved_diu")),
+				flt(it.get("tersedia_diu")),
+				it.get("uom_tampilan") or it.get("stock_uom") or "",
+				flt(it.get("minimum_diu")),
 				STATUS_LABEL.get(it.get("status"), it.get("status") or ""),
 				cint(it.get("capacity_batch")),
+				flt(it.get("actual_qty")),
 			]
 		)
 		for r in it.get("capacity_detail") or []:

@@ -3325,3 +3325,13 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .topbtn:hover { background: var(--brand-softer); color: var(--brand-strong); }
 .topbtn:active { transform: scale(0.96); }
+
+/* ================== FU88: qty dua baris DIU + sub stock UOM ================ */
+/* sel tabel: kolom angka rata kanan; sub = stock UOM (konvensi FU78) */
+.sa-qty { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
+.sa-qty .qmain { font-weight: 650; font-size: 13.5px; }
+.sa-qty .qsub { font-size: 11px; color: var(--faint); }
+/* tile drawer: rata kiri, qmain memakai bobot tile */
+.sa-tile b { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.25; }
+.sa-tile .qmain { font-weight: 700; font-size: 14.5px; }
+.sa-tile .qsub { font-size: 11px; font-weight: 500; color: var(--muted); }

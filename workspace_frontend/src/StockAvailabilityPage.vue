@@ -21,7 +21,7 @@ import {
 } from 'lucide-vue-next'
 import { stockAvailabilityState, loadStockAvailability } from './store.js'
 import { fmtId, fmtStampShort } from './format.js'
-import { harusKeLogin, loginRedirectUrl, stockXlsxFilename, tanggalPendek } from './dashboard.js'
+import { harusKeLogin, loginRedirectUrl, stockXlsxFilename, tanggalPendek, woQtyText } from './dashboard.js'
 
 const q = ref('')
 const grup = ref('ALL')
@@ -92,19 +92,28 @@ async function exportXlsx() {
         'X-Frappe-CSRF-Token': window.csrf_token || ''
       },
       body: JSON.stringify({
-        items: terfilter.value.map((it) => ({
-          item_code: it.item_code,
-          item_name: it.item_name,
-          item_group: it.item_group,
-          actual_qty: it.actual_qty,
-          reserved_qty: it.reserved_qty,
-          available: it.available,
-          stock_uom: it.stock_uom,
-          min_stock: it.min_stock,
-          status: it.status,
-          capacity_batch: it.capacity_batch,
-          capacity_detail: it.capacity_detail
-        })),
+        items: terfilter.value.map((it) => {
+          // FU88: file mengikuti layar — 4 kolom qty dalam UOM tampilan (DIU,
+          // 2 desimal); stok mentah stock UOM tetap dikirim utk kolom terakhir
+          const f = Number(it.qty_in_pack)
+          const ada = Number.isFinite(f) && f > 0 && it.display_uom && it.display_uom !== it.stock_uom
+          const conv = (q) => (ada ? Math.round((q / f) * 100) / 100 : q)
+          return {
+            item_code: it.item_code,
+            item_name: it.item_name,
+            item_group: it.item_group,
+            stock_uom: it.stock_uom,
+            uom_tampilan: ada ? it.display_uom : it.stock_uom,
+            actual_qty: it.actual_qty,
+            stok_diu: conv(it.actual_qty),
+            reserved_diu: conv(it.reserved_qty),
+            tersedia_diu: conv(it.available),
+            minimum_diu: conv(it.min_stock),
+            status: it.status,
+            capacity_batch: it.capacity_batch,
+            capacity_detail: it.capacity_detail
+          }
+        }),
         summary: summary.value,
         warehouse: gudang.value || data.value?.warehouse || ''
       })
@@ -155,6 +164,16 @@ function bukaItem(row) {
 
 const STATUS_LABEL = { aman: 'Aman', menipis: 'Menipis', habis: 'Habis' }
 const STATUS_SEVERITY = { aman: 'success', menipis: 'warn', habis: 'danger' }
+
+// FU88: UOM tampilan = Default Inventory UOM (konvensi FU78) — qty dirender
+// main(DIU)+sub(stock UOM) lewat woQtyText; tanpa DIU → stock UOM apa adanya
+const unitsOf = (it) => ({
+  qtyInPack: it.qty_in_pack,
+  displayUom: it.display_uom,
+  stockUom: it.stock_uom
+})
+const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
+const uomTampilan = (it) => it.display_uom || it.stock_uom
 </script>
 
 <template>
@@ -303,23 +322,39 @@ const STATUS_SEVERITY = { aman: 'success', menipis: 'warn', habis: 'danger' }
             <template #body="{ data: r }">{{ r.item_group }}</template>
           </Column>
           <Column header="Stok" headerClass="col-angka" bodyClass="col-angka">
-            <template #body="{ data: r }">{{ fmtId(r.actual_qty) }} <small class="kuom">{{ r.stock_uom }}</small></template>
+            <template #body="{ data: r }">
+              <span class="wo-qty sa-qty">
+                <span class="qmain">{{ qtyText(r, 'actual_qty').main }}</span>
+                <span v-if="qtyText(r, 'actual_qty').sub" class="qsub">{{ qtyText(r, 'actual_qty').sub }}</span>
+              </span>
+            </template>
           </Column>
           <Column header="Reserved" headerClass="col-angka" bodyClass="col-angka">
             <template #body="{ data: r }">
-              <span class="sa-res">{{ fmtId(r.reserved_qty) }} <small class="kuom">{{ r.stock_uom }}</small></span>
+              <span class="sa-res wo-qty sa-qty">
+                <span class="qmain">{{ qtyText(r, 'reserved_qty').main }}</span>
+                <span v-if="qtyText(r, 'reserved_qty').sub" class="qsub">{{ qtyText(r, 'reserved_qty').sub }}</span>
+              </span>
             </template>
           </Column>
           <Column header="Tersedia" headerClass="col-tersedia" bodyClass="col-tersedia">
             <template #body="{ data: r }">
-              <b class="sa-avail">{{ fmtId(r.available) }} <small class="kuom">{{ r.stock_uom }}</small></b>
+              <b class="sa-avail wo-qty sa-qty">
+                <span class="qmain">{{ qtyText(r, 'available').main }}</span>
+                <span v-if="qtyText(r, 'available').sub" class="qsub">{{ qtyText(r, 'available').sub }}</span>
+              </b>
             </template>
           </Column>
           <Column header="UOM" headerClass="col-uom" bodyClass="col-uom">
-            <template #body="{ data: r }">{{ r.stock_uom }}</template>
+            <template #body="{ data: r }">{{ uomTampilan(r) }}</template>
           </Column>
           <Column header="Minimum" headerClass="col-angka" bodyClass="col-angka">
-            <template #body="{ data: r }">{{ fmtId(r.min_stock) }} <small class="kuom">{{ r.stock_uom }}</small></template>
+            <template #body="{ data: r }">
+              <span class="wo-qty sa-qty">
+                <span class="qmain">{{ qtyText(r, 'min_stock').main }}</span>
+                <span v-if="qtyText(r, 'min_stock').sub" class="qsub">{{ qtyText(r, 'min_stock').sub }}</span>
+              </span>
+            </template>
           </Column>
           <Column header="Status" headerClass="col-status2" bodyClass="col-status2">
             <template #body="{ data: r }">
@@ -361,7 +396,9 @@ const STATUS_SEVERITY = { aman: 'success', menipis: 'warn', habis: 'danger' }
       Sumber data: mock FU83 — saat integrasi ERPNext dibaca dari Bin (actual/reserved), Item
       (grup, UOM), dan Stock Ledger Entry (movement) per gudang. Tersedia = stok − reserved.
       Status: habis bila tersedia ≤ 0, menipis di bawah stok minimum, sisanya aman. Kapasitas
-      produksi = estimasi batch dari resep terdaftar (belum kalkulasi BOM nyata).
+      produksi = estimasi batch dari resep terdaftar (belum kalkulasi BOM nyata). Stok, reserved,
+      tersedia, dan minimum tampil dalam Default Inventory UOM item (FU78 — fallback stock UOM
+      bila DIU kosong; angka kecil = stock UOM); tabel movement memakai stock UOM (ledger SLE).
     </p>
   </template>
 
@@ -377,19 +414,31 @@ const STATUS_SEVERITY = { aman: 'success', menipis: 'warn', habis: 'danger' }
       <div class="sa-tiles">
         <div class="sa-tile">
           <label>Stok saat ini</label>
-          <b>{{ fmtId(itemTerpilih.actual_qty) }} <small>{{ itemTerpilih.stock_uom }}</small></b>
+          <b>
+            <span class="qmain">{{ qtyText(itemTerpilih, 'actual_qty').main }}</span>
+            <small v-if="qtyText(itemTerpilih, 'actual_qty').sub" class="qsub">{{ qtyText(itemTerpilih, 'actual_qty').sub }}</small>
+          </b>
         </div>
         <div class="sa-tile">
           <label>Reserved</label>
-          <b class="sa-res">{{ fmtId(itemTerpilih.reserved_qty) }} <small>{{ itemTerpilih.stock_uom }}</small></b>
+          <b class="sa-res">
+            <span class="qmain">{{ qtyText(itemTerpilih, 'reserved_qty').main }}</span>
+            <small v-if="qtyText(itemTerpilih, 'reserved_qty').sub" class="qsub">{{ qtyText(itemTerpilih, 'reserved_qty').sub }}</small>
+          </b>
         </div>
         <div class="sa-tile utama">
           <label>Tersedia</label>
-          <b>{{ fmtId(itemTerpilih.available) }} <small>{{ itemTerpilih.stock_uom }}</small></b>
+          <b>
+            <span class="qmain">{{ qtyText(itemTerpilih, 'available').main }}</span>
+            <small v-if="qtyText(itemTerpilih, 'available').sub" class="qsub">{{ qtyText(itemTerpilih, 'available').sub }}</small>
+          </b>
         </div>
         <div class="sa-tile">
           <label>Stok minimum</label>
-          <b>{{ fmtId(itemTerpilih.min_stock) }} <small>{{ itemTerpilih.stock_uom }}</small></b>
+          <b>
+            <span class="qmain">{{ qtyText(itemTerpilih, 'min_stock').main }}</span>
+            <small v-if="qtyText(itemTerpilih, 'min_stock').sub" class="qsub">{{ qtyText(itemTerpilih, 'min_stock').sub }}</small>
+          </b>
         </div>
       </div>
 

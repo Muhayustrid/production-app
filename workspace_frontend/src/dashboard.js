@@ -784,6 +784,17 @@ function mockItem(sisa, indeks, i) {
     reserved = (indeks * 7) % 25
     actual = available + reserved
   }
+  // FU88: sebagian filler ber-DIU (Default Inventory UOM) — kurasi TIDAK (kg,
+  // angka spesifikasi user dipertahankan); layar menampilkan DIU dgn sub stock
+  let display_uom = null
+  let qty_in_pack = null
+  if (!kemasan && indeks % 4 === 1) {
+    display_uom = 'Pack'
+    qty_in_pack = 12
+  } else if (!kemasan && uom === 'kg' && indeks % 4 === 3) {
+    display_uom = 'Sak'
+    qty_in_pack = 25
+  }
   const batchMax = sisa === 'habis' ? 0 : sisa === 'menipis' ? 1 + (indeks % 3) : 2 + ((indeks * 5) % 12)
   const nResep = indeks % 2 ? 1 : 2
   const resep = Array.from({ length: nResep }, (_, r) => {
@@ -799,6 +810,8 @@ function mockItem(sisa, indeks, i) {
     available,
     stock_uom: uom,
     min_stock: minimum,
+    display_uom,
+    qty_in_pack,
     capacity_detail: resep
   }
 }
