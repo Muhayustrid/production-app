@@ -9,11 +9,12 @@ import FormOrderCreate from './FormOrderCreate.vue'
 import Dashboard from './Dashboard.vue'
 import MaterialUsagePage from './MaterialUsagePage.vue'
 import StockAvailabilityPage from './StockAvailabilityPage.vue'
+import LainnyaPage from './LainnyaPage.vue'
 import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
 import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
 import { activeTotal } from './dashboard.js'
-import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, PackageSearch, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
+import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, MoreHorizontal, PackageSearch, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
 
 // router hash minimal: '#/' (dashboard, FU72), '#/wo' (daftar), '#/wo/<id>'
 // (work order), '#/handover' (stock entry), '#/penggunaan-bahan' (FU74; FU82
@@ -56,7 +57,8 @@ const section = computed(() =>
         : hash.value.startsWith('#/form-order') ? 'form-order'
           : hash.value.startsWith('#/penggunaan-bahan') ? 'material-usage'
             : hash.value.startsWith('#/ketersediaan-stock') ? 'stock-availability'
-              : 'dashboard'
+              : hash.value.startsWith('#/lainnya') ? 'lainnya'
+                : 'dashboard'
 )
 // FU74: '#/penggunaan-bahan?bahan=..&dari=..&sampai=..&company=..' → props awal
 // halaman (FU82: rename rute dari '#/bahan'; param ?bahan= tetap — kosakata materi)
@@ -409,29 +411,19 @@ function onNavClick() {
         </span>
         <span class="bnav-label">Form Order</span>
       </a>
+      <!-- FU84: bottom nav HP dipangkas — Penggunaan & Ketersediaan Stock pindah
+           ke halaman Lainnya (#/lainnya); sidebar PC tidak berubah -->
       <a
-        href="#/penggunaan-bahan"
+        href="#/lainnya"
         class="bnav-item"
-        :class="{ on: section === 'material-usage' }"
-        :aria-current="section === 'material-usage' ? 'page' : undefined"
+        :class="{ on: section === 'lainnya' }"
+        :aria-current="section === 'lainnya' ? 'page' : undefined"
         @click="onNavClick"
       >
         <span class="bnav-ic">
-          <Wheat :size="20" :stroke-width="1.9" />
+          <MoreHorizontal :size="20" :stroke-width="1.9" />
         </span>
-        <span class="bnav-label">Penggunaan</span>
-      </a>
-      <a
-        href="#/ketersediaan-stock"
-        class="bnav-item"
-        :class="{ on: section === 'stock-availability' }"
-        :aria-current="section === 'stock-availability' ? 'page' : undefined"
-        @click="onNavClick"
-      >
-        <span class="bnav-ic">
-          <PackageSearch :size="20" :stroke-width="1.9" />
-        </span>
-        <span class="bnav-label">Stok</span>
+        <span class="bnav-label">Lainnya</span>
       </a>
     </nav>
 
@@ -453,6 +445,7 @@ function onNavClick() {
             :initial-company="usageQuery.company"
           />
           <StockAvailabilityPage v-else-if="section === 'stock-availability'" />
+          <LainnyaPage v-else-if="section === 'lainnya'" />
           <Workspace v-else-if="woId" :key="woId" :id="woId" />
           <WorkOrderList v-else-if="section === 'workorder'" />
         </div>

@@ -3275,3 +3275,35 @@ textarea.input { height: auto; padding: 8px 10px; }
   .sa-toolbar .searchbox { min-width: 0; flex: 1 1 100%; }
   .sa-select { flex: 1 1 44%; width: auto; }
 }
+
+/* ========================= FU84: halaman Lainnya (#/lainnya) =============== */
+/* daftar navigasi gaya app: baris ikon soft + label + deskripsi + chevron
+   (pola visual trace-wo, tapi markup sendiri agar tak terikat seksi trace) */
+.ln-card { margin-bottom: 14px; }
+.ln-list { display: flex; flex-direction: column; }
+.ln-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 4px;
+  border-bottom: 1px solid var(--line);
+  text-decoration: none;
+  color: inherit;
+  border-radius: 8px;
+}
+.ln-row:last-child { border-bottom: 0; }
+.ln-row:hover { background: var(--brand-softer); }
+.ln-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+.ln-ico.kblue { background: var(--brand-soft); color: var(--brand-strong); }
+.ln-ico.kgreen { background: var(--ok-soft); color: var(--ok-strong); }
+.ln-ico.kviolet { background: var(--grey-bg); color: var(--grey-ink); }
+.ln-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ln-label { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.ln-desc { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
