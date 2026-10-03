@@ -752,3 +752,9 @@ Kontrak: sidebar PC TIDAK berubah (dua halaman tetap di sidebar). Bottom nav (�
 Perubahan rencana: (1) `LainnyaPage.vue` baru. (2) App.vue — import + section + render branch + bottomnav 5 item (hapus Penggunaan & Stok). (3) styles.css — blok `ln-*` kecil.
 
 Result: **DONE (2026-10-03).** Node **100/100** (tanpa helper baru — logika satu computed kondisional, cukup E2E). Build js `7242a47f…` / css `21c61e0e…` docker cp 2 stack HTTP md5 = host. E2E 8081: mobile 390 bottom nav persis 5 item (Dashboard/Work Order/Stock Entry/Form Order/Lainnya — Form Order tetap kondisional canFormOrder), `#/lainnya` render 3 baris (Penggunaan bahan baku, Ketersediaan Stock, Pengaturan — masing-masing ikon soft + deskripsi + chevron), Lainnya ter-highlight, klik baris → halaman tujuan terbuka (Ketersediaan Stock KPI 128; Penggunaan bahan baku KPI 185 Nos), overflow 0; desktop 1280 sidebar TIDAK berubah (8 item termasuk kedua halaman), bottomnav display:none, regresi Dashboard sehat. Catatan: Pengaturan kini terjangkau dari HP lewat Lainnya (sebelumnya tidak ada jalur mobile). Docs TASKS §Z11 + PROJECT_STATE + memory.
+
+## Z12. FU85 — hapus footer "Tersambung ERPNext — server adalah sumber kebenaran." di semua halaman (frontend murni)
+
+Status: COMPLETE (2026-10-03) — permintaan user: tulisan footer itu dihapus saja. Footer statis di App.vue dihapus; kelas `.appfoot` TETAP (dipakai pesan error "Gagal memuat … coba lagi" di App/FormOrderPage/HandoverBoard yang fungsional).
+
+Result: **DONE (2026-10-03).** Node 100/100; build js `7081cfa7…` / css TIDAK berubah (`21c61e0e…`), docker cp 2 stack HTTP=host. E2E: teks "Tersambung ERPNext" tidak ada lagi di Dashboard, Ketersediaan Stock, dan Lainnya (elemen footer global tunggal — sekali hilang, hilang di semua halaman). Docs TASKS §Z12 + PROJECT_STATE.

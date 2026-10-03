@@ -449,9 +449,8 @@ function onNavClick() {
           <Workspace v-else-if="woId" :key="woId" :id="woId" />
           <WorkOrderList v-else-if="section === 'workorder'" />
         </div>
-        <footer class="appfoot">
-          Tersambung ERPNext — server adalah sumber kebenaran.
-        </footer>
+        <!-- FU85: footer statis "Tersambung ERPNext" dihapus atas permintaan user;
+             .appfoot tetap dipakai pesan error fungsional -->
       </div>
     </div>
 
