@@ -637,3 +637,78 @@ test('materialUsageXlsxFilename: ISO ber-tanggal; produk jadi slug; satu hari ta
   assert.equal(materialUsageXlsxFilename('2026-10-02', '2026-10-02'), 'penggunaan-bahan-2026-10-02.xlsx')
   assert.equal(materialUsageXlsxFilename('', ''), 'penggunaan-bahan.xlsx')
 })
+
+// ---- FU83: ketersediaan stock — status dari angka, mock dataset 128 item ----
+test('stockStatus: habis ≤ 0, menipis di bawah minimum, sisanya aman', async () => {
+  const { stockStatus } = await import('../src/dashboard.js')
+  assert.equal(stockStatus(105, 100), 'aman')
+  assert.equal(stockStatus(100, 100), 'aman') // pas di ambang masih aman
+  assert.equal(stockStatus(38, 50), 'menipis')
+  assert.equal(stockStatus(0, 25), 'habis')
+  assert.equal(stockStatus(-5, 10), 'habis') // retur lebih dari stok
+  assert.equal(stockStatus(0, 0), 'habis') // stok nol tetap habis walau tanpa ambang
+  assert.equal(stockStatus(10, null), 'aman') // item tanpa minimum
+  assert.equal(stockStatus(0, null), 'habis')
+  assert.equal(stockStatus(null, 10), 'habis') // data Bin belum ada
+})
+
+test('stockMockDataset: 128 item, distribusi kartu 96/21/11, ringkasan = hitungan item', async () => {
+  const { stockMockDataset } = await import('../src/dashboard.js')
+  const d = stockMockDataset()
+  assert.equal(d.items.length, 128)
+  assert.equal(d.warehouse, 'Gudang Produksi')
+  const hitung = { aman: 0, menipis: 0, habis: 0 }
+  for (const it of d.items) hitung[it.status]++
+  assert.deepEqual(hitung, { aman: 96, menipis: 21, habis: 11 })
+  assert.deepEqual(d.summary, { total: 128, aman: 96, menipis: 21, habis: 11 })
+})
+
+test('stockMockDataset: 8 item kurasi persis spesifikasi + invarian semua item', async () => {
+  const { stockMockDataset } = await import('../src/dashboard.js')
+  const d = stockMockDataset()
+  const byCode = Object.fromEntries(d.items.map((it) => [it.item_code, it]))
+  // angka persis prompt (status MENURUN dari angka — Mentega 34<40 = menipis)
+  const kurasi = [
+    ['RM-FLOUR-001', 'Tepung Terigu', 125, 20, 100, 'aman', 4],
+    ['RM-SUGAR-002', 'Gula Pasir', 74, 36, 50, 'menipis', 2],
+    ['RM-BUTTER-003', 'Mentega Tawar', 46, 12, 40, 'menipis', 5],
+    ['RM-COCOA-004', 'Bubuk Kakao', 18, 18, 25, 'habis', 0],
+    ['RM-CHEESE-005', 'Keju Cheddar', 32, 10, 25, 'menipis', 3],
+    ['RM-YEAST-006', 'Ragi Instan', 22, 4, 15, 'aman', 8]
+  ]
+  for (const [kode, nama, stok, reserved, min, status, cap] of kurasi) {
+    const it = byCode[kode]
+    assert.ok(it, `${kode} ada`)
+    assert.equal(it.item_name, nama)
+    assert.equal(it.actual_qty, stok, `${kode} stok`)
+    assert.equal(it.reserved_qty, reserved, `${kode} reserved`)
+    assert.equal(it.min_stock, min, `${kode} minimum`)
+    assert.equal(it.status, status, `${kode} status`)
+    assert.equal(it.capacity_batch, cap, `${kode} kapasitas`)
+    assert.equal(it.warehouse, 'Gudang Produksi')
+  }
+  // invarian seluruh 128 item: available = stok − reserved, kode unik,
+  // kapasitas = maks detail resep, rantai saldo movement berakhir di stok kini
+  const kode = new Set()
+  for (const it of d.items) {
+    assert.equal(it.available, it.actual_qty - it.reserved_qty, it.item_code)
+    assert.ok(!kode.has(it.item_code), `kode unik ${it.item_code}`)
+    kode.add(it.item_code)
+    assert.ok(it.capacity_detail.length >= 1, `resep ada ${it.item_code}`)
+    for (const r of it.capacity_detail) {
+      assert.equal(typeof r.product, 'string', `resep.product ${it.item_code}`)
+      assert.ok(Number.isInteger(r.batches) && r.batches >= 0, `resep.batches ${it.item_code}`)
+    }
+    const maxCap = it.capacity_detail.reduce((m, r) => Math.max(m, r.batches), 0)
+    assert.ok(Number.isFinite(it.capacity_batch), `capacity_batch finite ${it.item_code}`)
+    assert.equal(it.capacity_batch, maxCap, it.item_code)
+    const akhir = it.movements[it.movements.length - 1]
+    assert.equal(akhir.saldo, it.actual_qty, `saldo akhir ${it.item_code}`)
+    for (let i = 1; i < it.movements.length; i++) {
+      const prev = it.movements[i - 1]
+      const cur = it.movements[i]
+      assert.equal(cur.saldo, prev.saldo + cur.masuk - cur.keluar, `rantai ${it.item_code} #${i}`)
+    }
+    assert.ok(it.movements.every((m) => m.tanggal <= '2026-10-03'), `tanggal ≤ hari ini ${it.item_code}`)
+  }
+})

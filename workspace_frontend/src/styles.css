@@ -3188,3 +3188,90 @@ textarea.input { height: auto; padding: 8px 10px; }
 .dash-rkustom .ffield label { font-size: 12px; color: var(--muted); }
 .dash-rkustom .p-button { align-self: flex-end; }
 .dash-range-hint { margin: 0; font-size: 12.5px; color: var(--bad-ink); }
+
+/* ====================== FU83: ketersediaan stock (#/ketersediaan-stock) ==== */
+.tone-bad { color: var(--bad-ink); }
+
+/* 4 kartu KPI (grid sendiri — mu-kpis milik 5 kartu halaman penggunaan-bahan) */
+.sa-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.dash-kpi .kico.kred { background: var(--bad-bg); color: var(--bad-ink); }
+
+/* select inline toolbar (native, pola filterpanel) */
+.sa-select { width: 172px; flex: none; }
+
+/* tabel 11 kolom: lebar pas kolom pendek, Nama Item menyerap sisa;
+   tablet/HP = scroll horizontal via container dash-table (tidak ditumpuk) */
+.sa-table .p-datatable-table { min-width: 1080px; }
+.sa-table .col-kode { width: 150px; overflow: hidden; }
+.sa-table .col-grup { width: 118px; }
+.sa-table .col-tersedia { width: 112px; text-align: right; white-space: nowrap; }
+.sa-table .col-kapas { width: 104px; text-align: right; white-space: nowrap; }
+/* FU80e: judul kolom angka sejajar kanan lewat wrapper flex PrimeVue, bukan
+   text-align th (col-angka sudah diwarisi dari .mu-table) */
+.sa-table .col-tersedia .p-datatable-column-header-content,
+.sa-table .col-kapas .p-datatable-column-header-content { justify-content: flex-end; }
+.sa-avail { font-weight: 700; }
+.sa-res { color: var(--muted); }
+
+/* drawer detail item — specificity (0,3,0) untuk mengalahkan style runtime
+   tema PrimeVue `.p-drawer-right .p-drawer { width: 20rem }` yang menyuntik
+   belakangan (spesifikasi setara = urutan menang) */
+.p-drawer-right .sa-drawer.p-drawer { width: min(620px, 94vw); }
+.sa-dhead h3 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.sa-dcode { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+.sa-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.sa-tile {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+  min-width: 0;
+}
+.sa-tile label { display: block; font-size: 10.5px; font-weight: 600; color: var(--muted); }
+.sa-tile b { display: block; margin-top: 3px; font-size: 14.5px; font-weight: 700; white-space: nowrap; }
+.sa-tile b small { font-size: 11px; font-weight: 500; color: var(--muted); }
+/* Tersedia = angka utama halaman ini → tile berlatar brand lembut */
+.sa-tile.utama { background: var(--brand-softer); border-color: transparent; }
+.sa-sect { margin-top: 18px; }
+.sa-cap { display: flex; flex-direction: column; }
+.sa-cap-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.sa-cap-row:last-child { border-bottom: 0; }
+.sa-cap-row b { font-weight: 600; white-space: nowrap; }
+.sa-cap-note { margin: 6px 0 0; font-size: 12.5px; color: var(--bad-ink); }
+/* tabel movement di dalam drawer: padding & font dipadatkan agar keenam
+   kolom (sampai Saldo) muat tanpa scroll di drawer 620px */
+.sa-mv .p-datatable-table { min-width: 512px; }
+.sa-mv .p-datatable-tbody > tr > td { padding: 8px; font-size: 12.5px; }
+.sa-mv .col-tgl { width: 84px; white-space: nowrap; }
+.sa-mv .col-mvjenis { width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-mv .col-se { width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.sa-mv .col-angka { width: 64px; }
+
+@media (max-width: 1240px) {
+  .sa-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .sa-kpis { grid-template-columns: 1fr; }
+  .sa-toolbar { flex-wrap: wrap; }
+  /* min-width:0 warisan rule toolbar halaman lain (<=820px) mempersempit
+     searchbox hingga 8px — di sini search sengaja satu baris penuh */
+  .sa-toolbar .searchbox { min-width: 0; flex: 1 1 100%; }
+  .sa-select { flex: 1 1 44%; width: auto; }
+}

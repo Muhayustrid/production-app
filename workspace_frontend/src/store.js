@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 
 import { applyFontScale } from './ui-preferences.js'
-import { harusKeLogin, loginRedirectUrl } from './dashboard.js'
+import { harusKeLogin, loginRedirectUrl, stockMockDataset } from './dashboard.js'
 
 // ============================================================================
 // ADAPTER SERVER (T13/T14) — menggantikan mock store.
@@ -447,6 +447,26 @@ export async function loadMaterialUsage(params = {}) {
     materialUsageState.error = e.message
   } finally {
     materialUsageState.loading = false
+  }
+}
+
+// FU83: ketersediaan stock — MASIH MOCK (dashboard.stockMockDataset, struktur
+// item = respons ERPNext nanti: Bin actual/reserved + Item grup/uom + SLE
+// movement). Saat integrasi: ganti isi try menjadi
+//   stockAvailabilityState.data = await call('production_app.api.stock_availability', { warehouse: ... })
+// — bentuk state & halaman StockAvailabilityPage tidak berubah.
+export const stockAvailabilityState = reactive({ loading: false, error: '', loaded: false, data: null })
+
+export async function loadStockAvailability() {
+  stockAvailabilityState.loading = true
+  stockAvailabilityState.error = ''
+  try {
+    stockAvailabilityState.data = stockMockDataset()
+    stockAvailabilityState.loaded = true
+  } catch (e) {
+    stockAvailabilityState.error = e.message
+  } finally {
+    stockAvailabilityState.loading = false
   }
 }
 

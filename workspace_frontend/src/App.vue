@@ -8,11 +8,12 @@ import FormOrderPage from './FormOrderPage.vue'
 import FormOrderCreate from './FormOrderCreate.vue'
 import Dashboard from './Dashboard.vue'
 import MaterialUsagePage from './MaterialUsagePage.vue'
+import StockAvailabilityPage from './StockAvailabilityPage.vue'
 import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
 import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
 import { activeTotal } from './dashboard.js'
-import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
+import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, PackageSearch, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
 
 // router hash minimal: '#/' (dashboard, FU72), '#/wo' (daftar), '#/wo/<id>'
 // (work order), '#/handover' (stock entry), '#/penggunaan-bahan' (FU74; FU82
@@ -54,7 +55,8 @@ const section = computed(() =>
       : hash.value.startsWith('#/handover') ? 'handover'
         : hash.value.startsWith('#/form-order') ? 'form-order'
           : hash.value.startsWith('#/penggunaan-bahan') ? 'material-usage'
-            : 'dashboard'
+            : hash.value.startsWith('#/ketersediaan-stock') ? 'stock-availability'
+              : 'dashboard'
 )
 // FU74: '#/penggunaan-bahan?bahan=..&dari=..&sampai=..&company=..' → props awal
 // halaman (FU82: rename rute dari '#/bahan'; param ?bahan= tetap — kosakata materi)
@@ -326,6 +328,16 @@ function onNavClick() {
           <Wheat :size="18" :stroke-width="1.9" class="nicon" />
           <span class="nlabel">Penggunaan bahan baku</span>
         </a>
+        <a
+          href="#/ketersediaan-stock"
+          class="navitem"
+          :class="{ on: section === 'stock-availability' }"
+          :aria-current="section === 'stock-availability' ? 'page' : undefined"
+          @click="onNavClick"
+        >
+          <PackageSearch :size="18" :stroke-width="1.9" class="nicon" />
+          <span class="nlabel">Ketersediaan Stock</span>
+        </a>
         <div class="navsection">Sistem</div>
         <a
           v-if="canSettings"
@@ -409,6 +421,18 @@ function onNavClick() {
         </span>
         <span class="bnav-label">Penggunaan</span>
       </a>
+      <a
+        href="#/ketersediaan-stock"
+        class="bnav-item"
+        :class="{ on: section === 'stock-availability' }"
+        :aria-current="section === 'stock-availability' ? 'page' : undefined"
+        @click="onNavClick"
+      >
+        <span class="bnav-ic">
+          <PackageSearch :size="20" :stroke-width="1.9" />
+        </span>
+        <span class="bnav-label">Stok</span>
+      </a>
     </nav>
 
     <div class="maincol">
@@ -428,6 +452,7 @@ function onNavClick() {
             :initial-sampai="usageQuery.sampai"
             :initial-company="usageQuery.company"
           />
+          <StockAvailabilityPage v-else-if="section === 'stock-availability'" />
           <Workspace v-else-if="woId" :key="woId" :id="woId" />
           <WorkOrderList v-else-if="section === 'workorder'" />
         </div>
