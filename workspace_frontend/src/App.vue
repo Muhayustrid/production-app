@@ -7,7 +7,7 @@ import HandoverBoard from './HandoverBoard.vue'
 import FormOrderPage from './FormOrderPage.vue'
 import FormOrderCreate from './FormOrderCreate.vue'
 import Dashboard from './Dashboard.vue'
-import BahanPage from './BahanPage.vue'
+import MaterialUsagePage from './MaterialUsagePage.vue'
 import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
 import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
@@ -15,10 +15,24 @@ import { activeTotal } from './dashboard.js'
 import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
 
 // router hash minimal: '#/' (dashboard, FU72), '#/wo' (daftar), '#/wo/<id>'
-// (work order), '#/handover' (stock entry), '#/bahan' (FU74)
-const hash = ref(window.location.hash)
+// (work order), '#/handover' (stock entry), '#/penggunaan-bahan' (FU74; FU82
+// rename dari '#/bahan')
+// FU82: alias rute lama → kanonik. Prefix-match ketat ('#/bahan' diikuti akhir
+// ATAU '?') agar '#/penggunaan-bahan' tidak ikut tertukar. Normalisasi WAJIB
+// di dua titik (init ref + onHash) supaya cold-load deep-link lama tidak
+// sempat merender Dashboard; location.replace = same-document, tanpa entri
+// history, tanpa loop (hashchange berikutnya sudah kanonik).
+const normalisasiHash = (h) =>
+  /^#\/bahan(\?|$)/.test(h) ? '#/penggunaan-bahan' + h.slice('#/bahan'.length) : h
+const hash = ref(normalisasiHash(window.location.hash))
+if (hash.value !== window.location.hash) window.location.replace(hash.value)
 const onHash = () => {
-  hash.value = window.location.hash
+  const kanonik = normalisasiHash(window.location.hash)
+  if (kanonik !== window.location.hash) {
+    window.location.replace(kanonik) // hashchange berikutnya membawa hash kanonik
+    return
+  }
+  hash.value = kanonik
   window.scrollTo(0, 0)
 }
 onMounted(() => {
@@ -39,13 +53,14 @@ const section = computed(() =>
     : hash.value.startsWith('#/settings') ? 'settings'
       : hash.value.startsWith('#/handover') ? 'handover'
         : hash.value.startsWith('#/form-order') ? 'form-order'
-          : hash.value.startsWith('#/bahan') ? 'bahan'
+          : hash.value.startsWith('#/penggunaan-bahan') ? 'material-usage'
             : 'dashboard'
 )
-// FU74: '#/bahan?bahan=..&dari=..&sampai=..&company=..' → props awal BahanPage
-const bahanQuery = computed(() => {
-  if (!hash.value.startsWith('#/bahan')) return { bahan: '', dari: '', sampai: '', company: '' }
-  const qs = hash.value.slice('#/bahan'.length)
+// FU74: '#/penggunaan-bahan?bahan=..&dari=..&sampai=..&company=..' → props awal
+// halaman (FU82: rename rute dari '#/bahan'; param ?bahan= tetap — kosakata materi)
+const usageQuery = computed(() => {
+  if (!hash.value.startsWith('#/penggunaan-bahan')) return { bahan: '', dari: '', sampai: '', company: '' }
+  const qs = hash.value.slice('#/penggunaan-bahan'.length)
   const params = new URLSearchParams(qs.startsWith('?') ? qs.slice(1) : '')
   return {
     bahan: params.get('bahan') || '',
@@ -302,14 +317,14 @@ function onNavClick() {
           <span class="nlabel">Form Order</span>
         </a>
         <a
-          href="#/bahan"
+          href="#/penggunaan-bahan"
           class="navitem"
-          :class="{ on: section === 'bahan' }"
-          :aria-current="section === 'bahan' ? 'page' : undefined"
+          :class="{ on: section === 'material-usage' }"
+          :aria-current="section === 'material-usage' ? 'page' : undefined"
           @click="onNavClick"
         >
           <Wheat :size="18" :stroke-width="1.9" class="nicon" />
-          <span class="nlabel">Bahan baku</span>
+          <span class="nlabel">Penggunaan bahan baku</span>
         </a>
         <div class="navsection">Sistem</div>
         <a
@@ -383,16 +398,16 @@ function onNavClick() {
         <span class="bnav-label">Form Order</span>
       </a>
       <a
-        href="#/bahan"
+        href="#/penggunaan-bahan"
         class="bnav-item"
-        :class="{ on: section === 'bahan' }"
-        :aria-current="section === 'bahan' ? 'page' : undefined"
+        :class="{ on: section === 'material-usage' }"
+        :aria-current="section === 'material-usage' ? 'page' : undefined"
         @click="onNavClick"
       >
         <span class="bnav-ic">
           <Wheat :size="20" :stroke-width="1.9" />
         </span>
-        <span class="bnav-label">Bahan</span>
+        <span class="bnav-label">Penggunaan</span>
       </a>
     </nav>
 
@@ -406,12 +421,12 @@ function onNavClick() {
           <FormOrderCreate v-else-if="foCreate" />
           <FormOrderPage v-else-if="section === 'form-order'" />
           <Dashboard v-else-if="section === 'dashboard'" />
-          <BahanPage
-            v-else-if="section === 'bahan'"
-            :initial-bahan="bahanQuery.bahan"
-            :initial-dari="bahanQuery.dari"
-            :initial-sampai="bahanQuery.sampai"
-            :initial-company="bahanQuery.company"
+          <MaterialUsagePage
+            v-else-if="section === 'material-usage'"
+            :initial-bahan="usageQuery.bahan"
+            :initial-dari="usageQuery.dari"
+            :initial-sampai="usageQuery.sampai"
+            :initial-company="usageQuery.company"
           />
           <Workspace v-else-if="woId" :key="woId" :id="woId" />
           <WorkOrderList v-else-if="section === 'workorder'" />

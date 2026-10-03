@@ -1956,7 +1956,7 @@ class TestDashboard(IntegrationTestCase):
 	def test_61_aggregate_konversi_inventory_uom_dan_fallback_stock(self):
 		"""FU78: aggregate() mengonversi baris bahan ke Default Inventory UOM
 		(faktor 10 → angka tampil /10) — terbaca sama dari dashboard dan
-		endpoint #/bahan (satu implementasi); breakdown per WO ikut; bahan
+		endpoint #/penggunaan-bahan (satu implementasi); breakdown per WO ikut; bahan
 		tanpa Default Inventory UOM tetap stock UOM (baris tidak dibuang)."""
 		uom_inv = (
 			frappe.get_doc({"doctype": "UOM", "uom_name": f"{PREFIX} UInv {self.suffix}"})
@@ -1989,7 +1989,7 @@ class TestDashboard(IntegrationTestCase):
 		if row_rm:  # fallback: tanpa Default Inventory UOM → tetap stock UOM
 			self.assertEqual(row_rm["uom"], self.uom_mu)
 
-	# --------------------------------- FU79: trace halaman bahan (work_orders/transactions/series)
+	# ------------------------- FU79: trace halaman penggunaan-bahan (work_orders/transactions/series)
 
 	def test_62_trace_work_orders_shape(self):
 		"""FU79: aggregate(include_trace=True) membawa `work_orders` — WO scope

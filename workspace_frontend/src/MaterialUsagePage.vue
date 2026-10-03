@@ -6,7 +6,7 @@
 // (bar hasil per tanggal posting + puncak output), kartu "Analisis penggunaan"
 // (klik baris → tab Transaksi terfilter bahan) dan kartu "Traceability
 // produksi" 3 tab + panel "Cara ini dihitung". Data satu endpoint
-// (store.loadBahan, include_trace); aturan inti FU74/FU78 terwarisi: konsumsi
+// (store.loadMaterialUsage, include_trace); aturan inti FU74/FU78 terwarisi: konsumsi
 // bruto Manufacture/Konsumsi (retur = balik transfer, bukan konsumsi), teoritis
 // proporsional produced_qty, beda UOM tidak pernah dijumlahkan/dirata-ratakan
 // (deviasi & efisiensi pada UOM utama saja). Filter lama dipertahankan;
@@ -26,10 +26,10 @@ import {
   Boxes, ChevronRight, ClipboardList, ExternalLink, Factory, Filter, FileSpreadsheet, FlaskConical,
   Gauge, HelpCircle, Search, SearchX, TrendingUp, X
 } from 'lucide-vue-next'
-import { bahanState, loadBahan } from './store.js'
+import { materialUsageState, loadMaterialUsage } from './store.js'
 import { fmtId } from './format.js'
 import {
-  bahanXlsxFilename, barPct, chartTrend, comparisonRows, efficiencyPct, materialCounts,
+  materialUsageXlsxFilename, barPct, chartTrend, comparisonRows, efficiencyPct, materialCounts,
   peakDay, peakText, signedQtyText, tanggalDmy, tanggalPendek, txnOfMaterial, uomTotals,
   variancePctText, varianceTone, weightedVarPct, woStatusSummary, woStatusText, woYieldPct,
   yieldPctText, yieldTone
@@ -61,7 +61,7 @@ const basis = ref({ dari: '', sampai: '' })
 let reloadTimer
 let echoingDates = false
 
-const data = computed(() => bahanState.data)
+const data = computed(() => materialUsageState.data)
 const companies = computed(() => data.value?.companies || [])
 const showCompany = computed(() => companies.value.length > 1)
 const companyOptions = computed(() => [
@@ -86,12 +86,12 @@ function payload() {
 }
 async function reload() {
   if (rangeInvalid.value) return // inline hint tampil; API tidak dipanggil
-  const firstLoad = !bahanState.loaded
-  await loadBahan(payload())
+  const firstLoad = !materialUsageState.loaded
+  await loadMaterialUsage(payload())
   // muat pertama tanpa tanggal: isi input dari jawaban server (server
   // otoritatif atas "hari ini"); setelahnya isian user tak pernah ditimpa.
   // Rentang dasar di-catat utk "Hapus semua filter" & hitungan badge Filter
-  const d = bahanState.data
+  const d = materialUsageState.data
   if (firstLoad && d) {
     echoingDates = true
     if (!dari.value && d.dari) dari.value = d.dari
@@ -270,7 +270,7 @@ async function exportXlsx() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = bahanXlsxFilename(d, s, produk)
+    a.download = materialUsageXlsxFilename(d, s, produk)
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -284,8 +284,8 @@ async function exportXlsx() {
 <template>
   <div class="page-head">
     <div class="ph-left">
-      <p class="ph-eye">Pemakaian bahan</p>
-      <h1>Bahan baku</h1>
+      <p class="ph-eye">Konsumsi bahan</p>
+      <h1>Penggunaan bahan baku</h1>
       <p class="sub">Konsumsi nyata dibanding rencana BOM, diskalakan ke hasil produksi.</p>
     </div>
     <div class="ph-right">
@@ -303,7 +303,7 @@ async function exportXlsx() {
     </div>
   </div>
 
-  <div class="toolbar bahan-toolbar">
+  <div class="toolbar mu-toolbar">
     <div class="searchbox">
       <Search :size="15" :stroke-width="2" class="search-ico" />
       <input
@@ -333,7 +333,7 @@ async function exportXlsx() {
           </div>
           <div class="ffield">
             <label>Cakupan</label>
-            <label class="bahan-check" for="bahan-over">
+            <label class="mu-check" for="bahan-over">
               <Checkbox v-model="overOnly" binary inputId="bahan-over" />
               <span>Hanya di atas rencana</span>
             </label>
@@ -359,12 +359,12 @@ async function exportXlsx() {
     <span v-if="exportGagal" class="export-gagal" role="alert">Export gagal — coba lagi</span>
   </div>
 
-  <div v-if="bahanState.error" class="callout bad dash-error" role="alert">
-    <p>Gagal memuat: {{ bahanState.error }}</p>
+  <div v-if="materialUsageState.error" class="callout bad dash-error" role="alert">
+    <p>Gagal memuat: {{ materialUsageState.error }}</p>
     <Button label="Coba lagi" size="small" severity="secondary" variant="outlined" @click="reload" />
   </div>
 
-  <template v-if="bahanState.loading && !bahanState.loaded">
+  <template v-if="materialUsageState.loading && !materialUsageState.loaded">
     <section class="panel" aria-hidden="true">
       <div class="panel-body dash-skel-stack">
         <Skeleton v-for="m in 6" :key="m" width="100%" height="34px" borderRadius="6px" />
@@ -372,9 +372,9 @@ async function exportXlsx() {
     </section>
   </template>
 
-  <template v-else-if="bahanState.loaded && !bahanState.error && !rangeInvalid">
+  <template v-else-if="materialUsageState.loaded && !materialUsageState.error && !rangeInvalid">
     <!-- ===== 5 kartu KPI ===== -->
-    <section class="bahan-kpis" aria-label="Ringkasan pemakaian bahan">
+    <section class="mu-kpis" aria-label="Ringkasan pemakaian bahan">
       <div class="panel dash-kpi">
         <div class="khead">
           <span class="kico kblue"><Boxes :size="17" :stroke-width="2" aria-hidden="true" /></span>
@@ -424,7 +424,7 @@ async function exportXlsx() {
     </section>
 
     <!-- ===== perbandingan konsumsi + tren produksi ===== -->
-    <div class="bahan-row2">
+    <div class="mu-row2">
       <section class="panel dash-card" aria-label="Perbandingan konsumsi bahan">
         <div class="dcard-head">
           <div>
@@ -433,8 +433,8 @@ async function exportXlsx() {
             <p class="dsub">Jumlah BOM teoritis (× hasil nyata) vs konsumsi aktual</p>
           </div>
         </div>
-        <div class="panel-body bahan-cmp-body">
-          <ul v-if="cmp.list.length" class="bahan-cmp">
+        <div class="panel-body mu-cmp-body">
+          <ul v-if="cmp.list.length" class="mu-cmp">
             <li v-for="r in cmp.list" :key="r.item_code" class="bcm-row">
               <span class="bcm-name" :title="r.item_name || r.item_code">
                 {{ r.item_name || r.item_code }}
@@ -476,13 +476,13 @@ async function exportXlsx() {
           </div>
           <p v-else class="dash-none">Belum ada hasil produksi dalam rentang ini</p>
           <p v-if="seriTren" class="dcap">Dalam {{ seriTren.uom }} · per tanggal posting Manufacture</p>
-          <p v-if="puncakText" class="bahan-peak"><strong>Puncak output</strong> {{ puncakText.replace('Puncak output ', '') }}</p>
+          <p v-if="puncakText" class="mu-peak"><strong>Puncak output</strong> {{ puncakText.replace('Puncak output ', '') }}</p>
         </div>
       </section>
     </div>
 
     <!-- ===== analisis penggunaan (klik baris → transaksi) ===== -->
-    <section class="panel bahan-card" aria-label="Analisis penggunaan bahan">
+    <section class="panel mu-card" aria-label="Analisis penggunaan bahan">
       <div class="dcard-head an-head">
         <div>
           <p class="deye">Rincian per bahan</p>
@@ -490,20 +490,20 @@ async function exportXlsx() {
           <p class="dsub">Klik satu bahan untuk melihat transaksi sumbernya.</p>
         </div>
       </div>
-      <div class="panel-body bahan-tbody">
+      <div class="panel-body mu-tbody">
         <DataTable
           :value="rows"
           dataKey="item_code"
-          class="dash-table bahan-table"
+          class="dash-table mu-table"
           :rowHover="true"
           @row-click="(e) => pilihBahan(e.data)"
         >
           <Column header="Bahan" headerClass="col-bahan" bodyClass="col-bahan">
             <template #body="{ data: r }">
-              <span class="wo-prod bahan-name">
+              <span class="wo-prod mu-name">
                 {{ r.item_name || r.item_code }}
                 <small v-if="r.item_code" class="mono">{{ r.item_code }}</small>
-                <span v-if="r.unlisted" class="chip chip-off bahan-noplan">tanpa rencana</span>
+                <span v-if="r.unlisted" class="chip chip-off mu-noplan">tanpa rencana</span>
               </span>
             </template>
           </Column>
@@ -530,13 +530,13 @@ async function exportXlsx() {
                 v-if="r.over"
                 value="Over"
                 severity="danger"
-                class="bahan-pill"
+                class="mu-pill"
               />
-              <Tag v-else value="Normal" severity="success" class="bahan-pill" />
+              <Tag v-else value="Normal" severity="success" class="mu-pill" />
             </template>
           </Column>
           <Column headerClass="col-chev" bodyClass="col-chev">
-            <template #body><ChevronRight :size="15" :stroke-width="2" class="bahan-chev" aria-hidden="true" /></template>
+            <template #body><ChevronRight :size="15" :stroke-width="2" class="mu-chev" aria-hidden="true" /></template>
           </Column>
           <template #empty>
             <div class="empty-inset">
@@ -553,7 +553,7 @@ async function exportXlsx() {
     </section>
 
     <!-- ===== traceability produksi: 3 tab + info perhitungan ===== -->
-    <section id="bahan-trace" class="panel bahan-card" aria-label="Traceability produksi">
+    <section id="bahan-trace" class="panel mu-card" aria-label="Traceability produksi">
       <div class="dcard-head an-head">
         <div>
           <p class="deye">Telusuri sumber</p>
@@ -570,7 +570,7 @@ async function exportXlsx() {
           class="trace-tabs"
         />
       </div>
-      <div class="panel-body bahan-tbody">
+      <div class="panel-body mu-tbody">
         <!-- tab 1: kartu WO + panel cara hitung -->
         <div v-if="traceTab === 'usage'" class="trace-grid">
           <div class="trace-list">
@@ -590,8 +590,8 @@ async function exportXlsx() {
                   <label>Yield</label>
                   <b :class="`ytext-${yieldTone(woYieldPct(w))}`">{{ yieldPctText(woYieldPct(w)) }}</b>
                 </span>
-                <Tag :value="woStatusText(w.status)" :severity="statusSeverity(w.status)" class="bahan-pill" />
-                <ChevronRight :size="15" :stroke-width="2" class="bahan-chev" aria-hidden="true" />
+                <Tag :value="woStatusText(w.status)" :severity="statusSeverity(w.status)" class="mu-pill" />
+                <ChevronRight :size="15" :stroke-width="2" class="mu-chev" aria-hidden="true" />
               </span>
             </a>
           </div>
@@ -612,7 +612,7 @@ async function exportXlsx() {
 
         <!-- tab 2: tabel work order -->
         <template v-else-if="traceTab === 'wo'">
-          <DataTable :value="workOrders" dataKey="wo" class="dash-table bahan-table">
+          <DataTable :value="workOrders" dataKey="wo" class="dash-table mu-table">
             <Column header="Work order" headerClass="col-wo2" bodyClass="col-wo2">
               <template #body="{ data: w }">
                 <a class="linklike" :href="woHref(w.wo)">{{ w.wo }}</a>
@@ -632,7 +632,7 @@ async function exportXlsx() {
             </Column>
             <Column header="Status" headerClass="col-status2" bodyClass="col-status2">
               <template #body="{ data: w }">
-                <Tag :value="woStatusText(w.status)" :severity="statusSeverity(w.status)" class="bahan-pill" />
+                <Tag :value="woStatusText(w.status)" :severity="statusSeverity(w.status)" class="mu-pill" />
               </template>
             </Column>
             <template #empty>
@@ -653,9 +653,9 @@ async function exportXlsx() {
             </button>
             <span class="txn-count">{{ fmtId(txnTerfilter.length) }} transaksi</span>
           </div>
-          <DataTable :value="txnHalaman" dataKey="se" class="dash-table bahan-table">
+          <DataTable :value="txnHalaman" dataKey="se" class="dash-table mu-table">
             <Column header="Stock entry" headerClass="col-se" bodyClass="col-se">
-              <template #body="{ data: t }"><span class="mono bahan-se">{{ t.se }}</span></template>
+              <template #body="{ data: t }"><span class="mono mu-se">{{ t.se }}</span></template>
             </Column>
             <Column header="Tanggal" headerClass="col-tgl" bodyClass="col-tgl">
               <template #body="{ data: t }">{{ tanggalPendek(t.tanggal) }}</template>
@@ -667,7 +667,7 @@ async function exportXlsx() {
             </Column>
             <Column header="Bahan" headerClass="col-bahan" bodyClass="col-bahan">
               <template #body="{ data: t }">
-                <span class="wo-prod bahan-name">
+                <span class="wo-prod mu-name">
                   {{ t.item_name }}
                   <small v-if="t.item_code" class="mono">{{ t.item_code }}</small>
                 </span>

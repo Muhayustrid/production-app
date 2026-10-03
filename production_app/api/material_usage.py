@@ -29,8 +29,8 @@
 # PermissionError SENGAJA dibiarkan naik — pemanggil yang memutuskan
 # degradasinya (dashboard menyembunyikan panel, pola FU65/FU73).
 #
-# FU79 — trace halaman bahan: aggregate(include_trace=True) menambah 3 kunci
-# untuk kartu referensi baru di #/bahan (dashboard_summary sengaja TIDAK
+# FU79 — trace halaman penggunaan-bahan: aggregate(include_trace=True) menambah 3 kunci
+# untuk kartu referensi baru di #/penggunaan-bahan (dashboard_summary sengaja TIDAK
 # lewat flag agar payload dashboard tidak berubah — dipatok test):
 # - work_orders  : WO dalam scope (rentang planned_start_date + produk +
 #   company) dengan planned/produced terkonversi display UOM (pola
@@ -94,7 +94,7 @@ def material_usage(
 	today/dari/sampai, companies, products (sebelum filter produk), rows
 	per bahan (planned/expected/consumed/variance/variance_pct/over/unlisted
 	+ breakdown work_orders per WO); include_trace → +work_orders/
-	transactions/series untuk halaman #/bahan."""
+	transactions/series untuk halaman #/penggunaan-bahan."""
 	return aggregate(
 		company=company,
 		dari=dari,
@@ -124,7 +124,7 @@ def _validasi_rentang(dari, sampai, max_days=None):
 	ini. Tanggal rusak, terbalik, atau span > batas → ValidationError (HTTP
 	417 konvensi app) — jangan diam-diam memotong rentang. `max_days`
 	menimpa batas default MAX_RANGE_DAYS (dashboard FU76 memakai 366 agar
-	preset "tahun ini" muat; halaman bahan tetap 92)."""
+	preset "tahun ini" muat; halaman penggunaan-bahan tetap 92)."""
 	batas = MAX_RANGE_DAYS if max_days is None else cint(max_days)
 	try:
 		tgl_dari = getdate(dari or today())
@@ -162,7 +162,7 @@ def aggregate(
 	& over_only meneruskan hasil agregasi (bukan query). `max_days` (FU76)
 	menimpa batas rentang default 92 hari — dashboard memakai 366.
 	`include_trace` (FU79) menambah kunci work_orders/transactions/series —
-	dipakai endpoint #/bahan, TIDAK oleh dashboard (payload tetap ramping)."""
+	dipakai endpoint #/penggunaan-bahan, TIDAK oleh dashboard (payload tetap ramping)."""
 	dari, sampai = _validasi_rentang(dari, sampai, max_days)
 
 	filters = [
@@ -337,7 +337,7 @@ def aggregate(
 	rows.sort(key=lambda r: _kunci_varian(r["variance_pct"], r["item_code"]))
 
 	# FU78: konversi baris ke Default Inventory UOM item (rantai W21 →
-	# stock_uom, pola dashboard) — dashboard DAN halaman bahan menampilkan
+	# stock_uom, pola dashboard) — dashboard DAN halaman penggunaan-bahan menampilkan
 	# satuan yang sama (keputusan owner FU78). Tanpa faktor valid → baris
 	# TETAP stock UOM (baris tidak pernah dibuang); variance_pct kebal
 	# konversi karena pembilang & penyebut terbagi faktor sama.
@@ -390,7 +390,7 @@ def aggregate(
 
 
 def _trace_work_orders(wos, display_uom):
-	"""FU79: WO scope rentang+produk → kartu trace #/bahan. planned/produced
+	"""FU79: WO scope rentang+produk → kartu trace #/penggunaan-bahan. planned/produced
 	dikonversi display UOM (pola _planned_qty: qty stock ÷ faktor; tanpa
 	faktor valid → tetap stock UOM, baris tidak dibuang). Urut tanggal mulai
 	desc lalu nama — baris terbaru di atas."""
@@ -556,7 +556,7 @@ def material_usage_xlsx(
 	"""FU80c — unduh .xlsx laporan pemakaian bahan (ganti CSV FU80): 4 sheet
 	Info (meta filter + waktu cetak), Ringkasan per Bahan, Work Order
 	(riwayat produksi per order), Transaksi (konsumsi per SE Detail).
-	Data = aggregate(include_trace) dgn parameter SAMA dgn halaman #/bahan →
+	Data = aggregate(include_trace) dgn parameter SAMA dgn halaman #/penggunaan-bahan →
 	angka file = angka layar. Angka mentah numerik (bukan teks berformat)
 	supaya bisa dihitung ulang di Excel/Sheets; rentang di-validasi sama
 	(ValidationError 417 bila terbalik/terlalu panjang)."""

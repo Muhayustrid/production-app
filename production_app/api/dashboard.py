@@ -99,7 +99,7 @@ STAGNANT_HOURS = 4
 SUHU_ADONAN_MAX = 32.0
 
 # FU76: preset rentang dashboard + batas rentangnya (lebih longgar dari
-# halaman bahan 92 hari — preset "tahun ini" wajib muat; tetap dibatasi
+# halaman penggunaan-bahan 92 hari — preset "tahun ini" wajib muat; tetap dibatasi
 # sebagai pelindung beban query SE).
 PRESET_HARI_INI = "hari_ini"
 PRESET_KEMARIN = "kemarin"
@@ -222,7 +222,7 @@ def dashboard_summary(company=None, preset=None, dari=None, sampai=None):
 	# None: frontend menyembunyikan panelnya (degradasi jujur, pola
 	# FU65/FU73), endpoint tetap hidup — PermissionError sengaja TIDAK
 	# ditelan di dalam aggregate sendiri. max_days ikut batas dashboard
-	# (preset "tahun ini" melebihi batas 92 hari halaman bahan).
+	# (preset "tahun ini" melebihi batas 92 hari halaman penggunaan-bahan).
 	try:
 		material_usage = aggregate(
 			company=company, dari=dari, sampai=sampai, max_days=DASHBOARD_MAX_DAYS

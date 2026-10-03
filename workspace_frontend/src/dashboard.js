@@ -172,8 +172,8 @@ export function variancePctText(row) {
 }
 
 // link halaman bahan untuk satu item (dipakai panel Dashboard & halaman)
-export function bahanHref(itemCode) {
-  return '#/bahan?bahan=' + encodeURIComponent(itemCode)
+export function materialUsageHref(itemCode) {
+  return '#/penggunaan-bahan?bahan=' + encodeURIComponent(itemCode)
 }
 
 // ============================================================================
@@ -440,7 +440,7 @@ export function targetText(plannedEnd, today) {
 }
 
 // ============================================================================
-// FU79: rombak halaman Bahan baku (#/bahan) gaya referensi — KPI 5 kartu,
+// FU79: rombak halaman penggunaan bahan baku (FU82: #/penggunaan-bahan) gaya
 // perbandingan konsumsi, tren produksi, traceability. Semua murni & teruji;
 // aturan inti terwarisi: beda UOM TIDAK PERNAH dijumlahkan/dirata-ratakan.
 // ============================================================================
@@ -670,7 +670,7 @@ export function rentangDmyText(dari, sampai) {
 // nama file unduhan: rentang → penggunaan-bahan-[<produk>-]<dari>_sd_<sampai>
 // .xlsx (ISO, non-angka dibuang; produk jadi slug lowercase); satu hari tanpa
 // _sd_; keduanya kosong → generik (paritas _nama_file_xlsx server)
-export function bahanXlsxFilename(dari, sampai, produk) {
+export function materialUsageXlsxFilename(dari, sampai, produk) {
   const bersih = (v) => String(v || '').replace(/[^0-9-]/g, '')
   const slug = String(produk || '')
     .toLowerCase()

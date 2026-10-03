@@ -419,14 +419,14 @@ export async function loadDashboardPage(page = 0) {
 // FU74: penggunaan bahan baku — agregat server per rentang/company/produk
 // (production_app.api.material_usage.material_usage). Error inline di halaman.
 // FU79: include_trace → +work_orders/transactions/series (KPI, tren,
-// traceability halaman bahan; dashboard_summary TIDAK lewat jalur ini).
-export const bahanState = reactive({ loading: false, error: '', loaded: false, data: null })
+// traceability halaman penggunaan-bahan; dashboard_summary TIDAK lewat jalur ini).
+export const materialUsageState = reactive({ loading: false, error: '', loaded: false, data: null })
 
-export async function loadBahan(params = {}) {
-  bahanState.loading = true
-  bahanState.error = ''
+export async function loadMaterialUsage(params = {}) {
+  materialUsageState.loading = true
+  materialUsageState.error = ''
   try {
-    bahanState.data = await call('production_app.api.material_usage.material_usage', {
+    materialUsageState.data = await call('production_app.api.material_usage.material_usage', {
       dari: params.dari || null,
       sampai: params.sampai || null,
       company: params.company || '',
@@ -435,11 +435,11 @@ export async function loadBahan(params = {}) {
       over_only: params.overOnly ? '1' : '0',
       include_trace: '1'
     })
-    bahanState.loaded = true
+    materialUsageState.loaded = true
   } catch (e) {
-    bahanState.error = e.message
+    materialUsageState.error = e.message
   } finally {
-    bahanState.loading = false
+    materialUsageState.loading = false
   }
 }
 

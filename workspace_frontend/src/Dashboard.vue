@@ -25,8 +25,8 @@ import { dashboardState, DASH_PAGE_SIZE, loadDashboard, loadDashboardDaily, load
 import { fmtId } from './format.js'
 import {
   STAGES, YIELD_LEGEND, RANGE_PRESETS, DAILY_MODES, achievementPct, activeTotal, activityText,
-  activityTime, attentionText, bahanHref, chartDaily, deltaPctText, donutData, isOverdue,
-  materialRowText, materialSummaryText, presetLabel, qualityPerUom, rangeParams, rangeLabel,
+  activityTime, attentionText, chartDaily, deltaPctText, donutData, isOverdue,
+  materialRowText, materialSummaryText, materialUsageHref, presetLabel, qualityPerUom, rangeParams, rangeLabel,
   selesaiTileLabel, targetText, topMaterialRows, uomPrimaryText, variancePctText, woProgressPct,
   woQtyText, yieldPctText, yieldSegments
 } from './dashboard.js'
@@ -698,11 +698,11 @@ onMounted(reload)
       <section v-if="mu" class="panel dash-card" aria-label="Penggunaan bahan baku">
         <div class="dcard-head">
           <div>
-            <p class="deye">Bahan baku</p>
-            <h2>Pemakaian bahan</h2>
+            <p class="deye">Konsumsi bahan</p>
+            <h2>Penggunaan bahan baku</h2>
             <p v-if="muUsed" class="dlead">{{ materialSummaryText(mu) }}</p>
           </div>
-          <a href="#/bahan" class="dash-mu-link">Lihat semua</a>
+          <a href="#/penggunaan-bahan" class="dash-mu-link">Lihat semua</a>
         </div>
         <div class="panel-body">
           <div v-if="muUsed" class="dash-mu-rows">
@@ -710,7 +710,7 @@ onMounted(reload)
               v-for="row in muTop"
               :key="row.item_code"
               class="dash-mu-row"
-              :href="bahanHref(row.item_code)"
+              :href="materialUsageHref(row.item_code)"
             >
               <span class="mtxt">
                 <span class="ttl">{{ row.item_name }}<small v-if="row.item_code">{{ row.item_code }}</small></span>
@@ -720,12 +720,12 @@ onMounted(reload)
               <Tag
                 :value="variancePctText(row) || 'tanpa dasar'"
                 :severity="row.over ? 'danger' : 'success'"
-                class="bahan-tag"
+                class="mu-tag"
                 :class="{ over: row.over }"
               />
             </a>
-            <a v-if="muOverCount > muTop.filter((r) => r.over).length" href="#/bahan" class="dash-mu-extra">
-              Lihat semua bahan di atas ambang di halaman bahan baku
+            <a v-if="muOverCount > muTop.filter((r) => r.over).length" href="#/penggunaan-bahan" class="dash-mu-extra">
+              Lihat semua bahan di atas ambang di halaman Penggunaan bahan baku
             </a>
           </div>
           <div v-else class="empty-inset dash-mu-empty">
