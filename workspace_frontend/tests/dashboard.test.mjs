@@ -712,3 +712,12 @@ test('stockMockDataset: 8 item kurasi persis spesifikasi + invarian semua item',
     assert.ok(it.movements.every((m) => m.tanggal <= '2026-10-03'), `tanggal ≤ hari ini ${it.item_code}`)
   }
 })
+
+// ---- FU87: nama file ekspor XLSX ketersediaan stock (paritas server) ----
+test('stockXlsxFilename: slug gudang + tanggal; kosong-tanggal generik', async () => {
+  const { stockXlsxFilename } = await import('../src/dashboard.js')
+  assert.equal(stockXlsxFilename('Gudang Produksi', '2026-10-03T08:00:00'), 'ketersediaan-stock-gudang-produksi-2026-10-03.xlsx')
+  assert.equal(stockXlsxFilename('', '2026-10-03'), 'ketersediaan-stock-2026-10-03.xlsx')
+  assert.equal(stockXlsxFilename('Kedai "Kopi", Timur', '2026-10-03'), 'ketersediaan-stock-kedai-kopi-timur-2026-10-03.xlsx')
+  assert.equal(stockXlsxFilename('Gudang Produksi', ''), 'ketersediaan-stock.xlsx')
+})

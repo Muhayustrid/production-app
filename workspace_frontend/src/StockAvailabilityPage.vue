@@ -17,11 +17,11 @@ import Paginator from 'primevue/paginator'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import {
-  Boxes, CheckCircle2, ChevronRight, Filter, PackageX, Search, SearchX, TriangleAlert
+  Boxes, CheckCircle2, ChevronRight, FileSpreadsheet, Filter, PackageX, Search, SearchX, TriangleAlert
 } from 'lucide-vue-next'
 import { stockAvailabilityState, loadStockAvailability } from './store.js'
 import { fmtId, fmtStampShort } from './format.js'
-import { tanggalPendek } from './dashboard.js'
+import { harusKeLogin, loginRedirectUrl, stockXlsxFilename, tanggalPendek } from './dashboard.js'
 
 const q = ref('')
 const grup = ref('ALL')
@@ -76,6 +76,63 @@ const activeFilters = computed(() =>
   (status.value !== 'ALL') +
   (gudang.value !== basis.value.gudang)
 )
+
+// FU87: unduh .xlsx = laporan tampilan aktif — seluruh baris TERFILTER (bukan
+// hanya 10 baris halaman) + ringkasan KPI dikirim ke endpoint server yang
+// membungkusnya jadi workbook 3 sheet (angka file = angka layar). Gagal sesi
+// → ke login (FU81); gagal lain ditandai kecil di samping tombol (pola FU80c)
+const exportGagal = ref(false)
+async function exportXlsx() {
+  exportGagal.value = false
+  try {
+    const r = await fetch('/api/method/production_app.api.stock_availability.export_xlsx', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Frappe-CSRF-Token': window.csrf_token || ''
+      },
+      body: JSON.stringify({
+        items: terfilter.value.map((it) => ({
+          item_code: it.item_code,
+          item_name: it.item_name,
+          item_group: it.item_group,
+          actual_qty: it.actual_qty,
+          reserved_qty: it.reserved_qty,
+          available: it.available,
+          stock_uom: it.stock_uom,
+          min_stock: it.min_stock,
+          status: it.status,
+          capacity_batch: it.capacity_batch,
+          capacity_detail: it.capacity_detail
+        })),
+        summary: summary.value,
+        warehouse: gudang.value || data.value?.warehouse || ''
+      })
+    })
+    if (!r.ok) {
+      const teks = await r.text().catch(() => '')
+      if (harusKeLogin(r.status, teks)) {
+        window.location.href = loginRedirectUrl(window.location.pathname, window.location.hash)
+        return
+      }
+      throw new Error(String(r.status))
+    }
+    const blob = await r.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = stockXlsxFilename(
+      gudang.value || data.value?.warehouse,
+      new Date().toISOString()
+    )
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch {
+    exportGagal.value = true
+  }
+}
 
 async function reload() {
   await loadStockAvailability()
@@ -160,6 +217,11 @@ const STATUS_SEVERITY = { aman: 'success', menipis: 'warn', habis: 'danger' }
         </div>
       </Transition>
     </div>
+    <button class="btn exportbtn" type="button" aria-label="Export" @click="exportXlsx">
+      <FileSpreadsheet :size="14" :stroke-width="2" />
+      <span class="btext">Export</span>
+    </button>
+    <span v-if="exportGagal" class="export-gagal" role="alert">Export gagal — coba lagi</span>
   </div>
 
   <div v-if="stockAvailabilityState.error" class="callout bad dash-error" role="alert">

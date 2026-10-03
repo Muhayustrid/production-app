@@ -893,3 +893,17 @@ export function stockMockDataset() {
     summary: { total: items.length, ...target }
   }
 }
+
+// FU87: nama file ekspor XLSX Ketersediaan Stock — paritas dgn
+// _nama_file_xlsx di production_app/api/stock_availability.py (slug gudang +
+// tanggal hari ini; file dibangun server dari baris tampilan yang dikirim
+// halaman, jadi angka file = angka layar).
+export function stockXlsxFilename(gudang, tanggal) {
+  const slug = String(gudang || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  const t = /[0-9]{4}-[0-9]{2}-[0-9]{2}/.exec(String(tanggal || ''))?.[0] || ''
+  if (!t) return 'ketersediaan-stock.xlsx'
+  return `ketersediaan-stock-${slug ? slug + '-' : ''}${t}.xlsx`
+}
