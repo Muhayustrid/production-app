@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 
 import { applyFontScale } from './ui-preferences.js'
+import { harusKeLogin, loginRedirectUrl } from './dashboard.js'
 
 // ============================================================================
 // ADAPTER SERVER (T13/T14) — menggantikan mock store.
@@ -239,6 +240,12 @@ export async function call(method, args) {
       ? JSON.parse(data._server_messages).map((m) => JSON.parse(m).message).join(' ')
       : (data && data.exc) ? 'Validasi ERPNext gagal'
         : (data && data.message) || res.statusText
+    // FU81: sesi terkick/logout di luar tab → jangan error mentah; arahkan ke
+    // login ERPNext dan kembali ke halaman semula pasca-login
+    if (harusKeLogin(res.status, msg)) {
+      window.location.href = loginRedirectUrl(window.location.pathname, window.location.hash)
+      throw new Error('Sesi berakhir — dialihkan ke halaman login…')
+    }
     throw new Error(msg)
   }
   return data.message
@@ -728,6 +735,11 @@ async function uploadNativeAttachment(file, doctype, docname) {
         .filter(Boolean)
       if (messages.length) message = messages.join(' ')
     } catch { /* keep the ordinary response message */ }
+    // FU81: sesi terkick saat mengunggah → ke login, bukan error unggahan
+    if (!response.ok && harusKeLogin(response.status, message)) {
+      window.location.href = loginRedirectUrl(window.location.pathname, window.location.hash)
+      throw new Error('Sesi berakhir — dialihkan ke halaman login…')
+    }
     throw new Error(decodeErrorText(message) || 'Unggah lampiran gagal.')
   }
   return data.message

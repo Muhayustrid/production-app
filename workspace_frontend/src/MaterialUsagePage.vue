@@ -29,7 +29,8 @@ import {
 import { materialUsageState, loadMaterialUsage } from './store.js'
 import { fmtId } from './format.js'
 import {
-  materialUsageXlsxFilename, barPct, chartTrend, comparisonRows, efficiencyPct, materialCounts,
+  materialUsageXlsxFilename, barPct, chartTrend, comparisonRows, efficiencyPct, harusKeLogin,
+  loginRedirectUrl, materialCounts,
   peakDay, peakText, signedQtyText, tanggalDmy, tanggalPendek, txnOfMaterial, uomTotals,
   variancePctText, varianceTone, weightedVarPct, woStatusSummary, woStatusText, woYieldPct,
   yieldPctText, yieldTone
@@ -265,7 +266,15 @@ async function exportXlsx() {
   exportGagal.value = false
   try {
     const r = await fetch(`/api/method/production_app.api.material_usage.material_usage_xlsx?${params}`)
-    if (!r.ok) throw new Error(String(r.status))
+    if (!r.ok) {
+      // FU81: sesi terkick saat mengekspor → ke login, bukan sekadar gagal
+      const teks = await r.text().catch(() => '')
+      if (harusKeLogin(r.status, teks)) {
+        window.location.href = loginRedirectUrl(window.location.pathname, window.location.hash)
+        return
+      }
+      throw new Error(String(r.status))
+    }
     const blob = await r.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

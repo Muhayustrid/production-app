@@ -440,6 +440,27 @@ export function targetText(plannedEnd, today) {
 }
 
 // ============================================================================
+// FU81: sesi berakhir di tengah pemakaian SPA (logout/kick di tab lain) —
+// jangan biarkan error mentah; bawa user ke login ERPNext lalu kembali.
+// frappe menampik permintaan guest dgn 403 "… is not whitelisted" (pesan
+// bawaan utk tamu — bukan bug whitelist); 401 = sesi kadaluarsa. 403
+// "Not permitted" = user sah tanpa izin — TETAP error di halaman.
+// ============================================================================
+
+export function harusKeLogin(status, pesan) {
+  if (status === 401) return true
+  return status === 403 && /not whitelisted/i.test(String(pesan || ''))
+}
+
+// URL login ERPNext membawa tujuan kembali: pathname + hash — deep-link SPA
+// (mis. #/wo/<id> atau #/penggunaan-bahan) pulih persis pasca-login (pola FU67)
+export function loginRedirectUrl(pathname, hash) {
+  const tujuan = String(pathname || '/') + String(hash || '')
+  return '/login?redirect-to=' + encodeURIComponent(tujuan)
+}
+
+
+// ============================================================================
 // FU79: rombak halaman penggunaan bahan baku (FU82: #/penggunaan-bahan) gaya
 // perbandingan konsumsi, tren produksi, traceability. Semua murni & teruji;
 // aturan inti terwarisi: beda UOM TIDAK PERNAH dijumlahkan/dirata-ratakan.

@@ -411,6 +411,23 @@ test('isOverdue: target lewat & belum selesai; WO selesai tak pernah telat', asy
   assert.equal(isOverdue(null, now), false)
 })
 
+test('harusKeLogin & loginRedirectUrl: guest 403 not-whitelisted / 401 → login; 403 permission tetap di halaman (FU81)', async () => {
+  const { harusKeLogin, loginRedirectUrl } = await import('../src/dashboard.js')
+  // sesi terkick/logout di luar tab: frappe menampik SPA sbg guest →
+  // "Function … is not whitelisted" (pesan bawaan utk tamu, bukan bug whitelist)
+  assert.equal(harusKeLogin(403, 'Function production_app.api.work_order.wo_list is not whitelisted'), true)
+  assert.equal(harusKeLogin(401, 'Session expired'), true)
+  // user sah tanpa izin BUKAN logout — tetap error di halaman
+  assert.equal(harusKeLogin(403, 'Not permitted'), false)
+  assert.equal(harusKeLogin(417, 'Rentang tidak valid'), false)
+  assert.equal(harusKeLogin(500, ''), false)
+  // URL login membawa tujuan kembali: pathname + hash (pola interstitial FU67)
+  assert.equal(loginRedirectUrl('/production_workspace', '#/penggunaan-bahan'),
+    '/login?redirect-to=%2Fproduction_workspace%23%2Fpenggunaan-bahan')
+  assert.equal(loginRedirectUrl('/production_workspace', '#/wo/MFG-WO-2026-00013'),
+    '/login?redirect-to=%2Fproduction_workspace%23%2Fwo%2FMFG-WO-2026-00013')
+})
+
 test('targetText: hari ini jam saja, hari lain tanggal singkat, kosong strip (FU80e)', async () => {
   const { targetText } = await import('../src/dashboard.js')
   assert.equal(targetText('2026-10-03 14:00:00', '2026-10-03'), '14:00')
