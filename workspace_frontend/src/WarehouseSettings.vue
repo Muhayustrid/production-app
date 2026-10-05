@@ -33,7 +33,8 @@ const FLAT_KEYS = [
   'handover_warehouse',
   'handover_source_warehouse',
   'form_order_source_warehouse',
-  'form_order_target_warehouse'
+  'form_order_target_warehouse',
+  'production_item_group'
 ]
 
 const form = reactive({
@@ -44,7 +45,8 @@ const form = reactive({
   handover_warehouse: '',
   handover_source_warehouse: '',
   form_order_source_warehouse: '',
-  form_order_target_warehouse: ''
+  form_order_target_warehouse: '',
+  production_item_group: ''
 })
 const loading = ref(true)
 const saving = ref(false)
@@ -218,6 +220,23 @@ async function save() {
               <label :for="`wh-${f.key}`">{{ f.label }}</label>
               <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
               <div class="hint">{{ f.desc }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FU93: filter Item Group wizard Tambah Plan (bukan gudang — LinkInput Item Group) -->
+        <div class="settings-block">
+          <div class="settings-block-head">
+            <div>
+              <h3>Production Plan</h3>
+              <p class="hint">Filter daftar item pada wizard Tambah Plan (form Production Plan di ERPNext).</p>
+            </div>
+          </div>
+          <div class="form-grid cols2" style="margin-top: 12px">
+            <div class="field">
+              <label for="wh-production_item_group">Item Group Produk</label>
+              <LinkInput id="wh-production_item_group" v-model="form.production_item_group" doctype="Item Group" />
+              <div class="hint">Item Group — hanya item dalam grup ini yang bisa dipilih di wizard. Kosong = tanpa filter.</div>
             </div>
           </div>
         </div>

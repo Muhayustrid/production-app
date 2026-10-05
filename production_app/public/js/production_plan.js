@@ -58,6 +58,17 @@
 		// di atas viewport pada layar pendek (720px)
 		ensure_segmented_style();
 
+		// FU93: filter Kode Item dari pengaturan (Manufacturing Settings →
+		// custom_default_production_item_group); kosong = tanpa filter.
+		// get_query dievaluasi tiap pencarian, jadi respons yang datang
+		// belakangan tetap dipakai; sebelum respons tiba fallback = tanpa filter.
+		let production_item_group = "";
+		frappe.call({
+			method: "production_app.api.work_order.warehouse_defaults",
+		}).then((r) => {
+			production_item_group = (r.message && r.message.production_item_group) || "";
+		});
+
 		const d = new frappe.ui.Dialog({
 			title: __("Tambah Plan — 1/2: Item & Qty"),
 			fields: [
@@ -68,7 +79,10 @@
 					fieldtype: "Link",
 					options: "Item",
 					reqd: 1,
-					get_query: () => ({ filters: { item_group: "Produk Jadi" } }),
+					get_query: () =>
+						production_item_group
+							? { filters: { item_group: production_item_group } }
+							: {},
 					onchange: item_change,
 				},
 				{ label: __("Nama Item"), fieldname: "item_name", fieldtype: "Data", read_only: 1 },

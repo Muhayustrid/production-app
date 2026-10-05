@@ -201,6 +201,7 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 			"handover_source_warehouse": None,
 			"form_order_source_warehouse": None,
 			"form_order_target_warehouse": None,
+			"production_item_group": None,
 		}
 		payload.update(overrides)
 		return warehouse_defaults_save(**payload)
@@ -506,6 +507,26 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		self.assertEqual(self._header(wo.name).source_warehouse, self.manual_wh)
 		self.assertEqual(self._rows(wo.name)[self.rm1], self.src_old)
 
+	# --------------------------------- FU93: item group wizard (settings-only)
+	def test_fu93_production_item_group_settings_only(self):
+		self._save_defaults(source_warehouse=self.src_old)  # baseline
+		wo = self._make_wo(
+			bom=self.bom, company=self.company, source=self.src_old,
+			wip=self.wip_wh, fg=self.fg_wh, submit=True,
+		)
+		# simpan valid → terbaca balik di kontrak flat
+		saved = self._save_defaults(production_item_group=self.group)
+		self.assertEqual(saved["production_item_group"], self.group)
+		# settings-only: TIDAK menyentuh Work Order
+		self.assertEqual(saved["propagated"], [])
+		self.assertEqual(self._header(wo.name).source_warehouse, self.src_old)
+		self.assertEqual(self._rows(wo.name)[self.rm1], self.src_old)
+		# validasi: grup tidak ada ditolak SEBELUM simpan
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			self._save_defaults(production_item_group=f"{PREFIX}-Grup-Tidak-Ada")
+		self.assertIn("Item Group tidak ditemukan", str(ctx.exception))
+		self.assertEqual(warehouse_defaults()["production_item_group"], self.group)
+
 	# -------------------------------- skenario 16: guard skip_transfer (wip)
 	def test_fu58_16_skip_transfer_wip_guarded_source_still_processed(self):
 		self._save_defaults()
@@ -568,16 +589,18 @@ class TestSettingsFieldsSelfHeal(IntegrationTestCase):
 
 	def test_warehouse_defaults_converges_fields(self):
 		# (a) field paket hilang -> dipasang ulang oleh bacaan
+		# FU93: sentinel konvergensi kini field terakhir paket
+		# (custom_default_production_item_group).
 		target = frappe.db.get_value(
 			"Custom Field",
-			{"dt": "Manufacturing Settings", "fieldname": "custom_default_form_order_target_warehouse"},
+			{"dt": "Manufacturing Settings", "fieldname": "custom_default_production_item_group"},
 			"name",
 		)
 		self.assertTrue(target, "precondition: field terpasang oleh migrate")
 		frappe.delete_doc("Custom Field", target, force=True)
 		frappe.clear_cache(doctype="Manufacturing Settings")
 		self.assertFalse(
-			frappe.get_meta("Manufacturing Settings").get_field("custom_default_form_order_target_warehouse")
+			frappe.get_meta("Manufacturing Settings").get_field("custom_default_production_item_group")
 		)
 
 		values = warehouse_defaults()  # dulu: UnknownFieldError 500
@@ -585,7 +608,7 @@ class TestSettingsFieldsSelfHeal(IntegrationTestCase):
 		self.assertTrue(
 			frappe.db.get_value(
 				"Custom Field",
-				{"dt": "Manufacturing Settings", "fieldname": "custom_default_form_order_target_warehouse"},
+				{"dt": "Manufacturing Settings", "fieldname": "custom_default_production_item_group"},
 				"name",
 			),
 			"field harus terpasang ulang oleh konvergensi",

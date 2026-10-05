@@ -296,6 +296,15 @@ WAREHOUSE_DEFAULT_FIELDS = [
 		"options": "Warehouse",
 		"description": "Production App: gudang tujuan Form Order (mis. WIP produksi)",
 	},
+	# FU93: filter Kode Item wizard "Tambah Plan" (Production Plan native).
+	# Settings-only (tidak pernah diisi ke WO) — kosong = wizard tanpa filter.
+	{
+		"fieldname": "custom_default_production_item_group",
+		"label": "Default Production Item Group (Production App)",
+		"fieldtype": "Link",
+		"options": "Item Group",
+		"description": "Production App: filter Kode Item pada wizard Tambah Plan (Production Plan); kosong = tanpa filter",
+	},
 	# FU61 (2026-09-22): scope company (FU58) dipensiunkan atas permintaan
 	# user — site satu-company, gate hanya menambah kelas insiden. Field
 	# custom_default_company dihapus idempoten oleh retire_company_field().

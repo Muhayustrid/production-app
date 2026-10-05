@@ -593,12 +593,17 @@ HANDOVER_SOURCE_FIELD = "custom_default_handover_source_warehouse"
 FORM_ORDER_SOURCE_FIELD = "custom_default_form_order_source_warehouse"
 FORM_ORDER_TARGET_FIELD = "custom_default_form_order_target_warehouse"
 
+# FU93: filter Kode Item wizard "Tambah Plan" (Production Plan native).
+# Settings-only seperti field serah terima — wizard membaca nilai saat dialog dibuka.
+PRODUCTION_ITEM_GROUP_FIELD = "custom_default_production_item_group"
+
 SETTING_WAREHOUSE_FIELDS = {
 	**WAREHOUSE_DEFAULT_FIELDS,
 	"handover_warehouse": HANDOVER_WAREHOUSE_FIELD,
 	"handover_source_warehouse": HANDOVER_SOURCE_FIELD,
 	"form_order_source_warehouse": FORM_ORDER_SOURCE_FIELD,
 	"form_order_target_warehouse": FORM_ORDER_TARGET_FIELD,
+	"production_item_group": PRODUCTION_ITEM_GROUP_FIELD,
 }
 
 
@@ -618,9 +623,10 @@ def _ensure_settings_fields():
 	"""FU60/FU61: konvergensi field default gudang di titik baca sentral.
 	Pasang yang kurang (update kode tanpa migrate pernah mematikan seluruh
 	bacaan settings di v16) dan pensiunkan field company FU61 bila masih ada.
-	Sentinel = field terakhir paket (dibuat paling akhir oleh ensure)."""
+	Sentinel = field terakhir paket (dibuat paling akhir oleh ensure; kini
+	field FU93 custom_default_production_item_group)."""
 	meta = frappe.get_meta("Manufacturing Settings")
-	if meta.get_field("custom_default_form_order_target_warehouse"):
+	if meta.get_field(PRODUCTION_ITEM_GROUP_FIELD):
 		if meta.get_field(RETIRED_COMPANY_FIELD):
 			from production_app.upgrade import retire_company_field
 			retire_company_field()
@@ -650,13 +656,14 @@ def warehouse_defaults_save(
 	source_warehouse=None, wip_warehouse=None, fg_warehouse=None, scrap_warehouse=None,
 	handover_warehouse=None, handover_source_warehouse=None,
 	form_order_source_warehouse=None, form_order_target_warehouse=None,
+	production_item_group=None,
 ):
 	"""Save the Production App warehouse defaults (empty string clears).
 
 	FU58 LIVE: perubahan lama->baru (keduanya non-kosong) pada 4 field Work
 	Order dipropagasikan ke WO berjalan yang kolomnya masih bernilai lama,
-	satu transaksi dengan simpanan pengaturan. Return flat 8 kunci plus
-	kunci propagated/skipped/failed."""
+	satu transaksi dengan simpanan pengaturan. Return flat 9 kunci plus
+	kunci propagated/skipped/failed. FU93: production_item_group settings-only."""
 	frappe.has_permission("Manufacturing Settings", "write", throw=True)
 	payload = {
 		"source_warehouse": source_warehouse,
@@ -667,12 +674,17 @@ def warehouse_defaults_save(
 		"handover_source_warehouse": handover_source_warehouse,
 		"form_order_source_warehouse": form_order_source_warehouse,
 		"form_order_target_warehouse": form_order_target_warehouse,
+		"production_item_group": production_item_group,
 	}
 	for key, value in payload.items():
 		if value in (None, ""):
 			payload[key] = None
-		elif not frappe.db.exists("Warehouse", value):
+		elif key != "production_item_group" and not frappe.db.exists("Warehouse", value):
 			frappe.throw(_("Gudang tidak ditemukan: {0}").format(value))
+	if payload["production_item_group"] and not frappe.db.exists(
+		"Item Group", payload["production_item_group"]
+	):
+		frappe.throw(_("Item Group tidak ditemukan: {0}").format(payload["production_item_group"]))
 	# nilai lama DIBACA sebelum singleton disimpan (dasar diff propagasi)
 	old = _warehouse_defaults()
 	settings = frappe.get_doc("Manufacturing Settings")
