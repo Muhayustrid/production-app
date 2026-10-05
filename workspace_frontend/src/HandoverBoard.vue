@@ -318,7 +318,10 @@ const seSortKey = ref('')
 const seSortDir = ref('')
 function seSetSort(key) {
   if (seSortKey.value !== key) { seSortKey.value = key; seSortDir.value = 'asc' }
-  else seSortDir.value = nextSortDir(seSortDir.value)
+  else {
+    seSortDir.value = nextSortDir(seSortDir.value)
+    if (!seSortDir.value) seSortKey.value = '' // klik ke-3 = normal: ikon header ikut hilang
+  }
 }
 const serahSorted = computed(() =>
   sortRows(serahRows.value, seSortKey.value && SE_SORT_ACCESSORS[seSortKey.value], seSortDir.value, seSortKey.value === 'qty' ? 'num' : 'text')

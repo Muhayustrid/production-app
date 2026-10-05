@@ -23,7 +23,10 @@ const foSortAccessors = {
 }
 function foSetSort(key) {
   if (foSortKey.value !== key) { foSortKey.value = key; foSortDir.value = 'asc' }
-  else foSortDir.value = nextSortDir(foSortDir.value)
+  else {
+    foSortDir.value = nextSortDir(foSortDir.value)
+    if (!foSortDir.value) foSortKey.value = '' // klik ke-3 = normal: ikon header ikut hilang
+  }
 }
 const foSorted = computed(() =>
   sortRows(formOrders, foSortKey.value && foSortAccessors[foSortKey.value], foSortDir.value)

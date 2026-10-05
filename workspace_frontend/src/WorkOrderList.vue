@@ -77,7 +77,10 @@ const orderToken = computed(() =>
 )
 function setSort(key) {
   if (sortKey.value !== key) { sortKey.value = key; sortDir.value = 'asc' }
-  else sortDir.value = nextSortDir(sortDir.value)
+  else {
+    sortDir.value = nextSortDir(sortDir.value)
+    if (!sortDir.value) sortKey.value = '' // klik ke-3 = normal: ikon header ikut hilang
+  }
   reload()
 }
 function saveWoPreferences() {
