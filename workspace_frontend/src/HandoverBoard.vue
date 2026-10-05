@@ -22,9 +22,10 @@ import { boxAllocationText, groupBoxText } from './handover-box.js'
 import { laneStatusMeta } from './form-order.js'
 import RangeField from './RangeField.vue'
 import {
-  CheckCircle2, ChevronRight, ClipboardList, Filter, Inbox, KanbanSquare,
+  ArrowDown, CheckCircle2, ChevronRight, ClipboardList, Filter, Inbox, KanbanSquare,
   Search, Snowflake, Table2, Truck
 } from 'lucide-vue-next'
+import { nextSortDir, sortRows } from './table-sort.js'
 
 // FU49: tabel memakai baris kartu ala Work Order; klik baris (rowClickAction)
 // tetap satu-satunya aksi — role diambil dari payload board saat dibutuhkan.
@@ -303,6 +304,25 @@ const serahRows = computed(() =>
     .map((r) => ({ r, meta: laneStatusMeta(r) }))
     .filter(({ r }) => boardMatch({ name: r.item, workOrder: r.workOrder, document: r.materialRequest || r.stockEntry, batch: r.batch }, searchQ.value))
 )
+// FU94: sort 3-klik tabel (client-side — baris dimuat penuh)
+const SE_SORT_ACCESSORS = {
+  dokumen: (row) => row.r.materialRequest,
+  item: (row) => row.r.item,
+  qty: (row) => row.r.requestedQtyPcs,
+  wo: (row) => row.r.workOrder,
+  batch: (row) => row.r.batch,
+  owner: (row) => row.r.ownerName,
+  status: (row) => row.meta.label,
+}
+const seSortKey = ref('')
+const seSortDir = ref('')
+function seSetSort(key) {
+  if (seSortKey.value !== key) { seSortKey.value = key; seSortDir.value = 'asc' }
+  else seSortDir.value = nextSortDir(seSortDir.value)
+}
+const serahSorted = computed(() =>
+  sortRows(serahRows.value, seSortKey.value && SE_SORT_ACCESSORS[seSortKey.value], seSortDir.value, seSortKey.value === 'qty' ? 'num' : 'text')
+)
 // FU50: empty state membedakan "belum ada request" vs "terfilter habis"
 const serahFilteredOut = computed(() =>
   !serahRows.value.length && (!!searchQ.value || serahFilterCount(seFilter()) > 0))
@@ -508,18 +528,32 @@ onMounted(() => {
   <template v-else>
     <div class="wo-body se-queue">
       <div class="wo-thead" v-if="serahRows.length">
-        <span>Dokumen</span>
-        <span>Item</span>
-        <span style="text-align: right">Qty</span>
-        <span>Work Order</span>
-        <span>Batch</span>
-        <span>Dibuat oleh</span>
-        <span>Status</span>
+        <button type="button" class="th-sort" :class="{ on: seSortKey === 'dokumen', asc: seSortDir === 'asc' }" @click="seSetSort('dokumen')">
+          Dokumen<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        </button>
+        <button type="button" class="th-sort" :class="{ on: seSortKey === 'item', asc: seSortDir === 'asc' }" @click="seSetSort('item')">
+          Item<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        </button>
+        <button type="button" class="th-sort kanan" :class="{ on: seSortKey === 'qty', asc: seSortDir === 'asc' }" @click="seSetSort('qty')">
+          Qty<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        </button>
+        <button type="button" class="th-sort" :class="{ on: seSortKey === 'wo', asc: seSortDir === 'asc' }" @click="seSetSort('wo')">
+          Work Order<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        </button>
+        <button type="button" class="th-sort" :class="{ on: seSortKey === 'batch', asc: seSortDir === 'asc' }" @click="seSetSort('batch')">
+          Batch<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        </button>
+        <button type="button" class="th-sort" :class="{ on: seSortKey === 'owner', asc: seSortDir === 'asc' }" @click="seSetSort('owner')">
+          Dibuat oleh<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        </button>
+        <button type="button" class="th-sort" :class="{ on: seSortKey === 'status', asc: seSortDir === 'asc' }" @click="seSetSort('status')">
+          Status<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        </button>
         <span></span>
       </div>
 
       <div
-        v-for="{ r, meta } in serahRows"
+        v-for="{ r, meta } in serahSorted"
         :key="r.id"
         class="wo-row se-queue-row"
         :class="{ rowlink: !!rowClickAction(r, handoverBoard.roles) }"

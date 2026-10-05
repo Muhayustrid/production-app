@@ -198,9 +198,15 @@ const txnFirst = ref(0)
 const txnTerfilter = computed(() =>
   txnMaterial.value ? txnOfMaterial(transactions.value, txnMaterial.value) : transactions.value
 )
-const txnHalaman = computed(() =>
-  txnTerfilter.value.slice(txnFirst.value, txnFirst.value + TXN_PAGE)
+// FU94: paginasi tab Transaksi pindah ke paginator bawaan DataTable (list
+// penuh supaya sort mencakup semua baris) — slice `txnHalaman` tidak lagi dipakai
+// FU94: tab "Penggunaan bahan" (kartu) ikut dibatasi 10/halaman
+const USAGE_PAGE = 10
+const usageFirst = ref(0)
+const usageHalaman = computed(() =>
+  workOrders.value.slice(usageFirst.value, usageFirst.value + USAGE_PAGE)
 )
+watch(data, () => { usageFirst.value = 0 })
 const bahanTerpilih = computed(() =>
   txnMaterial.value ? rows.value.find((r) => r.item_code === txnMaterial.value) : null
 )
@@ -506,8 +512,9 @@ async function exportXlsx() {
           class="dash-table mu-table"
           :rowHover="true"
           @row-click="(e) => pilihBahan(e.data)"
+          removableSort
         >
-          <Column header="Bahan" headerClass="col-bahan" bodyClass="col-bahan">
+          <Column field="item_name" header="Bahan" sortable headerClass="col-bahan" bodyClass="col-bahan">
             <template #body="{ data: r }">
               <span class="wo-prod mu-name">
                 {{ r.item_name || r.item_code }}
@@ -516,14 +523,14 @@ async function exportXlsx() {
               </span>
             </template>
           </Column>
-          <Column field="uom" header="UOM" headerClass="col-uom" bodyClass="col-uom" />
-          <Column header="Teoritis" headerClass="col-angka" bodyClass="col-angka">
+          <Column field="uom" header="UOM" sortable headerClass="col-uom" bodyClass="col-uom" />
+          <Column field="expected" header="Teoritis" sortable headerClass="col-angka" bodyClass="col-angka">
             <template #body="{ data: r }">{{ fmtId(r.expected) }}</template>
           </Column>
-          <Column header="Aktual" headerClass="col-angka" bodyClass="col-angka">
+          <Column field="consumed" header="Aktual" sortable headerClass="col-angka" bodyClass="col-angka">
             <template #body="{ data: r }">{{ fmtId(r.consumed) }}</template>
           </Column>
-          <Column header="Selisih" headerClass="col-selisih" bodyClass="col-selisih">
+          <Column field="variance" header="Selisih" sortable headerClass="col-selisih" bodyClass="col-selisih">
             <template #body="{ data: r }">
               <span :class="`tone-${varianceTone(r)}`">{{ signedQtyText(r.variance, r.uom) }}</span>
             </template>
@@ -584,7 +591,7 @@ async function exportXlsx() {
         <div v-if="traceTab === 'usage'" class="trace-grid">
           <div class="trace-list">
             <p v-if="!workOrders.length" class="dash-none">Belum ada work order dalam rentang ini</p>
-            <a v-for="w in workOrders" :key="w.wo" class="trace-wo" :href="woHref(w.wo)">
+            <a v-for="w in usageHalaman" :key="w.wo" class="trace-wo" :href="woHref(w.wo)">
               <span class="trace-ico" aria-hidden="true"><Factory :size="17" :stroke-width="2" /></span>
               <span class="two">
                 <span class="t1">{{ w.wo }}</span>
@@ -603,6 +610,14 @@ async function exportXlsx() {
                 <ChevronRight :size="15" :stroke-width="2" class="mu-chev" aria-hidden="true" />
               </span>
             </a>
+            <Paginator
+              v-if="workOrders.length > USAGE_PAGE"
+              :rows="USAGE_PAGE"
+              :totalRecords="workOrders.length"
+              v-model:first="usageFirst"
+              class="dash-pager"
+              aria-label="Halaman penggunaan bahan"
+            />
           </div>
           <aside class="trace-info">
             <h3><HelpCircle :size="15" :stroke-width="2" aria-hidden="true" /> Cara ini dihitung</h3>
@@ -621,25 +636,33 @@ async function exportXlsx() {
 
         <!-- tab 2: tabel work order -->
         <template v-else-if="traceTab === 'wo'">
-          <DataTable :value="workOrders" dataKey="wo" class="dash-table mu-table">
-            <Column header="Work order" headerClass="col-wo2" bodyClass="col-wo2">
+          <DataTable
+            :value="workOrders"
+            dataKey="wo"
+            class="dash-table mu-table"
+            removableSort
+            paginator
+            :rows="USAGE_PAGE"
+            v-model:first="usageFirst"
+          >
+            <Column field="wo" header="Work order" sortable headerClass="col-wo2" bodyClass="col-wo2">
               <template #body="{ data: w }">
                 <a class="linklike" :href="woHref(w.wo)">{{ w.wo }}</a>
               </template>
             </Column>
-            <Column header="Produk" headerClass="col-prod2" bodyClass="col-prod2">
+            <Column field="produk" header="Produk" sortable headerClass="col-prod2" bodyClass="col-prod2">
               <template #body="{ data: w }">{{ w.produk }}</template>
             </Column>
-            <Column header="BOM" headerClass="col-bom" bodyClass="col-bom">
+            <Column field="bom" header="BOM" sortable headerClass="col-bom" bodyClass="col-bom">
               <template #body="{ data: w }"><span class="mono">{{ w.bom || '-' }}</span></template>
             </Column>
-            <Column header="Rencana" headerClass="col-angka" bodyClass="col-angka">
+            <Column field="planned_qty" header="Rencana" sortable headerClass="col-angka" bodyClass="col-angka">
               <template #body="{ data: w }">{{ fmtId(w.planned_qty) }} <small class="kuom">{{ w.uom }}</small></template>
             </Column>
-            <Column header="Hasil" headerClass="col-angka" bodyClass="col-angka">
+            <Column field="produced_qty" header="Hasil" sortable headerClass="col-angka" bodyClass="col-angka">
               <template #body="{ data: w }">{{ fmtId(w.produced_qty) }} <small class="kuom">{{ w.uom }}</small></template>
             </Column>
-            <Column header="Status" headerClass="col-status2" bodyClass="col-status2">
+            <Column field="status" header="Status" sortable headerClass="col-status2" bodyClass="col-status2">
               <template #body="{ data: w }">
                 <Tag :value="woStatusText(w.status)" :severity="statusSeverity(w.status)" class="mu-pill" />
               </template>
@@ -662,19 +685,27 @@ async function exportXlsx() {
             </button>
             <span class="txn-count">{{ fmtId(txnTerfilter.length) }} transaksi</span>
           </div>
-          <DataTable :value="txnHalaman" dataKey="se" class="dash-table mu-table">
-            <Column header="Stock entry" headerClass="col-se" bodyClass="col-se">
+          <DataTable
+            :value="txnTerfilter"
+            dataKey="se"
+            class="dash-table mu-table"
+            removableSort
+            paginator
+            :rows="TXN_PAGE"
+            v-model:first="txnFirst"
+          >
+            <Column field="se" header="Stock entry" sortable headerClass="col-se" bodyClass="col-se">
               <template #body="{ data: t }"><span class="mono mu-se">{{ t.se }}</span></template>
             </Column>
-            <Column header="Tanggal" headerClass="col-tgl" bodyClass="col-tgl">
+            <Column field="tanggal" header="Tanggal" sortable headerClass="col-tgl" bodyClass="col-tgl">
               <template #body="{ data: t }">{{ tanggalPendek(t.tanggal) }}</template>
             </Column>
-            <Column header="Work order" headerClass="col-wo2" bodyClass="col-wo2">
+            <Column field="wo" header="Work order" sortable headerClass="col-wo2" bodyClass="col-wo2">
               <template #body="{ data: t }">
                 <a class="linklike" :href="woHref(t.wo)">{{ t.wo }}</a>
               </template>
             </Column>
-            <Column header="Bahan" headerClass="col-bahan" bodyClass="col-bahan">
+            <Column field="item_name" header="Bahan" sortable headerClass="col-bahan" bodyClass="col-bahan">
               <template #body="{ data: t }">
                 <span class="wo-prod mu-name">
                   {{ t.item_name }}
@@ -682,10 +713,10 @@ async function exportXlsx() {
                 </span>
               </template>
             </Column>
-            <Column header="Qty" headerClass="col-angka" bodyClass="col-angka">
+            <Column field="qty" header="Qty" sortable headerClass="col-angka" bodyClass="col-angka">
               <template #body="{ data: t }">{{ fmtId(t.qty) }} <small class="kuom">{{ t.uom }}</small></template>
             </Column>
-            <Column header="Batch" headerClass="col-batch" bodyClass="col-batch">
+            <Column field="batch" header="Batch" sortable headerClass="col-batch" bodyClass="col-batch">
               <template #body="{ data: t }"><span class="mono">{{ t.batch || '-' }}</span></template>
             </Column>
             <template #empty>
@@ -695,19 +726,6 @@ async function exportXlsx() {
               </div>
             </template>
           </DataTable>
-          <Paginator
-            v-if="txnTerfilter.length > TXN_PAGE"
-            :rows="TXN_PAGE"
-            :totalRecords="txnTerfilter.length"
-            v-model:first="txnFirst"
-            class="dash-pager"
-            aria-label="Halaman transaksi"
-          >
-            <template #start><span /></template>
-            <template #end><span /></template>
-            <template #previcon><span aria-hidden="true">‹</span></template>
-            <template #nexticon><span aria-hidden="true">›</span></template>
-          </Paginator>
         </template>
       </div>
     </section>

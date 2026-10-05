@@ -15,7 +15,6 @@ import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
 import Drawer from 'primevue/drawer'
-import Paginator from 'primevue/paginator'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import {
@@ -64,7 +63,8 @@ const terfilter = computed(() => {
 const PAGE = 10
 const first = ref(0)
 watch([q, grup, status, gudang], () => { first.value = 0 })
-const halaman = computed(() => terfilter.value.slice(first.value, first.value + PAGE))
+// FU94: paginasi pindah ke paginator bawaan DataTable (sort mencakup semua
+// baris terfilter, bukan per halaman) — slice `halaman` tidak lagi dipakai
 
 // FU90: gudang server-side — pilih di popover memicu fetch ulang (data lama
 // tampil sampai respons); respons default saat load/clear tidak memicu ulang
@@ -321,24 +321,29 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
       </div>
       <div class="panel-body mu-tbody">
         <DataTable
-          :value="halaman"
+          :value="terfilter"
           dataKey="item_code"
           class="dash-table mu-table sa-table"
           :rowHover="true"
           @row-click="(e) => bukaItem(e.data)"
+          removableSort
+          paginator
+          :rows="PAGE"
+          v-model:first="first"
+          @sort="first = 0"
         >
-          <Column header="Kode Item" headerClass="col-kode" bodyClass="col-kode">
+          <Column field="item_code" header="Kode Item" sortable headerClass="col-kode" bodyClass="col-kode">
             <template #body="{ data: r }"><span class="mono">{{ r.item_code }}</span></template>
           </Column>
-          <Column header="Nama Item" headerClass="col-nama" bodyClass="col-nama">
+          <Column field="item_name" header="Nama Item" sortable headerClass="col-nama" bodyClass="col-nama">
             <template #body="{ data: r }">
               <span class="wo-prod">{{ r.item_name }}</span>
             </template>
           </Column>
-          <Column header="Grup Item" headerClass="col-grup" bodyClass="col-grup">
+          <Column field="item_group" header="Grup Item" sortable headerClass="col-grup" bodyClass="col-grup">
             <template #body="{ data: r }">{{ r.item_group }}</template>
           </Column>
-          <Column header="Stok" headerClass="col-angka" bodyClass="col-angka">
+          <Column field="actual_qty" header="Stok" sortable headerClass="col-angka" bodyClass="col-angka">
             <template #body="{ data: r }">
               <span class="wo-qty sa-qty">
                 <span class="qmain">{{ qtyText(r, 'actual_qty').main }}</span>
@@ -346,7 +351,7 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
               </span>
             </template>
           </Column>
-          <Column header="Reserved" headerClass="col-angka" bodyClass="col-angka">
+          <Column field="reserved_qty" header="Reserved" sortable headerClass="col-angka" bodyClass="col-angka">
             <template #body="{ data: r }">
               <span class="sa-res wo-qty sa-qty">
                 <span class="qmain">{{ qtyText(r, 'reserved_qty').main }}</span>
@@ -354,7 +359,7 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
               </span>
             </template>
           </Column>
-          <Column header="Tersedia" headerClass="col-tersedia" bodyClass="col-tersedia">
+          <Column field="available" header="Tersedia" sortable headerClass="col-tersedia" bodyClass="col-tersedia">
             <template #body="{ data: r }">
               <b class="sa-avail wo-qty sa-qty">
                 <span class="qmain">{{ qtyText(r, 'available').main }}</span>
@@ -362,7 +367,7 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
               </b>
             </template>
           </Column>
-          <Column header="Minimum" headerClass="col-angka" bodyClass="col-angka">
+          <Column field="min_stock" header="Minimum" sortable headerClass="col-angka" bodyClass="col-angka">
             <template #body="{ data: r }">
               <span class="wo-qty sa-qty">
                 <span class="qmain">{{ qtyText(r, 'min_stock').main }}</span>
@@ -370,12 +375,12 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
               </span>
             </template>
           </Column>
-          <Column header="Status" headerClass="col-status2" bodyClass="col-status2">
+          <Column field="status" header="Status" sortable headerClass="col-status2" bodyClass="col-status2">
             <template #body="{ data: r }">
               <Tag :value="STATUS_LABEL[r.status]" :severity="STATUS_SEVERITY[r.status]" class="mu-pill" />
             </template>
           </Column>
-          <Column header="Kapasitas" headerClass="col-kapas" bodyClass="col-kapas">
+          <Column field="capacity_batch" header="Kapasitas" sortable headerClass="col-kapas" bodyClass="col-kapas">
             <template #body="{ data: r }">
               <span v-if="r.capacity_batch == null">-</span>
               <span v-else :class="{ 'tone-bad': !r.capacity_batch }">{{ fmtId(r.capacity_batch) }} <small class="kuom">Batch</small></span>
@@ -391,19 +396,6 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
             </div>
           </template>
         </DataTable>
-        <Paginator
-          v-if="terfilter.length > PAGE"
-          :rows="PAGE"
-          :totalRecords="terfilter.length"
-          v-model:first="first"
-          class="dash-pager"
-          aria-label="Halaman daftar item"
-        >
-          <template #start><span /></template>
-          <template #end><span /></template>
-          <template #previcon><span aria-hidden="true">‹</span></template>
-          <template #nexticon><span aria-hidden="true">›</span></template>
-        </Paginator>
       </div>
     </section>
 

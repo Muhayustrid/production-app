@@ -201,6 +201,18 @@ function retryPage() {
   dashboardState.rowsError = ''
   loadDashboardPage(dashboardState.page)
 }
+// FU94: sort 3-klik antrean (sortMode custom) — tabel lazy server-paginated,
+// klik header menerjemahkan event sort bawaan PrimeVue jadi token order
+// wo_list dan kembali ke halaman 1; klik ke-3 (removableSort) = normal.
+// CATATAN: JANGAN sortMode="custom" — di mode itu PrimeVue tidak mengisi
+// state sort internal sehingga event membawa nilai stale.
+const DASH_SORT_TOKENS = { id: 'name', product: 'item', plannedEnd: 'target', plannedStockQty: 'qty', producedStockQty: 'produced' }
+function onDashSort(e) {
+  const base = DASH_SORT_TOKENS[e.sortField]
+  dashboardState.order = base && e.sortOrder ? `${base}_${e.sortOrder === 1 ? 'asc' : 'desc'}` : ''
+  dashFirst.value = 0
+  loadDashboardPage(0)
+}
 // telat = target selesai lewat saat data dimuat & WO belum selesai
 const loadedAtMs = ref(Date.now())
 const overdue = (row) => isOverdue(row, loadedAtMs.value)
@@ -541,13 +553,21 @@ onMounted(reload)
         </div>
         <span v-if="adonanText" class="dchip">Adonan terakhir ke-{{ adonanText }}</span>
       </div>
-      <DataTable :value="dashboardState.rows" dataKey="id" class="dash-table" :loading="dashboardState.rowsLoading" @row-click="(e) => open(e.data.id)">
-        <Column field="id" header="WO" headerClass="col-wo" bodyClass="col-wo">
+      <DataTable
+        :value="dashboardState.rows"
+        dataKey="id"
+        class="dash-table"
+        :loading="dashboardState.rowsLoading"
+        @row-click="(e) => e?.data && open(e.data.id)"
+        removableSort
+        @sort="onDashSort"
+      >
+        <Column field="id" header="WO" sortable headerClass="col-wo" bodyClass="col-wo">
           <template #body="{ data }">
             <button type="button" class="linklike" @click.stop="open(data.id)">{{ data.id }}</button>
           </template>
         </Column>
-        <Column field="product" header="Produk" headerClass="col-prod" bodyClass="col-prod">
+        <Column field="product" header="Produk" sortable headerClass="col-prod" bodyClass="col-prod">
           <template #body="{ data }">
             <span class="wo-prod">
               {{ data.product }}
@@ -568,7 +588,7 @@ onMounted(reload)
             <Tag :value="stageLabel(data)" :severity="pillSeverity(data)" class="dash-tag" />
           </template>
         </Column>
-        <Column header="Target selesai" headerClass="col-target" bodyClass="col-target">
+        <Column field="plannedEnd" header="Target selesai" sortable headerClass="col-target" bodyClass="col-target">
           <template #body="{ data }">
             <span class="dtarget" :class="{ late: overdue(data) }">
               <TriangleAlert v-if="overdue(data)" :size="14" :stroke-width="2" aria-hidden="true" />
@@ -576,7 +596,7 @@ onMounted(reload)
             </span>
           </template>
         </Column>
-        <Column header="Rencana" headerClass="col-rencana" bodyClass="col-rencana" headerStyle="text-align: right" bodyStyle="text-align: right">
+        <Column field="plannedStockQty" header="Rencana" sortable headerClass="col-rencana" bodyClass="col-rencana" headerStyle="text-align: right" bodyStyle="text-align: right">
           <template #body="{ data }">
             <span class="wo-qty">
               <span class="qmain">{{ woQtyText(data.plannedStockQty, data).main }}</span>
@@ -584,7 +604,7 @@ onMounted(reload)
             </span>
           </template>
         </Column>
-        <Column header="Hasil" headerClass="col-hasil" bodyClass="col-hasil" headerStyle="text-align: right" bodyStyle="text-align: right">
+        <Column field="producedStockQty" header="Hasil" sortable headerClass="col-hasil" bodyClass="col-hasil" headerStyle="text-align: right" bodyStyle="text-align: right">
           <template #body="{ data }">
             <span class="wo-qty">
               <span class="qmain">{{ woQtyText(data.producedStockQty, data).main }}</span>

@@ -310,6 +310,7 @@ export async function loadList(filters = {}) {
       company: filters.company || null,
       start: filters.start ?? 0,
       page_len: filters.pageLen ?? listState.pageSize,
+      order: filters.order || null,
       meta: 1
     })
     const rows = result.rows || []
@@ -333,6 +334,8 @@ export const DASH_PAGE_SIZE = 10
 export const dashboardState = reactive({
   summary: null, rows: [], total: 0, page: 0, loading: false, error: '',
   rowsLoading: false, rowsError: '', company: '', range: null,
+  // FU94: urutan tabel antrean (token whitelist wo_list) — kosong = default
+  order: '',
   // FU78b: seri kartu grafik — endpoint ringan terpisah dgn filter LOKAL
   // (minggu/bulan, series per UOM); gagal → dailyError kecil di kartu
   daily: null, dailyLoading: false, dailyError: ''
@@ -409,6 +412,7 @@ export async function loadDashboardPage(page = 0) {
       stage: null,
       start: Math.max(0, page) * DASH_PAGE_SIZE,
       page_len: DASH_PAGE_SIZE,
+      order: dashboardState.order || null,
       meta: 1,
       company: dashboardState.company || null
     })

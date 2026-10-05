@@ -578,6 +578,28 @@ textarea.input { height: auto; padding: 8px 10px; }
   background: rgba(243, 246, 249, 0.7);
   border-bottom: 1px solid var(--line);
 }
+/* FU94: header kolom sortable tabel custom — tombol meniru sel header
+   (font/color/warisan uppercase), panah samar saat hover, berwarna +
+   menghadap atas saat asc */
+.wo-thead .th-sort {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+}
+.wo-thead .th-sort .sort-ico { opacity: 0; transition: opacity 0.15s ease; }
+.wo-thead .th-sort:hover { color: var(--text-color, #1f2937); }
+.wo-thead .th-sort:hover .sort-ico { opacity: 0.45; }
+.wo-thead .th-sort.on { color: var(--primary-color, #2490ef); }
+.wo-thead .th-sort.on .sort-ico { opacity: 1; }
+.wo-thead .th-sort.asc .sort-ico { transform: rotate(180deg); }
+.wo-thead .th-sort.kanan { justify-content: flex-end; text-align: right; }
 .wo-thead + .wo-row { border-top: 0; }
 /* FU22: varian kompak untuk layar menengah (layout kartu baru di <=820px) */
 @media (max-width: 1180px) {

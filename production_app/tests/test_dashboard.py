@@ -2195,3 +2195,42 @@ class TestDashboard(IntegrationTestCase):
 		halaman; jangan diam-diam membuat file kosong)."""
 		with self.assertRaises(frappe.ValidationError):
 			self._wb(dari=today(), sampai=add_days(today(), -1))
+
+	# ----------------------------- 68. FU94: param order ber-whitelist di wo_list
+
+	def test_68_wo_list_order_whitelist(self):
+		"""wo_list(order=...) mengurutkan server-side via token whitelist; token
+		tak dikenal jatuh ke urutan default. Dijalankan paling akhir supaya
+		fixture WO company_b di sini tidak mengganggu hitungan test awal
+		(satu transaksi per kelas)."""
+		common = dict(
+			company=self.company_b, wip_wh=self.b_wip_wh,
+			fg_wh=self.b_fg_wh, src_wh=self.b_src_wh,
+		)
+		wo_50 = self._make_wo(self.bom_plain_b, 50, self.fg_plain, adonan=2, **common)
+		wo_70 = self._make_wo(self.bom_plain_b, 70, self.fg_plain, adonan=1, **common)
+		wo_late = self._make_wo(
+			self.bom_plain_b, 60, self.fg_plain,
+			planned=add_days(now(), 1), **common,
+		)
+		# default: planned_start_date desc → WO berjadwal terjauh lebih dulu
+		names_default = [r.name for r in wo_list(company=self.company_b, page_len=2500)]
+		self.assertEqual(names_default[0], wo_late.name)
+		# name asc/desc saling berbalik dan memuat semua fixture
+		asc = [r.name for r in wo_list(company=self.company_b, page_len=2500, order="name_asc")]
+		desc = [r.name for r in wo_list(company=self.company_b, page_len=2500, order="name_desc")]
+		self.assertEqual(asc, list(reversed(desc)))
+		for wo in (wo_50, wo_70, wo_late):
+			self.assertIn(wo.name, asc)
+		# qty asc: 50 sebelum 60 sebelum 70
+		qty_asc = [r.name for r in wo_list(company=self.company_b, page_len=2500, order="qty_asc")]
+		idx = {n: i for i, n in enumerate(qty_asc)}
+		self.assertLess(idx[wo_50.name], idx[wo_late.name])
+		self.assertLess(idx[wo_late.name], idx[wo_70.name])
+		# adonan asc: adonan 1 sebelum adonan 2
+		ad_asc = [r.name for r in wo_list(company=self.company_b, page_len=2500, order="adonan_asc")]
+		idxa = {n: i for i, n in enumerate(ad_asc)}
+		self.assertLess(idxa[wo_70.name], idxa[wo_50.name])
+		# token tak dikenal (termasuk percobaan injeksi) = urutan default
+		fallback = [r.name for r in wo_list(company=self.company_b, page_len=2500, order="qty; drop table tabUser")]
+		self.assertEqual(fallback, names_default)

@@ -183,13 +183,41 @@ def _stage_filters(stage):
 	return filters
 
 
+# FU94: urutan wo_list dipilih klien lewat token whitelist (BUKAN order_by
+# bebas — menutup injeksi SQL). "default" = perilaku lama. Tie-breaker
+# creation desc menjaga urutan stabil antar halaman.
+WO_LIST_ORDERS = {
+	"default": "planned_start_date desc, creation desc",
+	"name_asc": "name asc",
+	"name_desc": "name desc",
+	"adonan_asc": "custom_adonan_ke asc, creation desc",
+	"adonan_desc": "custom_adonan_ke desc, creation desc",
+	"item_asc": "production_item asc",
+	"item_desc": "production_item desc",
+	"date_asc": "planned_start_date asc, creation desc",
+	"date_desc": "planned_start_date desc, creation desc",
+	"target_asc": "planned_end_date asc, creation desc",
+	"target_desc": "planned_end_date desc, creation desc",
+	"status_asc": "status asc, planned_start_date desc, creation desc",
+	"status_desc": "status desc, planned_start_date desc, creation desc",
+	"qty_asc": "qty asc",
+	"qty_desc": "qty desc",
+	"produced_asc": "produced_qty asc",
+	"produced_desc": "produced_qty desc",
+}
+
+
 @frappe.whitelist()
-def wo_list(search=None, production_item=None, status=None, start_date=None, end_date=None, stage=None, start=0, page_len=20, meta=0, company=None):
-	"""Permission-filtered, paginated Work Order list for the workspace."""
+def wo_list(search=None, production_item=None, status=None, start_date=None, end_date=None, stage=None, start=0, page_len=20, meta=0, company=None, order=None):
+	"""Permission-filtered, paginated Work Order list for the workspace.
+
+	FU94: `order` = token whitelist WO_LIST_ORDERS (klik header tabel); token
+	tak dikenal/kosong jatuh ke urutan default."""
 	start, page_len = max(int(start), 0), max(min(int(page_len), 2500), 1)
 	filters, or_filters = _base_filters(search, production_item, status, start_date, end_date, company)
 	if stage:
 		filters.extend(_stage_filters(stage))
+	order_by = WO_LIST_ORDERS.get((str(order).strip().lower() if order else "") or "default", WO_LIST_ORDERS["default"])
 
 	def fetch(start_at, limit):
 		try:
@@ -198,7 +226,7 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 				filters=filters,
 				or_filters=or_filters or None,
 				fields=LIST_FIELDS,
-				order_by="planned_start_date desc, creation desc",
+				order_by=order_by,
 				start=start_at,
 				page_length=limit,
 			)

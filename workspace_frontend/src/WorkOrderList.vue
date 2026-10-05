@@ -3,7 +3,8 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
 import { fmtDate, qtyStack } from './format.js'
 import { buildWorkOrderPreferences, normalizeWorkOrderPreferences } from './work-order-preferences.js'
-import { Search, Filter, ChevronRight, SearchX, Table, Kanban, X } from 'lucide-vue-next'
+import { nextSortDir } from './table-sort.js'
+import { Search, Filter, ChevronRight, SearchX, Table, Kanban, X, ArrowDown } from 'lucide-vue-next'
 import WorkOrderKanban from './WorkOrderKanban.vue'
 import RangeField from './RangeField.vue'
 
@@ -62,8 +63,22 @@ function filterPayload() {
     status: fStatus.value === 'all' ? '' : fStatus.value,
     stage: fStage.value === 'all' ? '' : (fStage.value === 'done' ? 'selesai' : fStage.value),
     company: companyOverride.value || null,
-      startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value
+      startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value,
+    order: orderToken.value
   }
+}
+// FU94: sort 3-klik di header (naik → turun → normal) — daftar WO
+// server-paginated, jadi urutan dikirim sebagai token whitelist wo_list.
+const WO_SORT_TOKENS = { wo: 'name', adonan: 'adonan', produk: 'item', jadwal: 'date', status: 'status', rencana: 'qty' }
+const sortKey = ref('')
+const sortDir = ref('')
+const orderToken = computed(() =>
+  (sortKey.value && sortDir.value) ? `${WO_SORT_TOKENS[sortKey.value]}_${sortDir.value}` : ''
+)
+function setSort(key) {
+  if (sortKey.value !== key) { sortKey.value = key; sortDir.value = 'asc' }
+  else sortDir.value = nextSortDir(sortDir.value)
+  reload()
 }
 function saveWoPreferences() {
   if (restoring.value) return Promise.resolve()
@@ -268,14 +283,26 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
 
   <div class="wo-body" v-else>
     <div class="wo-thead" v-if="pagedFiltered.length">
-      <span>No. WO</span>
-      <span>Adonan ke</span>
-      <span>Produk</span>
-      <span>Jadwal</span>
-      <span>Status</span>
+      <button type="button" class="th-sort" :class="{ on: sortKey === 'wo', asc: sortDir === 'asc' }" @click="setSort('wo')">
+        No. WO<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
+      <button type="button" class="th-sort" :class="{ on: sortKey === 'adonan', asc: sortDir === 'asc' }" @click="setSort('adonan')">
+        Adonan ke<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
+      <button type="button" class="th-sort" :class="{ on: sortKey === 'produk', asc: sortDir === 'asc' }" @click="setSort('produk')" title="Urut kode produk">
+        Produk<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
+      <button type="button" class="th-sort" :class="{ on: sortKey === 'jadwal', asc: sortDir === 'asc' }" @click="setSort('jadwal')">
+        Jadwal<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
+      <button type="button" class="th-sort" :class="{ on: sortKey === 'status', asc: sortDir === 'asc' }" @click="setSort('status')">
+        Status<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
       <span>Tahap Aktif</span>
       <span>Gudang</span>
-      <span style="text-align: right">Rencana</span>
+      <button type="button" class="th-sort kanan" :class="{ on: sortKey === 'rencana', asc: sortDir === 'asc' }" @click="setSort('rencana')">
+        Rencana<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
       <span></span>
     </div>
 

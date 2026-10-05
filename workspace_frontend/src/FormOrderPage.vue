@@ -3,12 +3,31 @@
 // (#/form-order/baru, FormOrderCreate.vue) — tombol toolbar menavigasi ke
 // sana; pesan sukses ber-nama MR ditinggalkan formCreate via
 // formOrderState.justSaved dan dibaca di sini saat mount.
-import { nextTick, onMounted, ref } from 'vue'
-import { Inbox, Plus } from 'lucide-vue-next'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { ArrowDown, Inbox, Plus } from 'lucide-vue-next'
 import { cancelFormOrder, formOrders, formOrderState, loadFormOrders, retryFormOrderAttachment, uiTopLoading } from './store.js'
 import { foItemsText, foStatusMeta } from './form-order.js'
+import { nextSortDir, sortRows } from './table-sort.js'
 
 const savedMsg = ref('')
+
+// FU94: sort 3-klik riwayat (client-side — daftar dimuat penuh)
+const foSortKey = ref('')
+const foSortDir = ref('')
+const foSortAccessors = {
+  dokumen: (o) => o.materialRequest,
+  dibutuhkan: (o) => o.scheduleDate,
+  owner: (o) => o.ownerName,
+  status: (o) => foStatusMeta(o.status).label,
+  catatan: (o) => o.note,
+}
+function foSetSort(key) {
+  if (foSortKey.value !== key) { foSortKey.value = key; foSortDir.value = 'asc' }
+  else foSortDir.value = nextSortDir(foSortDir.value)
+}
+const foSorted = computed(() =>
+  sortRows(formOrders, foSortKey.value && foSortAccessors[foSortKey.value], foSortDir.value)
+)
 
 function goCreate() {
   window.location.hash = '#/form-order/baru'
@@ -99,16 +118,26 @@ onMounted(async () => {
        reuse kelas FU49) — baris tidak klikabel, aksi Batalkan di kolom akhir -->
   <div class="wo-body fo-history">
     <div class="wo-thead" v-if="formOrders.length">
-      <span>Dokumen</span>
+      <button type="button" class="th-sort" :class="{ on: foSortKey === 'dokumen', asc: foSortDir === 'asc' }" @click="foSetSort('dokumen')">
+        Dokumen<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
       <span>Item</span>
-      <span>Dibutuhkan</span>
-      <span>Dibuat oleh</span>
-      <span>Status</span>
-      <span>Catatan</span>
+      <button type="button" class="th-sort" :class="{ on: foSortKey === 'dibutuhkan', asc: foSortDir === 'asc' }" @click="foSetSort('dibutuhkan')">
+        Dibutuhkan<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
+      <button type="button" class="th-sort" :class="{ on: foSortKey === 'owner', asc: foSortDir === 'asc' }" @click="foSetSort('owner')">
+        Dibuat oleh<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
+      <button type="button" class="th-sort" :class="{ on: foSortKey === 'status', asc: foSortDir === 'asc' }" @click="foSetSort('status')">
+        Status<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
+      <button type="button" class="th-sort" :class="{ on: foSortKey === 'catatan', asc: foSortDir === 'asc' }" @click="foSetSort('catatan')">
+        Catatan<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+      </button>
       <span></span>
     </div>
 
-    <div v-for="o in formOrders" :key="o.id" class="wo-row fo-hist-row">
+    <div v-for="o in foSorted" :key="o.id" class="wo-row fo-hist-row">
       <span class="wo-id c-doc">
         {{ o.materialRequest }}
         <small v-if="o.stockEntry" class="mono">{{ o.stockEntry }}</small>
