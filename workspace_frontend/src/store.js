@@ -300,6 +300,7 @@ export async function loadList(filters = {}) {
   state.loading = true
   state.error = null
   try {
+    await whenCompanyReady() // FU95: scope company tersimpan ikut di fetch pertama
     const result = await call('production_app.api.work_order.wo_list', {
       search: filters.search || null,
       production_item: filters.productionItem || null,
@@ -307,7 +308,8 @@ export async function loadList(filters = {}) {
       start_date: filters.startDate || null,
       end_date: filters.endDate || null,
       stage: filters.stage || null,
-      company: filters.company || null,
+      // FU95: company dibaca dari state GLOBAL (bukan filters halaman)
+      company: companyFilterState.company || null,
       start: filters.start ?? 0,
       page_len: filters.pageLen ?? listState.pageSize,
       order: filters.order || null,
@@ -342,14 +344,59 @@ export const dashboardState = reactive({
 })
 // konteks satu-shot dari Dashboard (klik tahap / "tampilkan semua") —
 // dikonsumsi & dikosongkan WorkOrderList saat mount (runtime saja, tidak
-// masuk preferensi tersimpan); from/to membatasi kartu "Selesai hari ini"
-export const pendingStageFilter = reactive({ stage: '', company: '', from: '', to: '' })
+// masuk preferensi tersimpan); from/to membatasi kartu "Selesai hari ini".
+// FU95: field company DIHAPUS — company kini filter GLOBAL companyFilterState
+// (pilihan Dashboard langsung tersimpan & berlaku di semua halaman).
+export const pendingStageFilter = reactive({ stage: '', from: '', to: '' })
 
-export async function loadDashboard(company = '', range = null) {
+// FU95: filter company GLOBAL — satu pilihan company untuk SELURUH halaman
+// (Work Orders/Stock Entry/Form Order/Ketersediaan Stock/Dashboard/Penggunaan
+// bahan). Disimpan sebagai preferensi PER-USER di server (get_user_default
+// pola FU70/FU18) sehingga selamat dari refresh, pindah halaman, dan browser
+// ditutup. '' = Semua company. Loader halaman menunggu whenCompanyReady()
+// sebelum fetch pertama supaya scope tersimpan tidak terlewat satu respons.
+export const companyFilterState = reactive({ loaded: false, company: '', companies: [] })
+let companyReadyResolve = null
+const companyReady = new Promise((resolve) => { companyReadyResolve = resolve })
+// jaring aman: endpoint mati/lambat TIDAK boleh memblokir halaman selamanya
+export function whenCompanyReady() {
+  if (companyFilterState.loaded) return Promise.resolve()
+  return Promise.race([companyReady, new Promise((r) => setTimeout(r, 2500))])
+}
+export async function loadCompanyFilter() {
+  try {
+    const result = await call('production_app.api.dashboard.company_preference')
+    companyFilterState.company = result.company || ''
+    companyFilterState.companies = result.companies || []
+  } catch (_) {
+    // preferensi kosmetik — boot halaman tetap jalan tanpa filter company
+  } finally {
+    companyFilterState.loaded = true
+    if (companyReadyResolve) companyReadyResolve()
+  }
+  return companyFilterState.company
+}
+export async function saveCompanyFilter(company) {
+  try {
+    const result = await call('production_app.api.dashboard.company_preference_save', {
+      company: company || ''
+    })
+    companyFilterState.company = result.company || ''
+    companyFilterState.companies = result.companies || []
+  } catch (_) {
+    // gagal simpan: pilihan tetap berlaku utk sesi ini (optimistis); muat
+    // ulang halaman berikutnya akan menyelaraskan dari server (server menang)
+  }
+  return companyFilterState.company
+}
+
+export async function loadDashboard(range = null) {
   dashboardState.loading = true
   dashboardState.error = ''
   uiTopLoading.active = true
   try {
+    await whenCompanyReady() // FU95: company global (baca SETELAH siap)
+    const company = companyFilterState.company || ''
     // FU76: rentang {preset, dari?, sampai?} — server yang me-resolve preset
     // (hari ini default); tanpa range = perilaku lama (hari ini)
     const summary = await call('production_app.api.dashboard.dashboard_summary',
@@ -381,12 +428,14 @@ export async function loadDashboard(company = '', range = null) {
 }
 
 // FU78b: seri kartu grafik "Rencana vs hasil" — endpoint ringan terpisah;
-// company mengikuti filter head, mode = filter LOKAL kartu (minggu/bulan).
-// Gagal TIDAK membongkar layar — ditandai dailyError, dicoba ulang.
-export async function loadDashboardDaily(company = '', mode = 'minggu') {
+// company mengikuti filter GLOBAL (FU95), mode = filter LOKAL kartu
+// (minggu/bulan). Gagal TIDAK membongkar layar — ditandai dailyError.
+export async function loadDashboardDaily(mode = 'minggu') {
   dashboardState.dailyLoading = true
   dashboardState.dailyError = ''
   try {
+    await whenCompanyReady()
+    const company = companyFilterState.company || ''
     dashboardState.daily = await call('production_app.api.dashboard.dashboard_daily',
       { company: company || null, mode })
   } catch (e) {
@@ -437,10 +486,11 @@ export async function loadMaterialUsage(params = {}) {
   materialUsageState.loading = true
   materialUsageState.error = ''
   try {
+    await whenCompanyReady() // FU95: company GLOBAL (bukan param halaman)
     materialUsageState.data = await call('production_app.api.material_usage.material_usage', {
       dari: params.dari || null,
       sampai: params.sampai || null,
-      company: params.company || '',
+      company: companyFilterState.company || '',
       production_item: params.productionItem || '',
       search: params.search || '',
       over_only: params.overOnly ? '1' : '0',
@@ -465,7 +515,10 @@ export async function loadStockAvailability(warehouse) {
   stockAvailabilityState.loading = true
   stockAvailabilityState.error = ''
   try {
-    const data = await call('production_app.api.stock_availability.stock_availability', warehouse ? { warehouse } : {})
+    await whenCompanyReady() // FU95: scope gudang & kapasitas ikut company global
+    const args = { company: companyFilterState.company || null }
+    if (warehouse) args.warehouse = warehouse
+    const data = await call('production_app.api.stock_availability.stock_availability', args)
     if (seq !== saSeq) return // guard stale-response: respons lama tak boleh menimpa permintaan lebih baru
     stockAvailabilityState.data = data
     stockAvailabilityState.loaded = true
@@ -613,6 +666,8 @@ export const handoverRequests = reactive([])
 function mapLot(l) {
   return {
     workOrder: l.work_order, batch: l.batch, batchless: !!l.batchless, item: l.item_name, itemCode: l.item_code,
+    // FU95: company dibawa utk pembuktian scope filter global
+    company: l.company || '',
     stockQty: l.qty, adonanKe: l.adonan_ke, stockUom: l.stock_uom,
     displayUom: l.display_uom, qtyInPack: l.display_conversion_factor,
     wholeNumber: !!l.stock_uom_whole_number, uomWarning: l.uom_warning,
@@ -628,6 +683,8 @@ function mapRequest(r) {
   return {
     id: r.mr, materialRequest: r.mr, workOrder: r.work_order,
     item: r.item_name, itemCode: r.item_code,
+    // FU95: company MR (bukti scope filter global papan)
+    company: r.company || '',
     requestedQtyPcs: r.qty, stockUom: r.stock_uom, qtyInPack: r.qty_in_pack,
     adonanKe: r.adonan_ke, batch: r.batch,
     // T35/T39: alokasi box (kg + jumlah) dari ringkasan Work Order / MR
@@ -659,7 +716,10 @@ export async function loadBoard() {
   handoverState.loading = true
   handoverState.error = null
   try {
-    applyBoard(await call('production_app.api.handover.handover_board'))
+    await whenCompanyReady() // FU95: papan langsung ter-scope company tersimpan
+    applyBoard(await call('production_app.api.handover.handover_board', {
+      company: companyFilterState.company || null
+    }))
     handoverState.loaded = true
   } catch (e) {
     handoverState.error = e.message
@@ -672,7 +732,10 @@ async function handoverAction(method, args) {
   if (handoverState.pending) return null
   handoverState.pending = method
   try {
-    const res = await call(`production_app.api.handover.${method}`, args)
+    // FU95: aksi ikut mengirim company global supaya papan balik tetap tersaring
+    const res = await call(`production_app.api.handover.${method}`, {
+      ...args, company: companyFilterState.company || null
+    })
     applyBoard(res.board) // server truth menggantikan seluruh papan
     return res
   } finally {
@@ -710,6 +773,8 @@ function mapFormOrder(o) {
     materialRequest: o.mr,
     status: o.status,
     docstatus: o.docstatus,
+    // FU95: company dibawa utk pembuktian scope filter global
+    company: o.company || '',
     items: (o.items || []).map((i) => ({ code: i.item_code, name: i.item_name, qty: i.qty, uom: i.uom })),
     note: o.note || null,
     scheduleDate: o.schedule_date || null,
@@ -731,7 +796,10 @@ export async function loadFormOrders() {
   formOrderState.loading = true
   formOrderState.error = null
   try {
-    applyFormOrders((await call('production_app.api.form_order.form_order_list')).orders)
+    await whenCompanyReady() // FU95: riwayat langsung ter-scope company tersimpan
+    applyFormOrders((await call('production_app.api.form_order.form_order_list', {
+      company: companyFilterState.company || null
+    })).orders)
     formOrderState.loaded = true
   } catch (e) {
     formOrderState.error = e.message
@@ -744,7 +812,10 @@ async function formOrderAction(method, args) {
   if (formOrderState.pending) return null
   formOrderState.pending = method
   try {
-    const res = await call(`production_app.api.form_order.${method}`, args)
+    // FU95: aksi ikut mengirim company global supaya daftar balik tetap tersaring
+    const res = await call(`production_app.api.form_order.${method}`, {
+      ...args, company: companyFilterState.company || null
+    })
     applyFormOrders(res.orders) // server truth menggantikan seluruh daftar
     return res
   } finally {
@@ -814,7 +885,9 @@ export async function createFormOrder(rows, scheduleDate, note, attachments = []
       // FU48c: satuan terpilih per baris (kosong → server pakai stock_uom)
       items: rows.map((r) => ({ item_code: r.code, qty: Number(r.qty), uom: r.uom || null })),
       schedule_date: scheduleDate || null,
-      note: note || null
+      note: note || null,
+      // FU95: ikut scope company global supaya daftar balik tetap tersaring
+      company: companyFilterState.company || null
     })
     applyFormOrders(result.orders)
 

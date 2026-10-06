@@ -4,12 +4,33 @@
 // sana; pesan sukses ber-nama MR ditinggalkan formCreate via
 // formOrderState.justSaved dan dibaca di sini saat mount.
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { ArrowDown, Inbox, Plus } from 'lucide-vue-next'
-import { cancelFormOrder, formOrders, formOrderState, loadFormOrders, retryFormOrderAttachment, uiTopLoading } from './store.js'
+import { ArrowDown, Filter, Inbox, Plus } from 'lucide-vue-next'
+import { cancelFormOrder, companyFilterState, formOrders, formOrderState, loadFormOrders, retryFormOrderAttachment, saveCompanyFilter, uiTopLoading } from './store.js'
+import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { foItemsText, foStatusMeta } from './form-order.js'
 import { nextSortDir, sortRows } from './table-sort.js'
 
 const savedMsg = ref('')
+
+// FU95: filter company GLOBAL — panel filter gaya WorkOrderList (satu tombol
+// Filter ber-badge + popover); pilihan tersimpan per-user di server sehingga
+// riwayat tetap tersaring setelah refresh / pindah halaman / tutup browser
+const filterOpen = ref(false)
+const companies = computed(() => companyFilterState.companies)
+const showCompany = computed(() => showCompanyPicker(companies.value))
+const companyOptions = computed(() => companySelectOptions(companies.value))
+const activeFilters = computed(() => (showCompany.value && companyFilterState.company ? 1 : 0))
+async function applyCompany(value) {
+  const v = value || ''
+  if (v === companyFilterState.company) return
+  companyFilterState.company = v
+  await saveCompanyFilter(v)
+  await loadFormOrders()
+}
+function clearFilters() {
+  filterOpen.value = false
+  if (companyFilterState.company) applyCompany('')
+}
 
 // FU94: sort 3-klik riwayat (client-side — daftar dimuat penuh)
 const foSortKey = ref('')
@@ -106,11 +127,31 @@ onMounted(async () => {
     </button>
   </div>
 
-  <!-- FU52: tombol menavigasi ke halaman buat (bukan panel toggle) -->
+  <!-- FU52: tombol menavigasi ke halaman buat (bukan panel toggle);
+       FU95: + filter company global gaya WorkOrderList/Stock Entry -->
   <div class="toolbar fo-actions">
     <transition name="pop" mode="out-in">
       <span v-if="savedMsg" class="why fo-saved" role="status">{{ savedMsg }}</span>
     </transition>
+    <div v-if="showCompany" class="filterwrap">
+      <button class="btn filterbtn" :class="{ active: activeFilters }" aria-label="Filter" @click="filterOpen = !filterOpen">
+        <Filter :size="14" :stroke-width="2" />
+        <span class="btext">Filter</span>
+        <span v-if="activeFilters" class="filtercount">{{ activeFilters }}</span>
+      </button>
+      <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
+      <Transition name="pop">
+        <div v-if="filterOpen" class="filterpanel">
+          <div class="ffield">
+            <label>Company</label>
+            <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
+              <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+          </div>
+          <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
+        </div>
+      </Transition>
+    </div>
     <button class="btn btn-primary" @click="goCreate">
       <Plus :size="14" :stroke-width="2" />
       Buat Form Order

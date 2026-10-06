@@ -80,16 +80,18 @@ def _time_str(value):
 
 
 @frappe.whitelist()
-def handover_board():
+def handover_board(company=None):
     """Three-lane Serah Terima board (Cold Storage lots -> Request Gudang ->
-    Terkirim) for the session user."""
-    return _build_board()
+    Terkirim) for the session user. FU95: `company` opsional — filter company
+    global halaman workspace (lot mengikuti company WO, request company MR)."""
+    return _build_board(company)
 
 
-def _build_board():
-    """Board payload; T24 actions return this as the refreshed board."""
-    wo_rows = _wo_lot_rows()
-    requests = _requests(wo_rows)
+def _build_board(company=None):
+    """Board payload; T24 actions return this as the refreshed board.
+    FU95: company None = papan penuh (perilaku lama — kompatibel)."""
+    wo_rows = _wo_lot_rows(company=company)
+    requests = _requests(wo_rows, company=company)
     return {
         "target_warehouse": _target_warehouse(),
         "source_warehouse": _source_warehouse(),
@@ -170,7 +172,7 @@ def _batch_quantities(requirements):
 	return quantities
 
 
-def _wo_lot_rows(wo_names=None):
+def _wo_lot_rows(wo_names=None, company=None):
 	"""One lot row per Work Order that has Manufacture history, enriched with
 	the shared qtyInPack logic (_enrich_units) and item display names.
 
@@ -186,6 +188,9 @@ def _wo_lot_rows(wo_names=None):
 	(rows iterate ascending, so the stamp is overwritten each iteration).
 	"""
 	filters = {"docstatus": 1}
+	# FU95: filter company global — scope baris WO sebelum deret turunannya
+	if company:
+		filters["company"] = company
 	if wo_names is not None:
 		wo_names = sorted({name for name in wo_names if name})
 		if not wo_names:
@@ -369,7 +374,7 @@ def _wo_lot_rows(wo_names=None):
 	return rows
 
 
-def _requests(wo_rows, wo_names=None, item_codes=None):
+def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 	"""Handover request rows — one per Material Request bound to a Work Order
 	via Material Request Item.custom_work_order (T22 field).
 
@@ -402,15 +407,21 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 	if not mr_names:
 		return []
 	try:
+		mr_filters = {
+			"name": ("in", sorted(set(mr_names))),
+			"material_request_type": "Material Transfer",
+		}
+		# FU95: filter company global — MR punya field company native sendiri
+		# (bind sejalur dengan lot saat keduanya di-scope)
+		if company:
+			mr_filters["company"] = company
 		mrs = frappe.get_list(
 			"Material Request",
-			filters={
-				"name": ("in", sorted(set(mr_names))),
-				"material_request_type": "Material Transfer",
-			},
+			filters=mr_filters,
 			fields=[
 				"name", "docstatus", "status", "owner", "creation",
 				"set_from_warehouse", "set_warehouse",
+				"company",
 				"custom_box_1", "custom_box_2",
 				"custom_good_qty_postpacking", "custom_reject_qty_postpacking",
 				"custom_trial_qty_postpacking", "custom_sisa_qty_postpacking",
@@ -528,6 +539,9 @@ def _requests(wo_rows, wo_names=None, item_codes=None):
 				"qty": flt(first.stock_qty or first.qty),  # stock UOM (Pcs)
 				"stock_uom": first.stock_uom,
 				"work_order": first.custom_work_order,
+				# FU95: ikut terkirim supaya klien/uji bisa membuktikan scope
+				# company baris (filter tetap server-side)
+				"company": m.company,
 				"batch": lot.batch if lot and not lot.unsupported else None,
 				"qty_in_pack": qty_in_pack,
 				"display_uom": display_uom,
@@ -1260,7 +1274,7 @@ def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_val
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0, box_3=0, box_3_qty=0):
+def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0, box_3=0, box_3_qty=0, company=None):
     """Gudang side (Stock User / Stock Manager / Gudang Barang Jadi): submit a Material Transfer
     request for the Work Order's FULL produced qty (R3 — no qty dialog, drag is
     the direct action) carrying the validated box allocation. The source
@@ -1378,7 +1392,7 @@ def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0,
         "box_2_qty": qtys_2,
         "box_3": kg_3,
         "box_3_qty": qtys_3,
-        "board": _build_board(),
+        "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }
 
 
@@ -1419,7 +1433,7 @@ def _cancel_unsent_request(material_request):
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def cancel_request(material_request):
+def cancel_request(material_request, company=None):
     """Gudang side (Stock User / Stock Manager / Gudang Barang Jadi): cancel an UNSENT request
     (native cancel; audit history stays, reservation is released). The Work
     Order lock is taken FIRST (no MR->WO lock inversion), then the MR is
@@ -1444,7 +1458,7 @@ def cancel_request(material_request):
         if siblings:
             frappe.throw(_("MR ini bagian grup box ({0}); batalkan seluruh grup.").format(plan))
     _cancel_unsent_request(material_request)
-    return {"ok": True, "material_request": material_request, "board": _build_board()}
+    return {"ok": True, "material_request": material_request, "board": _build_board(company)}
 
 
 def _json_list(value, label):
@@ -1462,7 +1476,7 @@ def _json_list(value, label):
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_group_request(work_orders, boxes=None):
+def create_group_request(work_orders, boxes=None, company=None):
     """Gudang side: request a GROUP of Work Orders of the SAME item whose
     output was packed into SHARED physical boxes (e.g. 3 boxes hold output
     mixed from 10 WOs — kg is weighed per physical box once, so per-WO-per-box
@@ -1606,13 +1620,13 @@ def create_group_request(work_orders, boxes=None):
         "box_plan": plan.name,
         "material_requests": mr_names,
         "expected_unit_count": expected_total,
-        "board": _build_board(),
+        "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }
 
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def cancel_group_request(box_plan):
+def cancel_group_request(box_plan, company=None):
     """Gudang side: cancel EVERY still-active member Material Request of a
     Handover Box Plan in one transaction (the group guard of cancel_request
     never lets the members die one by one). Members already shipped keep their
@@ -1657,7 +1671,7 @@ def cancel_group_request(box_plan):
         "box_plan": box_plan,
         "cancelled": cancelled,
         "skipped": skipped,
-        "board": _build_board(),
+        "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }
 
 
@@ -1686,7 +1700,7 @@ def save_post_packing(material_request, box_1=None, box_2=None):
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def send_handover(material_request):
+def send_handover(material_request, company=None):
     """Manufacturing User/Manager: create + submit the handover Stock Entry moving the
     MR's requested qty (= the WO's produced_qty at request time, R6) from the
     source warehouse to the handover target. ONE transaction: any failure rolls
@@ -1696,7 +1710,9 @@ def send_handover(material_request):
     native submit validation stays as the backstop in the same transaction.
     T35: no postpacking gate anymore — a submitted request is sendable; the
     Work Order summary (Link + boxes) is preserved and the status synchronized
-    to Terkirim after the native submit."""
+    to Terkirim after the native submit.
+    FU95: `company` = filter company global klien — hanya mem-scope board yang
+    dibalikkan (papan tampil tetap tersaring setelah aksi)."""
     _require_role(
         (ROLE_PRODUKSI, ROLE_MANAJER_PRODUKSI),
         _("Hanya Manufacturing User atau Manufacturing Manager yang dapat mengirim serah terima."),
@@ -1779,5 +1795,5 @@ def send_handover(material_request):
         "stock_entry": se.name,
         "batch": batch,
         "qty": qty,
-        "board": _build_board(),
+        "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }

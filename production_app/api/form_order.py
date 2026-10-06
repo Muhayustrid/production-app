@@ -49,16 +49,19 @@ UOM_DEFAULT_KEY = "production_app_form_order_uom"
 LAST_UOM_CAP = 200
 
 
-def _orders():
+def _orders(company=None):
 	"""Baris Form Order untuk session user. Gudang & Manufacturing Manager
 	melihat semua; Manufacturing User biasa hanya buuatannya sendiri.
 	Permission-filtered lewat frappe.get_list (tanpa ignore_permissions);
-	tanpa izin baca MR daftar kosong, bukan error (pola papan serah terima)."""
+	tanpa izin baca MR daftar kosong, bukan error (pola papan serah terima).
+	FU95: `company` = filter company global halaman workspace (opsional)."""
 	roles = frappe.get_roles()
 	scoped = any(r in roles for r in ROLES_GUDANG) or ROLE_MANAJER_PRODUKSI in roles
 	filters = {"custom_is_form_order": 1}
 	if not scoped:
 		filters["owner"] = frappe.session.user
+	if company:
+		filters["company"] = company
 	try:
 		mrs = frappe.get_list(
 			DOCTYPE,
@@ -67,6 +70,7 @@ def _orders():
 				"name", "docstatus", "status", "owner", "creation",
 				"schedule_date", "custom_note",
 				"set_from_warehouse", "set_warehouse",
+				"company",
 			],
 			order_by="creation desc",
 			limit_page_length=0,
@@ -122,6 +126,8 @@ def _orders():
 				"schedule_date": str(m.schedule_date) if m.schedule_date else None,
 				"from_warehouse": m.set_from_warehouse or None,
 				"to_warehouse": m.set_warehouse or None,
+				# FU95: ikut terkirim supaya scope company baris bisa dibuktikan
+				"company": m.company,
 				"stock_entry": se.name if se else None,
 				"sent_at": f"{se.posting_date} {_time_str(se.posting_time)}" if se else None,
 				"owner": m.owner,
@@ -133,9 +139,10 @@ def _orders():
 
 
 @frappe.whitelist()
-def form_order_list():
-	"""Daftar Form Order (server-derived) untuk session user."""
-	return {"orders": _orders()}
+def form_order_list(company=None):
+	"""Daftar Form Order (server-derived) untuk session user.
+	FU95: `company` = filter company global (opsional; None = semua)."""
+	return {"orders": _orders(company)}
 
 
 def _warehouses_or_throw():
@@ -288,11 +295,12 @@ def item_info(item_code):
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_form_order(items, schedule_date=None, note=None):
+def create_form_order(items, schedule_date=None, note=None, company=None):
 	"""Produksi (Manufacturing User / Manufacturing Manager): buat + submit MR
 	Material Transfer free-form dari gudang asal ke tujuan (Pengaturan), sebagai
 	user sesi tanpa ignore_permissions. Satu transaksi: kegagalan validasi =
-	nol tulisan."""
+	nol tulisan. FU95: `company` = filter company global klien — hanya mem-scope
+	daftar yang dibalikkan (MR baru tetap dibuat dari company gudang asal)."""
 	_require_role(
 		ROLES_PEMBUAT,
 		_("Hanya Manufacturing User / Manufacturing Manager yang dapat membuat Form Order."),
@@ -343,15 +351,16 @@ def create_form_order(items, schedule_date=None, note=None):
 	mr.insert()  # session user; native permission + validation
 	mr.submit()
 	_remember_last_uoms(rows)  # transaksi yang sama; MR sudah pasti tersubmit
-	return {"ok": True, "material_request": mr.name, "orders": _orders()}
+	return {"ok": True, "material_request": mr.name, "orders": _orders(company)}
 
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def cancel_form_order(material_request):
+def cancel_form_order(material_request, company=None):
 	"""Pembuat (atau Manufacturing Manager): batalkan Form Order yang belum
 	diproses. Lock baris MR dulu, bukti SE dicek ulang di bawah lock (pola
-	send_handover); cancel native jalan sebagai user sesi."""
+	send_handover); cancel native jalan sebagai user sesi.
+	FU95: `company` hanya mem-scope daftar yang dibalikkan."""
 	mr = frappe.get_doc(DOCTYPE, material_request)
 	frappe.has_permission(DOCTYPE, "cancel", doc=mr, throw=True)
 	if not mr.custom_is_form_order:
@@ -375,7 +384,7 @@ def cancel_form_order(material_request):
 		)
 	_se_or_throw(material_request)
 	mr.cancel()
-	return {"ok": True, "material_request": material_request, "orders": _orders()}
+	return {"ok": True, "material_request": material_request, "orders": _orders(company)}
 
 
 def _se_or_throw(material_request):
@@ -397,11 +406,12 @@ def _se_or_throw(material_request):
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def fulfill_form_order(material_request):
+def fulfill_form_order(material_request, company=None):
 	"""Gudang (Stock User / Stock Manager / Gudang Barang Jadi): proses Form Order — Stock
 	Entry Material Transfer dari builder native MR->SE, insert + submit dalam
 	satu transaksi (kekurangan stok gagal di validasi native, rollback penuh).
-	Anti-dobel: lock MR + recheck bukti SE di bawah lock."""
+	Anti-dobel: lock MR + recheck bukti SE di bawah lock.
+	FU95: `company` hanya mem-scope daftar yang dibalikkan."""
 	_require_role(
 		ROLES_GUDANG,
 		_("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat memproses Form Order."),
@@ -433,5 +443,5 @@ def fulfill_form_order(material_request):
 		"ok": True,
 		"material_request": material_request,
 		"stock_entry": se.name,
-		"orders": _orders(),
+		"orders": _orders(company),
 	}

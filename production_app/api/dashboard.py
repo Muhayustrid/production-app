@@ -50,6 +50,7 @@
 from datetime import timedelta
 
 import frappe
+from frappe.defaults import get_user_default, set_user_default
 from frappe.utils import (
 	add_days,
 	cint,
@@ -264,6 +265,42 @@ def _companies():
 		return frappe.get_list("Company", pluck="name", order_by="name")
 	except frappe.PermissionError:
 		return []
+
+
+# FU95: filter company GLOBAL dari halaman workspace — satu pilihan yang
+# dipakai SEMUA halaman (WO/SE/Form Order/Ketersediaan Stock/Dashboard/Bahan).
+# Disimpan sebagai preferensi PER-USER (pola ui_preferences FU70: user default
+# JSON per-user, tanpa gate role — hanya preferensi milik pemanggil). '' =
+# "Semua company". Diletakkan di dashboard.py karena daftar company yang
+# terlihat user sudah di sini (_companies) dan work_order.py mengimpornya
+# balik lewat dashboard (impor melingkar bila dibalik).
+COMPANY_PREFERENCE_KEY = "production_app_company_filter"
+
+
+@frappe.whitelist()
+def company_preference():
+	"""FU95 — preferensi filter company global: nilai tersimpan + daftar
+	company yang terlihat user (satu panggilan — sumber opsi semua <select>
+	company halaman). Company tersimpan yang tidak lagi terlihat → ''
+	(self-heal senyap; jangan pernah menunjuk company di luar izin user)."""
+	companies = _companies()
+	saved = str(get_user_default(COMPANY_PREFERENCE_KEY) or "")
+	if companies and saved and saved not in companies:
+		saved = ""
+	return {"company": saved, "companies": companies}
+
+
+@frappe.whitelist()
+def company_preference_save(company=None):
+	"""FU95 — simpan filter company global per-user; '' = semua company.
+	Company di luar daftar terlihat user ditolak (ValidationError) — preferensi
+	tersimpan tidak boleh menunjuk ke luar izin pemiliknya."""
+	value = str(company or "").strip()
+	companies = _companies()
+	if value and value not in companies:
+		frappe.throw("Company tidak ditemukan: {}".format(value), exc=frappe.ValidationError)
+	set_user_default(COMPANY_PREFERENCE_KEY, value)
+	return {"company": value, "companies": companies}
 
 
 def _wo_today(today_rows):

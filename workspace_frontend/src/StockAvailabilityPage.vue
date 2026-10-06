@@ -21,8 +21,10 @@ import {
   Boxes, CheckCircle2, ChevronRight, FileSpreadsheet, Filter, PackageX, Search, SearchX, TriangleAlert
 } from 'lucide-vue-next'
 import {
-  loadStockAvailability, loadStockMovements, stockAvailabilityState, stockMovementsState
+  companyFilterState, loadStockAvailability, loadStockMovements, saveCompanyFilter,
+  stockAvailabilityState, stockMovementsState
 } from './store.js'
+import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtId, fmtStampShort } from './format.js'
 import { harusKeLogin, loginRedirectUrl, stockXlsxFilename, tanggalPendek, woQtyText } from './dashboard.js'
 
@@ -48,6 +50,21 @@ const grupOptions = computed(() =>
 const amanPct = computed(() =>
   summary.value.total ? Math.round((summary.value.aman / summary.value.total) * 100) : 0
 )
+
+// FU95: filter company GLOBAL — pilihan tersimpan per-user di server; daftar
+// gudang & kapasitas resep ikut tersaring (server-side). Ganti company =
+// gudang di-reset (default DALAM scope company) lalu fetch ulang.
+const companies = computed(() => companyFilterState.companies)
+const showCompany = computed(() => showCompanyPicker(companies.value))
+const companyOptions = computed(() => companySelectOptions(companies.value))
+async function applyCompany(value) {
+  const v = value || ''
+  if (v === companyFilterState.company) return
+  companyFilterState.company = v
+  await saveCompanyFilter(v)
+  gudang.value = '' // gudang lama mungkin di luar company baru → default server
+  await reload()
+}
 
 // filter klien: kode ATAU nama, grup, status — item per gudang jumlahnya kecil
 const terfilter = computed(() => {
@@ -78,13 +95,16 @@ function clearFilters() {
   status.value = 'ALL'
   gudang.value = ''
   filterOpen.value = false
-  reload()
+  // FU95: bersih total termasuk company global (reload setelah simpan)
+  if (companyFilterState.company) applyCompany('')
+  else reload()
 }
 
 const activeFilters = computed(() =>
   (grup.value !== 'ALL') +
   (status.value !== 'ALL') +
-  (gudang.value !== basis.value.gudang)
+  (gudang.value !== basis.value.gudang) +
+  (showCompany.value && companyFilterState.company ? 1 : 0)
 )
 
 // FU87: unduh .xlsx = laporan tampilan aktif — seluruh baris TERFILTER (bukan
@@ -227,6 +247,14 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
+          <div v-if="showCompany" class="ffield">
+            <label>Company</label>
+            <!-- FU95: filter company GLOBAL — pilihan berlaku di semua halaman
+                 dan tersimpan per-user (selamat dari refresh/tutup browser) -->
+            <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
+              <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+          </div>
           <div class="ffield">
             <label>Gudang</label>
             <select v-model="gudang" class="select" aria-label="Filter gudang">

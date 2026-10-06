@@ -12,7 +12,7 @@ import StockAvailabilityPage from './StockAvailabilityPage.vue'
 import LainnyaPage from './LainnyaPage.vue'
 import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
-import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
+import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, loadCompanyFilter, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
 import { activeTotal } from './dashboard.js'
 import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, MoreHorizontal, PackageSearch, RotateCw, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
 
@@ -136,6 +136,7 @@ const busyLoading = computed(() =>
 )
 onMounted(async () => {
   loadUiPreferences() // FU70: segera setelah mungkin — hindari kedipan zoom telat
+  loadCompanyFilter() // FU95: filter company global sedini mungkin (semua fetch menunggunya)
   await loadListPreferences()
   if (section.value !== 'workorder' || woId.value) loadList()
   loadBoard(); loadSuggestionPreferences()

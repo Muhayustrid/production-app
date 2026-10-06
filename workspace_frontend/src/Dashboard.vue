@@ -21,7 +21,8 @@ import Paginator from 'primevue/paginator'
 import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
-import { dashboardState, DASH_PAGE_SIZE, loadDashboard, loadDashboardDaily, loadDashboardPage, pendingStageFilter, STAGE_LABELS } from './store.js'
+import { companyFilterState, dashboardState, DASH_PAGE_SIZE, loadDashboard, loadDashboardDaily, loadDashboardPage, pendingStageFilter, saveCompanyFilter, STAGE_LABELS } from './store.js'
+import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtId } from './format.js'
 import {
   STAGES, YIELD_LEGEND, RANGE_PRESETS, DAILY_MODES, achievementPct, activeTotal, activityText,
@@ -33,16 +34,26 @@ import {
 import RangeField from './RangeField.vue'
 
 const summary = computed(() => dashboardState.summary)
-// "Semua company" pakai sentinel ALL, bukan '' — PrimeVue Select memperlakukan
-// modelValue string kosong sebagai "tidak ada pilihan" (gotcha FU73)
-const company = ref('ALL')
-const companies = computed(() => summary.value?.companies || [])
-const showCompany = computed(() => companies.value.length > 1)
-const companyOptions = computed(() => [
-  { label: 'Semua company', value: 'ALL' },
-  ...companies.value.map((c) => ({ label: c, value: c }))
-])
-const companyParam = () => (company.value === 'ALL' ? '' : company.value)
+// FU95: company kini filter GLOBAL (companyFilterState — tersimpan per-user
+// di server, dibagi ke semua halaman). "Semua company" pakai sentinel ALL,
+// bukan '' — PrimeVue Select memperlakukan modelValue string kosong sebagai
+// "tidak ada pilihan" (gotcha FU73). Daftar company: preferensi dulu (termuat
+// sebelum summary), fallback daftar dari summary saat endpoint preferensi
+// gagal — keduanya sama-sama permission-scoped User Permission.
+const companies = computed(() =>
+  companyFilterState.companies.length ? companyFilterState.companies : (summary.value?.companies || [])
+)
+const showCompany = computed(() => showCompanyPicker(companies.value))
+const companyOptions = computed(() => companySelectOptions(companies.value, 'ALL'))
+const companyValue = computed(() => companyFilterState.company || 'ALL')
+async function onCompany(e) {
+  const raw = e && e.value !== undefined ? e.value : (e?.target?.value ?? 'ALL')
+  const v = raw === 'ALL' ? '' : String(raw)
+  if (v === companyFilterState.company) return
+  companyFilterState.company = v
+  await saveCompanyFilter(v)
+  reload()
+}
 
 // FU76 (revisi UI): filter rentang = satu tombol + popover — daftar preset DAN
 // input kustom dalam satu panel; Terapkan = commit, tutup popover = batal.
@@ -142,10 +153,10 @@ const barOptions = {
 function pilihChartMode(mode) {
   if (mode === chartMode.value) return
   chartMode.value = mode
-  loadDashboardDaily(companyParam(), mode)
+  loadDashboardDaily(mode)
 }
 function retryDaily() {
-  loadDashboardDaily(companyParam(), chartMode.value)
+  loadDashboardDaily(chartMode.value)
 }
 
 // ---- kartu donut: distribusi tahap (klik legend = filter #/wo, kontrak FU72)
@@ -269,12 +280,12 @@ function reload() {
   dashFirst.value = 0 // ganti rentang/company = kembali ke halaman pertama
   loadedAtMs.value = Date.now()
   if (preset.value === 'kustom' && !kustomReady.value) return // draft belum lengkap/valid
-  loadDashboard(companyParam(), rangeParams(preset.value, customDari.value, customSampai.value))
+  // FU95: company dibaca store dari companyFilterState (filter global)
+  loadDashboard(rangeParams(preset.value, customDari.value, customSampai.value))
   // grafik mengikuti company (rentang halaman tidak mempengaruhinya — filter
   // lokal minggu/bulan), dimuat ringan terpisah (pola wo_list FU77)
-  loadDashboardDaily(companyParam(), chartMode.value)
+  loadDashboardDaily(chartMode.value)
 }
-function onCompany() { reload() }
 function toggleRange(e) { rangePop.value?.toggle(e) }
 function pickPreset(key) {
   if (key === 'kustom') { kustomDraft.value = true; return }
@@ -295,10 +306,11 @@ function onPopHide() {
   rangeOpen.value = false
   kustomDraft.value = false
 }
-// klik kartu tahap/legend membawa konteks dashboard ke daftar WO (FU72)
+// klik kartu tahap/legend membawa konteks dashboard ke daftar WO (FU72);
+// FU95: company TIDAK lagi satu-shot — filter #/wo memakai company global
+// yang sama (tersimpan), jadi hanya tahap/tanggal yang dioper
 function openStage(stage) {
   pendingStageFilter.stage = stage.key
-  pendingStageFilter.company = companyParam()
   if (stage.key === 'selesai_hari_ini') {
     pendingStageFilter.from = summary.value?.dari || summary.value?.today || ''
     pendingStageFilter.to = summary.value?.sampai || pendingStageFilter.from
@@ -330,7 +342,7 @@ onMounted(reload)
       </button>
       <Select
         v-if="showCompany"
-        v-model="company"
+        :modelValue="companyValue"
         :options="companyOptions"
         optionLabel="label"
         optionValue="value"

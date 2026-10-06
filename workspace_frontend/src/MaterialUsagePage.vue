@@ -26,7 +26,8 @@ import {
   Boxes, ChevronRight, ClipboardList, ExternalLink, Factory, Filter, FileSpreadsheet, FlaskConical,
   Gauge, HelpCircle, Search, SearchX, TrendingUp, X
 } from 'lucide-vue-next'
-import { materialUsageState, loadMaterialUsage } from './store.js'
+import { companyFilterState, materialUsageState, loadMaterialUsage, saveCompanyFilter, whenCompanyReady } from './store.js'
+import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtId } from './format.js'
 import {
   materialUsageXlsxFilename, barPct, chartTrend, comparisonRows, efficiencyPct, harusKeLogin,
@@ -49,7 +50,22 @@ const dari = ref(props.initialDari)
 const sampai = ref(props.initialSampai)
 // sentinel ALL — PrimeVue Select memperlakukan '' sebagai "tidak ada pilihan"
 const product = ref('ALL')
-const company = ref(props.initialCompany || 'ALL')
+// FU95: company = filter GLOBAL (companyFilterState, tersimpan per-user di
+// server). Param lama ?company= (tautan era FU74) tetap dihormati: diadopsi
+// ke GLOBAL setelah preferensi tersimpan termuat — tunggu whenCompanyReady
+// supaya nilai tersimpan tidak dilawan balapan waktu load (lihat onMounted).
+const companies = computed(() => companyFilterState.companies)
+const showCompany = computed(() => showCompanyPicker(companies.value))
+const companyOptions = computed(() => companySelectOptions(companies.value, 'ALL'))
+const companyValue = computed(() => companyFilterState.company || 'ALL')
+async function onCompany(e) {
+  const raw = e && e.value !== undefined ? e.value : (e?.target?.value ?? 'ALL')
+  const v = raw === 'ALL' ? '' : String(raw)
+  if (v === companyFilterState.company) return
+  companyFilterState.company = v
+  await saveCompanyFilter(v)
+  reload()
+}
 const overOnly = ref(false)
 // FU79b: filter panel gaya WorkOrderList — popover dari tombol Filter;
 // tanggal BAHAN tidak bisa kosong (server default hari ini), jadi "bersih"
@@ -63,12 +79,6 @@ let reloadTimer
 let echoingDates = false
 
 const data = computed(() => materialUsageState.data)
-const companies = computed(() => data.value?.companies || [])
-const showCompany = computed(() => companies.value.length > 1)
-const companyOptions = computed(() => [
-  { label: 'Semua company', value: 'ALL' },
-  ...companies.value.map((c) => ({ label: c, value: c }))
-])
 const rows = computed(() => data.value?.rows || [])
 const workOrders = computed(() => data.value?.work_orders || [])
 const transactions = computed(() => data.value?.transactions || [])
@@ -79,7 +89,6 @@ function payload() {
   return {
     dari: dari.value,
     sampai: sampai.value,
-    company: company.value === 'ALL' ? '' : company.value,
     productionItem: product.value === 'ALL' ? '' : product.value,
     search: q.value.trim(),
     overOnly: overOnly.value
@@ -121,7 +130,16 @@ watch(
     }
   }
 )
-onMounted(reload)
+onMounted(async () => {
+  // FU95: tunggu preferensi global termuat DULU; baru adopsi ?company= lama
+  // bila ada dan berbeda (tautan eksplisit menang atas preferensi), lalu reload
+  await whenCompanyReady()
+  if (props.initialCompany && props.initialCompany !== companyFilterState.company) {
+    companyFilterState.company = props.initialCompany
+    await saveCompanyFilter(props.initialCompany)
+  }
+  await reload()
+})
 
 // ---- 5 kartu KPI — beda UOM tidak pernah dijumlahkan: angka utama milik
 // UOM terbesar, UOM lain jujur di baris kecil di bawahnya
@@ -231,15 +249,18 @@ function woHref(wo) { return '#/wo/' + encodeURIComponent(wo) }
 function noPlan(w) { return !Number(w?.planned) }
 
 // badge tombol Filter (pola WorkOrderList): produk/over-only/tanggal
-// menyimpang dari dasar masing-masing dihitung 1
+// menyimpang dari dasar masing-masing dihitung 1; FU95: company GLOBAL ikut
+// dihitung (select-nya di head, di luar panel — tetap jujur di badge)
 const activeFilters = computed(
   () =>
     (product.value !== 'ALL') +
     (overOnly.value ? 1 : 0) +
-    (dari.value !== basis.value.dari || sampai.value !== basis.value.sampai ? 1 : 0)
+    (dari.value !== basis.value.dari || sampai.value !== basis.value.sampai ? 1 : 0) +
+    (showCompany.value && companyFilterState.company ? 1 : 0)
 )
 // satu aksi bersih (konvensi FU75): reset ke kondisi awal halaman — watcher
-// q/tanggal/over-only/product me-lebur lewat debounce jadi SATU reload
+// q/tanggal/over-only/product me-lebur lewat debounce jadi SATU reload;
+// FU95: company global juga dilepas (simpan dulu, reload lewat onCompany)
 function clearFilters() {
   q.value = ''
   product.value = 'ALL'
@@ -247,6 +268,7 @@ function clearFilters() {
   dari.value = basis.value.dari
   sampai.value = basis.value.sampai
   filterOpen.value = false
+  if (companyFilterState.company) onCompany({ value: 'ALL' })
 }
 
 // FU80c: unduh .xlsx = laporan tampilan aktif (rentang + semua filter) yang
@@ -264,7 +286,8 @@ async function exportXlsx() {
   const params = new URLSearchParams({
     dari: d || '',
     sampai: s || '',
-    company: company.value === 'ALL' ? '' : company.value,
+    // FU95: company GLOBAL (sumber yang sama dgn tabel — angka file = angka layar)
+    company: companyFilterState.company || '',
     production_item: product.value === 'ALL' ? '' : product.value,
     search: q.value.trim(),
     over_only: overOnly.value ? '1' : '0'
@@ -306,14 +329,14 @@ async function exportXlsx() {
     <div class="ph-right">
       <Select
         v-if="showCompany"
-        v-model="company"
+        :modelValue="companyValue"
         :options="companyOptions"
         optionLabel="label"
         optionValue="value"
         inputId="bahan-company"
         aria-label="Filter company"
         class="ph-pselect"
-        @change="reload"
+        @change="onCompany"
       />
     </div>
   </div>

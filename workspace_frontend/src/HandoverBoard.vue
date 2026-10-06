@@ -9,10 +9,11 @@
 // native); baris Terkirim → detail baca-saja. Default view Tabel.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
-  handoverBoard, handoverLots, handoverRequests, handoverState,
+  companyFilterState, handoverBoard, handoverLots, handoverRequests, handoverState,
   listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs,
-  normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, sendHandover
+  normalizePageSize, PAGE_SIZE_OPTIONS, saveCompanyFilter, saveListPreferences, savedListPreferences, sendHandover
 } from './store.js'
+import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtInt, qtyMain, qtyStack } from './format.js'
 import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
@@ -189,19 +190,40 @@ watch([seStatus, seItem, seFrom, seTo], () => saveHandoverPreferences())
 watch(searchQ, () => { coldPage.value = 1 })
 // panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
 watch(lotFilterOpen, () => saveHandoverPreferences())
-function lotReset() { lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false }
+function lotReset() {
+  lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false
+  // FU95: bersih total termasuk company global (konvensi FU75)
+  if (companyFilterState.company) applyCompany('')
+}
 
 // FU50: aksi cepat filter tabel (pola halaman WO — panel tetap terbuka)
 const seFilter = () => ({ status: seStatus.value, item: seItem.value, from: seFrom.value, to: seTo.value })
-const seReset = () => { seStatus.value = 'all'; seItem.value = 'all'; seFrom.value = ''; seTo.value = '' }
+// FU95: filter company GLOBAL — satu pilihan utk papan Stock Entry (server),
+// tersimpan per-user di server; ganti company = fetch ulang papan
+const companies = computed(() => companyFilterState.companies)
+const showCompany = computed(() => showCompanyPicker(companies.value))
+const companyOptions = computed(() => companySelectOptions(companies.value))
+async function applyCompany(value) {
+  const v = value || ''
+  if (v === companyFilterState.company) return
+  companyFilterState.company = v
+  await saveCompanyFilter(v)
+  loadBoard()
+}
+const seReset = () => {
+  seStatus.value = 'all'; seItem.value = 'all'; seFrom.value = ''; seTo.value = ''
+  if (companyFilterState.company) applyCompany('')
+}
 const itemOptions = computed(() => distinctItems(handoverRequests))
 // opsi item tersimpan bisa basi (item tak lagi ada di papan) — tetap
 // ditampilkan agar pilihan lama terbaca (pola fProduct halaman WO)
 const itemStale = computed(() =>
   seItem.value !== 'all' && !itemOptions.value.some((o) => o.name === seItem.value))
-// badge tombol Filter mengikuti mode yang sedang aktif
+// badge tombol Filter mengikuti mode yang sedang aktif; FU95: company global
+// dihitung di kedua mode (papan/server mengikuti company)
+const companyActive = computed(() => (showCompany.value && companyFilterState.company ? 1 : 0))
 const activeFilterCount = computed(() =>
-  viewMode.value === 'tabel' ? serahFilterCount(seFilter()) : lotFilterCount.value)
+  (viewMode.value === 'tabel' ? serahFilterCount(seFilter()) : lotFilterCount.value) + companyActive.value)
 
 const byLane = computed(() => ({
   cold: pagedColdLots.value,
@@ -395,6 +417,14 @@ onMounted(() => {
       <Transition name="pop">
         <div v-if="lotFilterOpen" class="filterpanel">
           <template v-if="viewMode === 'tabel'">
+            <div v-if="showCompany" class="ffield">
+              <label>Company</label>
+              <!-- FU95: filter company GLOBAL — berlaku di semua halaman,
+                   tersimpan per-user (selamat dari refresh/tutup browser) -->
+              <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
+                <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+            </div>
             <div class="ffield">
               <label>Status</label>
               <select v-model="seStatus" class="select">
@@ -424,6 +454,13 @@ onMounted(() => {
             <button class="linkbtn filter-clear" type="button" @click="seReset">Hapus semua filter</button>
           </template>
           <template v-else>
+            <div v-if="showCompany" class="ffield">
+              <label>Company</label>
+              <!-- FU95: filter company GLOBAL (papan kanban ikut ter-scope server) -->
+              <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
+                <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+            </div>
             <div class="ffield">
               <label>Lot masuk</label>
               <RangeField v-model:dari="lotFrom" v-model:sampai="lotTo" placeholder="Semua tanggal" />

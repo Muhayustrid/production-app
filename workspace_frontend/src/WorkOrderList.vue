@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
+import { companyFilterState, HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveCompanyFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
+import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtDate, qtyStack } from './format.js'
 import { buildWorkOrderPreferences, normalizeWorkOrderPreferences } from './work-order-preferences.js'
 import { nextSortDir } from './table-sort.js'
@@ -14,25 +15,24 @@ const fStatus = ref('all')
 const fStage = ref('all')
 const fFrom = ref('')
 const fTo = ref('')
-// FU72: context company satu-shot dari Dashboard — runtime saja, tidak
-// masuk preferensi tersimpan; tampil sebagai chip yang bisa dihapus
-const companyOverride = ref('')
+// FU95: company = filter GLOBAL (companyFilterState, tersimpan per-user di
+// server) — bukan preferensi daftar; ikut tampil di panel & hitungan badge
+const companies = computed(() => companyFilterState.companies)
+const showCompany = computed(() => showCompanyPicker(companies.value))
+const companyOptions = computed(() => companySelectOptions(companies.value))
 const pageSize = computed(() => listState.pageSize)
 const filterOpen = ref(false)
 const restoring = ref(true)
 let reloadTimer
-// FU72: filter satu-shot dari Dashboard (tahap/company/tanggal) — override
-// runtime saja. Diterima di sini, lalu pertahapan menjadi filter manual:
-// setelah pemuatan pertama, filter tampil sebagai chip dan tersimpan ke
-// preferensi bila user berinteraksi lagi (keputusan review FU72 #8)
+// FU72: filter satu-shot dari Dashboard (tahap/tanggal) — override runtime
+// saja. FU95: company satu-shot DIHAPUS (kini filter global tersimpan).
 let oneShotStage = false
 const STAGE_FILTER_MAP = { pre_packing: 'prepacking', post_packing: 'postpacking', selesai_hari_ini: 'done' }
 function consumePendingStage() {
   const pending = pendingStageFilter
-  if (!pending.stage && !pending.company && !pending.from) return
-  const { stage, company, from, to } = pending
+  if (!pending.stage && !pending.from) return
+  const { stage, from, to } = pending
   pendingStageFilter.stage = '' // one-shot: langsung dikosongkan
-  pendingStageFilter.company = ''
   pendingStageFilter.from = ''
   pendingStageFilter.to = ''
   if (stage) {
@@ -42,7 +42,6 @@ function consumePendingStage() {
       oneShotStage = true
     }
   }
-  if (company) { companyOverride.value = company; oneShotStage = true }
   if (from) { fFrom.value = from; fTo.value = to || from; oneShotStage = true }
 }
 
@@ -54,16 +53,26 @@ const totalPages = computed(() => Math.max(1, Math.ceil(listState.total / pageSi
 const currentPage = computed(() => listState.page)
 const activeFilters = computed(() =>
   (fProduct.value !== 'all') + (fStatus.value !== 'all') + (fStage.value !== 'all') +
-  (fFrom.value || fTo.value ? 1 : 0)
+  (fFrom.value || fTo.value ? 1 : 0) +
+  (showCompany.value && companyFilterState.company ? 1 : 0)
 )
+
+// FU95: ganti company = preferensi GLOBAL — simpan ke server dulu, baru
+// muat ulang daftar (scope dibaca dari state di store.loadList).
+async function applyCompany(value) {
+  const v = value || ''
+  if (v === companyFilterState.company) return
+  companyFilterState.company = v
+  await saveCompanyFilter(v)
+  reload()
+}
 
 function filterPayload() {
   return {
     search: q.value.trim(), productionItem: fProduct.value === 'all' ? '' : fProduct.value,
     status: fStatus.value === 'all' ? '' : fStatus.value,
     stage: fStage.value === 'all' ? '' : (fStage.value === 'done' ? 'selesai' : fStage.value),
-    company: companyOverride.value || null,
-      startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value,
+    startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value,
     order: orderToken.value
   }
 }
@@ -117,9 +126,11 @@ function scheduleReload() {
 }
 function clearFilters() {
   q.value = ''; fProduct.value = 'all'; fStatus.value = 'all'; fStage.value = 'all'; fFrom.value = ''; fTo.value = ''
-  companyOverride.value = ''
   filterOpen.value = false
-  reload()
+  // FU95: "Hapus semua filter" juga melepas filter company GLOBAL (tersimpan);
+  // applyCompany sendiri yang reload bila berubah — tanpa perubahan, reload di sini
+  if (companyFilterState.company) applyCompany('')
+  else reload()
 }
 function goPage(page) { listState.page = page; loadList({ ...filterPayload(), start: (page - 1) * pageSize.value, pageLen: pageSize.value }) }
 const filtered = computed(() => workOrders
@@ -198,6 +209,14 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
+        <div v-if="showCompany" class="ffield">
+          <label>Company</label>
+          <!-- FU95: filter company GLOBAL — pilihan ini berlaku di semua
+               halaman dan tersimpan per-user (tidak hilang saat refresh) -->
+          <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
+            <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+        </div>
         <div class="ffield">
           <label>Produk</label>
           <select v-model="fProduct" class="select">
@@ -260,14 +279,11 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
     </div>
   </div>
 
-  <!-- FU72: chip filter tahap aktif (satu-shot dari Dashboard atau manual) -->
-  <div v-if="fStage !== 'all' || companyOverride" class="filterchips">
-    <button v-if="fStage !== 'all'" type="button" class="chip chip-filter" @click="fStage = 'all'">
+  <!-- FU72: chip filter tahap aktif (satu-shot dari Dashboard atau manual);
+       FU95: chip company dihapus — company kini tampil di panel filter -->
+  <div v-if="fStage !== 'all'" class="filterchips">
+    <button type="button" class="chip chip-filter" @click="fStage = 'all'">
       Tahap: {{ stageChipLabel }}
-      <X :size="12" :stroke-width="2.2" />
-    </button>
-    <button v-if="companyOverride" type="button" class="chip chip-filter" @click="companyOverride = ''; reload()">
-      Company: {{ companyOverride }}
       <X :size="12" :stroke-width="2.2" />
     </button>
   </div>

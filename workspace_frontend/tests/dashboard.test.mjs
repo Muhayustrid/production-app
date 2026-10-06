@@ -662,7 +662,7 @@ function mockFetch(calls, payload) {
 }
 
 test('loadStockAvailability memanggil endpoint & mengisi state (tanpa/dgn gudang)', async () => {
-  const { loadStockAvailability, stockAvailabilityState } = await import('../src/store.js')
+  const { loadStockAvailability, stockAvailabilityState, companyFilterState } = await import('../src/store.js')
   const calls = []
   const payload = {
     warehouse: 'Gudang Produksi', warehouses: ['Gudang Produksi'], generated_at: '2026-10-03T08:00:00',
@@ -674,23 +674,32 @@ test('loadStockAvailability memanggil endpoint & mengisi state (tanpa/dgn gudang
   }
   const pulih = mockFetch(calls, payload)
   try {
+    // FU95: lewati gerbang whenCompanyReady (tanpa app boot); company kosong →
+    // request membawa company: null (frappe memperlakukannya sama dgn absen)
+    companyFilterState.loaded = true
+    companyFilterState.company = ''
     stockAvailabilityState.data = null
     stockAvailabilityState.loaded = false
     await loadStockAvailability()
     assert.equal(calls[0].url, '/api/method/production_app.api.stock_availability.stock_availability')
-    assert.deepEqual(calls[0].body, {}) // tanpa gudang = server resolve default
+    assert.deepEqual(calls[0].body, { company: null }) // tanpa gudang = server resolve default
     assert.deepEqual(stockAvailabilityState.data, payload)
     assert.equal(stockAvailabilityState.loaded, true)
     assert.equal(stockAvailabilityState.error, '')
     await loadStockAvailability('Gudang Bahan')
-    assert.deepEqual(calls[1].body, { warehouse: 'Gudang Bahan' })
+    assert.deepEqual(calls[1].body, { company: null, warehouse: 'Gudang Bahan' })
+    // FU95: company global diisi → ikut terkirim sebagai scope gudang & BOM
+    companyFilterState.company = 'PT. Contoh'
+    await loadStockAvailability()
+    assert.deepEqual(calls[2].body, { company: 'PT. Contoh' })
+    companyFilterState.company = ''
   } finally {
     pulih()
   }
 })
 
 test('loadStockAvailability: respons stale tidak menimpa permintaan lebih baru (FU90 review P1-1)', async () => {
-  const { loadStockAvailability, stockAvailabilityState } = await import('../src/store.js')
+  const { loadStockAvailability, stockAvailabilityState, companyFilterState } = await import('../src/store.js')
   const asli = globalThis.fetch
   globalThis.window = { csrf_token: 'tes' }
   const tunda = []
@@ -701,10 +710,14 @@ test('loadStockAvailability: respons stale tidak menimpa permintaan lebih baru (
     return { ok: true, json: async () => p }
   }
   try {
+    companyFilterState.loaded = true // FU95: tanpa gerbang preferensi (tanpa app boot)
     stockAvailabilityState.data = null
     stockAvailabilityState.loaded = false
     const p1 = loadStockAvailability()
     const p2 = loadStockAvailability('Gudang Bahan')
+    // FU95: whenCompanyReady = await mikro → kedua fetch baru mulai setelah
+    // satu putaran; tunggu keduanya terdaftar sebelum menjatuhkan respons lama
+    await new Promise((r) => setImmediate(r))
     // stale selesai duluan (gagal) setelah permintaan baru mulai → error & loading tidak menyentuh state
     tunda[0].gagal(new Error('respons lama'))
     await p1

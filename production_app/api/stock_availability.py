@@ -117,9 +117,19 @@ def export_xlsx(items=None, summary=None, warehouse=None):
 # (pelajaran FU58 — kolom custom jangan pernah disebut di daftar kolom).
 
 
-def _warehouses_ber_bin():
-	"""Gudang yang punya Bin, urut abjad (sumber selector halaman)."""
-	return frappe.get_all("Bin", distinct=True, pluck="warehouse", order_by="warehouse")
+def _warehouses_ber_bin(company=None):
+	"""Gudang yang punya Bin, urut abjad (sumber selector halaman).
+	FU95: company opsional — hanya gudang milik company itu (Bin tidak punya
+	kolom company; scope lewat Warehouse.company)."""
+	warehouses = frappe.get_all("Bin", distinct=True, pluck="warehouse", order_by="warehouse")
+	if company and warehouses:
+		warehouses = frappe.get_all(
+			"Warehouse",
+			filters={"name": ("in", warehouses), "company": company},
+			pluck="name",
+			order_by="name",
+		)
+	return warehouses
 
 
 def _gudang_default(warehouses):
@@ -209,13 +219,14 @@ def _peta_movement(row):
 	}
 
 
-def _bom_resep_gudang(codes):
+def _bom_resep_gudang(codes, company=None):
 	"""Resep (BOM docstatus 1 + is_active 1) yang memakai bahan dari set
 	kode gudang ini → [(nama FG, [(item_code, kebutuhan stock/batch)])].
 	Satu BOM per FG: is_default menang, lalu nama pertama. Kebutuhan =
 	qty × conversion_factor baris BOM Item (kedua kolom terverifikasi ada
 	di v16 terpasang — hasil stock UOM). FG tanpa baris bahan gudang ini
-	tidak masuk (pemanggil memutuskan dari daftar kosong)."""
+	tidak masuk (pemanggil memutuskan dari daftar kosong).
+	FU95: company opsional — kapasitas hanya dari resep company itu."""
 	rows = frappe.get_all(
 		"BOM Item",
 		filters={"parenttype": "BOM", "item_code": ("in", codes)},
@@ -223,13 +234,16 @@ def _bom_resep_gudang(codes):
 	)
 	if not rows:
 		return []
+	bom_filters = {
+		"name": ("in", sorted({r.parent for r in rows})),
+		"docstatus": 1,
+		"is_active": 1,
+	}
+	if company:
+		bom_filters["company"] = company
 	headers = frappe.get_all(
 		"BOM",
-		filters={
-			"name": ("in", sorted({r.parent for r in rows})),
-			"docstatus": 1,
-			"is_active": 1,
-		},
+		filters=bom_filters,
 		fields=["name", "item", "is_default"],
 		order_by="is_default desc, name asc",
 	)
@@ -254,18 +268,26 @@ def _bom_resep_gudang(codes):
 
 
 @frappe.whitelist()
-def stock_availability(warehouse=None):
+def stock_availability(warehouse=None, company=None):
 	"""FU90 — data halaman Ketersediaan Stock dari ERPNext nyata: Bin
 	(actual/reserved) + Item + Item Reorder (minimum) + BOM (kapasitas).
 	Kebijakan akses: pengguna login workspace dengan izin baca Item (server
 	sumber kebenaran — pola gate eksplisit dashboard.py). Movement lazy di
 	stock_movements() — sengaja TIDAK ikut di sini. Angka float mentah (flt)
-	tanpa pembulatan — klien yang memformat."""
+	tanpa pembulatan — klien yang memformat.
+	FU95: `company` opsional (filter company global) — daftar gudang &
+	kapasitas resep ikut ter-scope company itu; warehouse kosong → gudang
+	default DALAM scope company."""
 	if not frappe.has_permission("Item", "read"):
 		frappe.throw(_("Tidak punya izin membaca Item"), frappe.PermissionError)
-	warehouses = _warehouses_ber_bin()
+	warehouses = _warehouses_ber_bin(company)
 	if not warehouse:
 		warehouse = _gudang_default(warehouses)
+	elif company and warehouse not in warehouses:
+		# FU95: gudang terpilih di luar scope company (klien baru ganti company)
+		# → kembali ke default DALAM scope; tanpa company, perilaku lama
+		# dipertahankan apa adanya (gudang tak dikenal tetap dijawab kosong).
+		warehouse = _gudang_default(warehouses) or None
 
 	bins = []
 	if warehouse:
@@ -305,7 +327,7 @@ def stock_availability(warehouse=None):
 
 	from production_app.api.dashboard import _item_display_uom  # dibuka malas (pola material_usage)
 
-	kapasitas = _kapasitas_dari_bom(available, _bom_resep_gudang(sorted(available))) if available else {}
+	kapasitas = _kapasitas_dari_bom(available, _bom_resep_gudang(sorted(available), company)) if available else {}
 
 	items = []
 	for code in sorted(available):
