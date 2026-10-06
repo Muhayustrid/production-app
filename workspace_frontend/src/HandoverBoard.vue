@@ -345,6 +345,21 @@ function seSetSort(key) {
 const serahSorted = computed(() =>
   sortRows(serahRows.value, seSortKey.value && SE_SORT_ACCESSORS[seSortKey.value], seSortDir.value, seSortKey.value === 'qty' ? 'num' : 'text')
 )
+// FU98: pagination tabel client-side (pola bar WO — papan dimuat penuh,
+// halaman hanya memotong hasil filter+sort; sort FU94 tetap atas daftar penuh)
+const sePageSize = ref(PAGE_SIZE_OPTIONS[0])
+const sePage = ref(1)
+const seTotalPages = computed(() => Math.max(1, Math.ceil(serahSorted.value.length / sePageSize.value)))
+const serahPaged = computed(() => {
+  const page = Math.min(sePage.value, seTotalPages.value) // hasil filter menyusut → halaman terakhir tetap valid
+  return serahSorted.value.slice((page - 1) * sePageSize.value, page * sePageSize.value)
+})
+function seSetPage(page) { sePage.value = Math.min(Math.max(1, page), seTotalPages.value) }
+function seSetPageSize(value) {
+  sePageSize.value = normalizePageSize(value)
+  sePage.value = 1
+}
+watch([searchQ, seStatus, seItem, seFrom, seTo, seSortKey, seSortDir], () => { sePage.value = 1 })
 // FU50: empty state membedakan "belum ada request" vs "terfilter habis"
 const serahFilteredOut = computed(() =>
   !serahRows.value.length && (!!searchQ.value || serahFilterCount(seFilter()) > 0))
@@ -590,7 +605,7 @@ onMounted(() => {
       </div>
 
       <div
-        v-for="{ r, meta } in serahSorted"
+        v-for="{ r, meta } in serahPaged"
         :key="r.id"
         class="wo-row se-queue-row"
         :class="{ rowlink: !!rowClickAction(r, handoverBoard.roles) }"
@@ -620,6 +635,21 @@ onMounted(() => {
         <span class="eico"><Inbox :size="19" :stroke-width="1.8" /></span>
         <p class="etitle">{{ serahFilteredOut ? 'Tidak ada request' : 'Belum ada request' }}</p>
         <p class="ehint">{{ serahFilteredOut ? 'Tidak ada request untuk filter saat ini. Ubah filter atau kata pencarian.' : 'Request gudang dari Desk akan muncul di sini untuk dikirim.' }}</p>
+      </div>
+    </div>
+
+    <!-- FU98: pagination tabel client-side ala WorkOrderList — disembunyikan
+         bila muat dalam satu halaman -->
+    <div v-if="serahSorted.length > sePageSize" class="pagination-bar pagination-footer">
+      <label class="page-size-control">
+        <span>Tampilkan</span>
+        <select class="select" :value="sePageSize" aria-label="Jumlah request Stock Entry per halaman" @change="seSetPageSize($event.target.value)">
+          <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+        </select>
+      </label>
+      <div class="pagination-buttons">
+        <button class="btn btn-sm" :disabled="sePage <= 1" @click="seSetPage(sePage - 1)">‹ Sebelumnya</button>
+        <button class="btn btn-sm" :disabled="sePage >= seTotalPages" @click="seSetPage(sePage + 1)">Berikutnya ›</button>
       </div>
     </div>
   </template>

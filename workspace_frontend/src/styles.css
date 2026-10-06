@@ -663,8 +663,10 @@ textarea.input { height: auto; padding: 8px 10px; }
 .wo-body.se-queue .wo-row {
   grid-template-columns: minmax(118px, 132px) minmax(130px, 1.2fr) minmax(78px, 1fr) 134px 128px 92px 100px 16px;
 }
-.se-queue .wo-row:not(.rowlink), .fo-history .wo-row { cursor: default; }
-.se-queue .wo-row:not(.rowlink):hover, .fo-history .wo-row:hover {
+/* FU98: baris fo-history tidak lagi dinonaktifkan — klik baris membuka
+   dialog detail (affordance .wo-row global: pointer/hover/active/focus) */
+.se-queue .wo-row:not(.rowlink) { cursor: default; }
+.se-queue .wo-row:not(.rowlink):hover {
   background: transparent;
   box-shadow: none;
 }
@@ -703,8 +705,8 @@ textarea.input { height: auto; padding: 8px 10px; }
 .ws-label-actions { justify-content: flex-end; }
 .ws-label-print { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
 
-/* FU51: Form Order on-demand — tombol aksi kanan; riwayat memakai pola
-   wo-body (baris tidak klikabel, aksi Batalkan di kolom akhir) */
+/* FU51: Form Order on-demand — tombol aksi kanan; FU98: riwayat klikabel
+   (klik baris = dialog detail, Batalkan tetap di kolom akhir) */
 .toolbar.fo-actions { justify-content: flex-end; }
 .fo-saved { margin: 0; text-align: right; color: var(--ok-strong); }
 .wo-body.fo-history .wo-thead,
@@ -749,6 +751,15 @@ textarea.input { height: auto; padding: 8px 10px; }
   .fo-hist-row .c-note { grid-area: note; white-space: normal; }
   .fo-hist-row .c-act { grid-area: act; justify-content: flex-start; }
 }
+
+/* FU98: dialog detail Form Order — meta ala dlg-context + tabel item baca-saja */
+.fo-detail-sub { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.dlg-head .dlg-x { margin-left: auto; flex: none; }
+.fo-detail-wrap { margin-top: 14px; }
+.fo-detail-items td { padding: 9px 12px; }
+.fo-detail-items td small { display: block; color: var(--faint); font-size: 11px; }
+.fo-detail-link { margin-top: 12px; }
+.fo-detail-link a { color: var(--brand-strong); font-weight: 550; }
 
 .empty-inset {
   display: flex;

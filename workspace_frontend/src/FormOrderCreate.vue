@@ -33,6 +33,8 @@ let cameraStream = null
 let cameraRequest = 0
 const createdRequest = ref('')
 const attachmentError = ref('')
+// FU98: penanda prefill MR terakhir jalan (FU53) — dipakai hint agar terlihat
+const prefilled = ref(false)
 
 // ambil info item (satuan/nama) saat kode terpilih; ber-batch/non-stok
 // mendapat peringatan dini di barisnya — validasi server tetap otoritatif.
@@ -205,6 +207,7 @@ onMounted(async () => {
     rows.splice(0, rows.length, ...last.items.map((i) => (
       { code: i.code, qty: '', info: null, infoFor: '', uom: '' }
     )))
+    prefilled.value = true
   }
 })
 
@@ -335,6 +338,7 @@ async function retryAttachment() {
       </div>
 
       <!-- grid item ala child table ERPNext -->
+      <p v-if="prefilled" class="hint fo-prefill-hint">Item diambil dari Form Order terakhir — tinggal isi qty.</p>
       <div class="tbl-wrap fo-grid-wrap">
         <table class="datatable fo-grid">
           <thead>

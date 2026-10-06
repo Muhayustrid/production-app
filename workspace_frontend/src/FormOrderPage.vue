@@ -3,9 +3,9 @@
 // (#/form-order/baru, FormOrderCreate.vue) — tombol toolbar menavigasi ke
 // sana; pesan sukses ber-nama MR ditinggalkan formCreate via
 // formOrderState.justSaved dan dibaca di sini saat mount.
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ArrowDown, Filter, Inbox, Plus } from 'lucide-vue-next'
-import { cancelFormOrder, companyFilterState, formOrders, formOrderState, loadFormOrders, retryFormOrderAttachment, saveCompanyFilter, uiTopLoading } from './store.js'
+import { PAGE_SIZE_OPTIONS, cancelFormOrder, companyFilterState, formOrders, formOrderState, loadFormOrders, normalizePageSize, retryFormOrderAttachment, saveCompanyFilter, uiTopLoading } from './store.js'
 import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { foItemsText, foStatusMeta } from './form-order.js'
 import { nextSortDir, sortRows } from './table-sort.js'
@@ -24,6 +24,7 @@ async function applyCompany(value) {
   const v = value || ''
   if (v === companyFilterState.company) return
   companyFilterState.company = v
+  foPage.value = 1 // FU98: daftar berganti → kembali halaman pertama
   await saveCompanyFilter(v)
   await loadFormOrders()
 }
@@ -52,6 +53,40 @@ function foSetSort(key) {
 const foSorted = computed(() =>
   sortRows(formOrders, foSortKey.value && foSortAccessors[foSortKey.value], foSortDir.value)
 )
+
+// FU98: pagination client-side — daftar dimuat penuh (sort FU94 tetap atas
+// daftar penuh), halaman hanya memotong hasil sort. Bar ala WorkOrderList.
+const foPageSize = ref(PAGE_SIZE_OPTIONS[0])
+const foPage = ref(1)
+const foTotalPages = computed(() => Math.max(1, Math.ceil(foSorted.value.length / foPageSize.value)))
+const foPaged = computed(() => {
+  const page = Math.min(foPage.value, foTotalPages.value) // daftar menyusut → halaman terakhir tetap valid
+  return foSorted.value.slice((page - 1) * foPageSize.value, page * foPageSize.value)
+})
+function foSetPage(page) { foPage.value = Math.min(Math.max(1, page), foTotalPages.value) }
+function foSetPageSize(value) {
+  foPageSize.value = normalizePageSize(value)
+  foPage.value = 1
+}
+watch([foSortKey, foSortDir], () => { foPage.value = 1 })
+
+// FU98: dialog detail baca-saja — klik baris riwayat; Batalkan (status
+// menunggu) membuka dialog konfirmasi yang sudah ada.
+const dlgDetail = ref(null)
+const detail = ref(null)
+function openDetail(id) {
+  detail.value = formOrders.find((o) => o.id === id) || null
+  if (detail.value) nextTick(() => dlgDetail.value.showModal())
+}
+function closeDetail() {
+  dlgDetail.value.close()
+  detail.value = null
+}
+function cancelFromDetail() {
+  const id = detail.value?.id
+  closeDetail()
+  if (id) openCancel(id)
+}
 
 function goCreate() {
   window.location.hash = '#/form-order/baru'
@@ -159,7 +194,8 @@ onMounted(async () => {
   </div>
 
   <!-- FU51/52: riwayat memakai pola kartu Work Order (wo-body/wo-thead/wo-row,
-       reuse kelas FU49) — baris tidak klikabel, aksi Batalkan di kolom akhir -->
+       reuse kelas FU49); FU98: klik baris = dialog detail, aksi Batalkan di
+       kolom akhir (stop propagation) -->
   <div class="wo-body fo-history">
     <div class="wo-thead" v-if="formOrders.length">
       <button type="button" class="th-sort" :class="{ on: foSortKey === 'dokumen', asc: foSortDir === 'asc' }" @click="foSetSort('dokumen')">
@@ -181,7 +217,8 @@ onMounted(async () => {
       <span></span>
     </div>
 
-    <div v-for="o in foSorted" :key="o.id" class="wo-row fo-hist-row">
+    <div v-for="o in foPaged" :key="o.id" class="wo-row fo-hist-row" tabindex="0"
+         @click="openDetail(o.id)" @keydown.enter.self.prevent="openDetail(o.id)">
       <span class="wo-id c-doc">
         {{ o.materialRequest }}
         <small v-if="o.stockEntry" class="mono">{{ o.stockEntry }}</small>
@@ -195,7 +232,7 @@ onMounted(async () => {
       <span class="c-status"><span class="chip" :class="foStatusMeta(o.status).cls">{{ foStatusMeta(o.status).label }}</span></span>
       <span class="c-note">{{ o.note || '-' }}</span>
       <span class="c-act">
-        <button v-if="o.status === 'menunggu'" class="btn btn-sm" :disabled="!!formOrderState.pending" @click="openCancel(o.id)">Batalkan</button>
+        <button v-if="o.status === 'menunggu'" class="btn btn-sm" :disabled="!!formOrderState.pending" @click.stop="openCancel(o.id)">Batalkan</button>
       </span>
     </div>
 
@@ -205,6 +242,73 @@ onMounted(async () => {
       <p class="ehint">Tekan "Buat Form Order" untuk menambah permintaan.</p>
     </div>
   </div>
+
+  <!-- FU98: pagination client-side ala WorkOrderList — disembunyikan bila
+       muat dalam satu halaman -->
+  <div v-if="foSorted.length > foPageSize" class="pagination-bar pagination-footer">
+    <label class="page-size-control">
+      <span>Tampilkan</span>
+      <select class="select" :value="foPageSize" aria-label="Jumlah Form Order per halaman" @change="foSetPageSize($event.target.value)">
+        <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+      </select>
+    </label>
+    <div class="pagination-buttons">
+      <button class="btn btn-sm" :disabled="foPage <= 1" @click="foSetPage(foPage - 1)">‹ Sebelumnya</button>
+      <button class="btn btn-sm" :disabled="foPage >= foTotalPages" @click="foSetPage(foPage + 1)">Berikutnya ›</button>
+    </div>
+  </div>
+
+  <!-- FU98: detail baca-saja — klik baris riwayat; Batalkan (menunggu) lewat
+       dialog konfirmasi yang sama -->
+  <dialog ref="dlgDetail" class="dialog dialog-wide" aria-labelledby="fo-detail-title" @click.self="closeDetail">
+    <template v-if="detail">
+      <header class="dlg-head">
+        <div class="dlg-hgroup">
+          <h3 id="fo-detail-title">Detail Form Order</h3>
+          <p class="dlg-sub fo-detail-sub">
+            <strong class="mono">{{ detail.materialRequest }}</strong>
+            <span class="chip" :class="foStatusMeta(detail.status).cls">{{ foStatusMeta(detail.status).label }}</span>
+          </p>
+        </div>
+        <!-- elemen fokus pertama saat showModal (div tabel scrollable
+             ikut focusable di Chromium); sekaligus jalan tutup untuk tablet -->
+        <button type="button" class="btn btn-sm dlg-x" aria-label="Tutup detail" @click="closeDetail">×</button>
+      </header>
+      <div class="dlg-context">
+        <div class="sum-row"><span class="k">Dibutuhkan</span><span class="v">{{ detail.scheduleDate || '-' }}</span></div>
+        <div class="sum-row"><span class="k">Dibuat oleh</span><span class="v">{{ detail.ownerName }}</span></div>
+        <div class="sum-row"><span class="k">Dibuat</span><span class="v mono">{{ (detail.createdAt || '').slice(0, 16) }}</span></div>
+        <div class="sum-row"><span class="k">Rute</span><span class="v">{{ detail.fromWarehouse || '-' }} → {{ detail.toWarehouse || '-' }}</span></div>
+        <div class="sum-row"><span class="k">Catatan</span><span class="v">{{ detail.note || '-' }}</span></div>
+        <div v-if="detail.stockEntry" class="sum-row"><span class="k">Stock Entry</span><span class="v mono">{{ detail.stockEntry }}</span></div>
+      </div>
+      <div class="tbl-wrap fo-detail-wrap">
+        <table class="datatable fo-grid fo-detail-items">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th class="fo-c-qty">Qty</th>
+              <th class="fo-c-uom">Satuan</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(it, i) in detail.items" :key="i">
+              <td>{{ it.name }} <small class="mono">{{ it.code }}</small></td>
+              <td class="fo-c-qty">{{ it.qty }}</td>
+              <td class="fo-c-uom">{{ it.uom || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint fo-detail-link">
+        <a :href="'/app/material-request/' + encodeURIComponent(detail.id)" target="_blank" rel="noopener noreferrer">Buka Material Request di ERPNext</a>
+      </p>
+      <div class="dlg-actions">
+        <button v-if="detail.status === 'menunggu'" class="btn" @click="cancelFromDetail">Batalkan Form Order</button>
+        <button class="btn btn-primary" @click="closeDetail">Tutup</button>
+      </div>
+    </template>
+  </dialog>
 
   <dialog ref="dlgCancel" class="dialog" @click.self="closeCancel">
     <template v-if="cancelTarget">
