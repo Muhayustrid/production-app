@@ -59,44 +59,13 @@ WORKSPACE_FIELDS = [
 	_field("custom_jumlah_kru", "Jumlah Kru", "Int", "custom_detail_produksi_lain", allow_on_submit=1),
 	_field("custom_leader_produksi", "Leader Produksi", "Data", "custom_jumlah_kru", allow_on_submit=1),
 	# T35 three-lane handover summary — server-owned (read-only) state written
-	# atomically behind the Work Order lock by api/handover.py; Box 1 must be
-	# positive, Box 2/3 are 0/0 or positive/positive, counts are whole Ints in the
-	# item's warehouse display UOM (T39 universal: Pack, Pcs, ... — label and
-	# fieldname stay unit-free; migrate_box_qty_rename moves the old _pack
-	# columns onto these _qty fields).
-	_field(
-		"custom_box_1", "Box 1 (kg)", "Float", "custom_leader_produksi",
-		allow_on_submit=1, read_only=1, non_negative=1,
-		description="Berat Box 1 (kg) untuk request serah terima aktif/terakhir",
-	),
-	_field(
-		"custom_box_1_qty", "Box 1 (Jumlah)", "Int", "custom_box_1",
-		allow_on_submit=1, read_only=1, non_negative=1,
-		description="Jumlah Box 1 dalam satuan gudang item (Pack/Pcs/dll.) untuk request serah terima aktif/terakhir",
-	),
-	_field(
-		"custom_box_2", "Box 2 (kg)", "Float", "custom_box_1_qty",
-		allow_on_submit=1, read_only=1, non_negative=1,
-		description="Berat Box 2 (kg) untuk request serah terima aktif/terakhir",
-	),
-	_field(
-		"custom_box_2_qty", "Box 2 (Jumlah)", "Int", "custom_box_2",
-		allow_on_submit=1, read_only=1, non_negative=1,
-		description="Jumlah Box 2 dalam satuan gudang item (Pack/Pcs/dll.) untuk request serah terima aktif/terakhir",
-	),
-	_field(
-		"custom_box_3", "Box 3 (kg)", "Float", "custom_box_2_qty",
-		allow_on_submit=1, read_only=1, non_negative=1,
-		description="Berat Box 3 (kg) untuk request serah terima aktif/terakhir",
-	),
-	_field(
-		"custom_box_3_qty", "Box 3 (Jumlah)", "Int", "custom_box_3",
-		allow_on_submit=1, read_only=1, non_negative=1,
-		description="Jumlah Box 3 dalam satuan gudang item (Pack/Pcs/dll.) untuk request serah terima aktif/terakhir",
-	),
+	# atomically behind the Work Order lock by api/handover.py. FU96: the six
+	# Box 1..3 (kg + jumlah) fields are RETIRED (definitions deleted by
+	# retire_box_fields(); DB columns kept as an archive). The Link field now
+	# anchors directly after the leader field.
 	_field(
 		"custom_handover_material_request", "Material Request Serah Terima", "Link",
-		"custom_box_3_qty", options="Material Request", allow_on_submit=1,
+		"custom_leader_produksi", options="Material Request", allow_on_submit=1,
 		read_only=1, print_hide=1,
 	),
 	_field("custom_prepacking_confirmed", "Pre-Packing Confirmed", "Check", "custom_handover_material_request", allow_on_submit=1, print_hide=1, description="Marker: prepacking block was deliberately saved/confirmed"),
@@ -143,11 +112,9 @@ SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "..", "snapshots")
 
 # Box 1/2 on Work Order AND Material Request: Float kg weights written at the
 # "Verifikasi Siap Kirim" step (T31 ruling R8). The FU7 text-identifier era
-# (Data, e.g. BX-2201) is migrated away by ensure_box_kg_fields — old values
-# are NULLed and preserved only in the snapshot.
-BOX_FIELDNAMES = ("custom_box_1", "custom_box_2")
-BOX_KG_DOCTYPES = (DOCTYPE, "Material Request")
-BOX_KG_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "box-kg-pre.json")
+# (Data, e.g. BX-2201) was migrated away by the retired T31 migration
+# (definition + values recorded in snapshots/box-kg-pre.json). FU96 (2026-10-06):
+# the box fields THEMSELVES are now retired — see retire_box_fields().
 
 
 def snapshot():
@@ -413,31 +380,15 @@ HANDOVER_ROLE = "Gudang Barang Jadi"
 
 # Formalizes exactly what T21 created on the site (task-21-report §4); the
 # specs below mirror those live definitions, so the first apply() is a no-op.
-# FU25: field post-packing HANYA tampil di Work Order — di form Material
-# Request disembunyikan (hidden=1) demi kebersihan form; kolom data tetap
-# ada karena alur serah terima (box verifikasi, lane siap_kirim) memakainya.
+# FU96: the two legacy Box kg fields (custom_box_1/2, hidden) are RETIRED —
+# definitions deleted by retire_box_fields(); request MRs never carried box
+# data after T35 anyway.
 MR_CUSTOM_FIELDS = [
-	{
-		"fieldname": "custom_box_1",
-		"label": "Box 1",
-		"fieldtype": "Float",
-		"insert_after": "custom_note",
-		"allow_on_submit": 1,
-		"hidden": 1,
-	},
-	{
-		"fieldname": "custom_box_2",
-		"label": "Box 2",
-		"fieldtype": "Float",
-		"insert_after": "custom_box_1",
-		"allow_on_submit": 1,
-		"hidden": 1,
-	},
 	{
 		"fieldname": "custom_good_qty_postpacking",
 		"label": "Good Qty Post-Packing",
 		"fieldtype": "Float",
-		"insert_after": "custom_box_2",
+		"insert_after": "custom_note",
 		"allow_on_submit": 1,
 		"hidden": 1,
 	},
@@ -789,84 +740,6 @@ def ensure_handover_mr_fields():
 	return out
 
 
-def snapshot_box_kg():
-	"""Pre-change snapshot for the T31 box Data -> Float kg flip (ruling R8):
-	the Custom Field definitions on BOTH doctypes plus the distinct stored
-	values (with counts) so the old text-identifier meaning stays on record —
-	the snapshot is the only recovery after the NULL step. Runs BEFORE any
-	change; apply() calls it only when the file is absent (idempotent)."""
-	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-	data = {
-		"captured_at": frappe.utils.now(),
-		"custom_fields": frappe.get_all(
-			"Custom Field",
-			filters={"dt": ("in", BOX_KG_DOCTYPES), "fieldname": ("in", BOX_FIELDNAMES)},
-			fields=[
-				"name", "dt", "fieldname", "label", "fieldtype",
-				"allow_on_submit", "non_negative", "description",
-			],
-			order_by="dt, fieldname",
-		),
-		"stored_values": {},
-	}
-	for dt in BOX_KG_DOCTYPES:
-		data["stored_values"][dt] = {}
-		for fieldname in BOX_FIELDNAMES:
-			distinct = {}
-			for row in frappe.get_all(
-				dt, filters={fieldname: ("is", "set")}, fields=[f"{fieldname} as value"]
-			):
-				key = str(row.value)
-				distinct[key] = distinct.get(key, 0) + 1
-			data["stored_values"][dt][fieldname] = distinct
-	with open(BOX_KG_SNAPSHOT, "w") as f:
-		json.dump(data, f, indent=2, sort_keys=True, default=str)
-	return BOX_KG_SNAPSHOT
-
-
-def ensure_box_kg_fields():
-	"""T31 (ruling R8): Box 1/2 on Work Order AND Material Request become Float
-	kg weights for the Verifikasi Siap Kirim step. The old Data values were
-	TEXT identifiers (FU7) with no kg meaning — nothing convertible — so ALL
-	stored values are NULLed first (the snapshot is the recovery) and the
-	nullified count is recorded. ORDER MATTERS: nullify BEFORE the column
-	alter (MariaDB strict mode aborts a text->decimal ALTER on non-numeric
-	values). non_negative is cleared; allow_on_submit is kept (written on
-	submitted docs). Runs BEFORE the WORKSPACE_FIELDS / MR_CUSTOM_FIELDS
-	upserts so column/type land together and the upsert converges label/
-	description. Snapshot-first; per-field fieldtype check = idempotent."""
-	if not os.path.exists(BOX_KG_SNAPSHOT):
-		snapshot_box_kg()  # never rewrite box values without a pre-state
-
-	out = {}
-	for dt in BOX_KG_DOCTYPES:
-		for fieldname in BOX_FIELDNAMES:
-			key = f"{dt}.{fieldname}"
-			cf = frappe.db.get_value(
-				"Custom Field",
-				{"dt": dt, "fieldname": fieldname},
-				["name", "fieldtype", "non_negative"],
-				as_dict=True,
-			)
-			if not cf:
-				out[key] = "missing (created by the field upserts as Float)"
-				continue
-			if cf.fieldtype == "Float":
-				out[key] = f"{key}: unchanged"
-				continue
-			nullified = frappe.db.sql(
-				f"update `tab{dt}` set {fieldname}=NULL where {fieldname} is not null"
-			)
-			frappe.db.set_value("Custom Field", cf.name, "fieldtype", "Float")
-			frappe.db.change_column_type(dt, fieldname, "decimal(18,6)", nullable=True)
-			if cf.non_negative:
-				frappe.db.set_value("Custom Field", cf.name, "non_negative", 0)
-			out[key] = f"{key}: migrated {cf.fieldtype} -> Float kg (nullified {int(nullified or 0)} values)"
-	for dt in BOX_KG_DOCTYPES:
-		frappe.clear_cache(doctype=dt)
-	return out
-
-
 def snapshot_fu10():
 	"""Pre-change snapshot for the FU10 Link User -> Data flip: field
 	definitions plus the distinct stored values (with counts) so the old
@@ -989,121 +862,26 @@ GUDANG_CONFIRMED_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "FU30-gudang-confirmed-pr
 # ---------------------------------------------------------------------------
 
 THREE_LANE_LINK_FIELD = "custom_handover_material_request"
-THREE_LANE_BOX_FIELDS = ("custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty")
 THREE_LANE_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "three-lane-handover-pre.json")
 RETIRED_STATUS_VALUE = "Siap Kirim"
 
 # T39 — universal count unit (Pack OR the stock UOM itself): the Work Order
-# count columns are renamed custom_box_{1,2}_pack -> custom_box_{1,2}_qty so
-# neither fieldname nor label carries a unit. Values move with the rename;
-# the old columns are dropped (frappe's Custom Field on_trash keeps columns,
-# so the drop is explicit). Snapshot-first, idempotent.
-BOX_QTY_OLD_FIELDS = ("custom_box_1_pack", "custom_box_2_pack")
-BOX_QTY_NEW_FIELDS = ("custom_box_1_qty", "custom_box_2_qty")
-BOX_QTY_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "box-qty-rename-pre.json")
-
-
-def snapshot_box_qty_rename():
-	"""Pre-change snapshot for the T39 rename: the OLD count Custom Field
-	definitions plus every Work Order row holding any box value (rollback
-	source of truth). apply() runs it only when the file is absent."""
-	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-	data = {
-		"captured_at": frappe.utils.now(),
-		"custom_fields": frappe.get_all(
-			"Custom Field",
-			filters={"dt": DOCTYPE, "fieldname": ("in", list(BOX_QTY_OLD_FIELDS))},
-			fields=[
-				"fieldname", "label", "fieldtype", "insert_after",
-				"allow_on_submit", "read_only", "non_negative",
-			],
-			order_by="fieldname",
-		),
-		"work_orders": frappe.get_all(
-			DOCTYPE,
-			or_filters=[
-				["custom_box_1", "is", "set"],
-				["custom_box_1_pack", "is", "set"],
-				["custom_box_2", "is", "set"],
-				["custom_box_2_pack", "is", "set"],
-			],
-			fields=["name", "custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack"],
-			order_by="name",
-			limit=0,
-		),
-	}
-	with open(BOX_QTY_SNAPSHOT, "w") as f:
-		json.dump(data, f, indent=2, sort_keys=True, default=str)
-	return BOX_QTY_SNAPSHOT
-
-
-def migrate_box_qty_rename():
-	"""T39 ordered rename. Runs AFTER ensure_app_fields(create_only=True) (the
-	new _qty columns exist) and BEFORE ensure_three_lane_handover (its resync
-	reads the new names). Idempotent:
-	1. snapshot the old Custom Field definitions + live box values once;
-	2. copy each old count into its new column ONLY where the new value is
-	   still NULL (re-runs never overwrite; a live 0 stays 0);
-	3. delete the old Custom Fields and DROP the orphaned columns (on_trash
-	   keeps columns — the explicit ALTER finishes the rename)."""
-	first = not os.path.exists(BOX_QTY_SNAPSHOT)
-	if first:
-		snapshot_box_qty_rename()  # never drop old columns without a pre-state
-	out = {"snapshot": "written" if first else "present: unchanged"}
-
-	old_defs = frappe.get_all(
-		"Custom Field",
-		filters={"dt": DOCTYPE, "fieldname": ("in", list(BOX_QTY_OLD_FIELDS))},
-		pluck="name",
-	)
-	if not old_defs:
-		out["fields"] = "old columns already absent: unchanged"
-		return out
-
-	copied = 0
-	for row in frappe.get_all(
-		DOCTYPE,
-		or_filters=[
-			["custom_box_1_pack", "is", "set"],
-			["custom_box_2_pack", "is", "set"],
-		],
-		fields=["name", *BOX_QTY_OLD_FIELDS, *BOX_QTY_NEW_FIELDS],
-		order_by="name",
-		limit=0,
-	):
-		values = {}
-		for old, new in zip(BOX_QTY_OLD_FIELDS, BOX_QTY_NEW_FIELDS):
-			# raw NULL check: a copied 0 must never be re-read as "unset"
-			if row.get(old) is not None and row.get(new) is None:
-				values[new] = row.get(old)
-		if values:
-			frappe.db.set_value(DOCTYPE, row.name, values, update_modified=False)
-			copied += 1
-	out["values"] = f"{copied} Work Orders copied" if copied else "0 values to copy: unchanged"
-
-	for fieldname in BOX_QTY_OLD_FIELDS:
-		frappe.delete_doc("Custom Field", frappe.db.get_value(
-			"Custom Field", {"dt": DOCTYPE, "fieldname": fieldname}, "name"
-		))
-		still_there = frappe.db.sql(
-			"SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-			"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
-			(f"tab{DOCTYPE}", fieldname),
-		)
-		if still_there:
-			frappe.db.sql_ddl(f"ALTER TABLE `tab{DOCTYPE}` DROP COLUMN `{fieldname}`")
-	frappe.clear_cache(doctype=DOCTYPE)
-	out["fields"] = "old Custom Fields deleted + columns dropped"
-	return out
+# count columns custom_box_{1,2}_pack were renamed custom_box_{1,2}_qty.
+# FU96: the whole box subsystem (T35 validation, T39 rename) is RETIRED —
+# both migrations are gone from apply(); their snapshots (box-kg-pre.json,
+# box-qty-rename-pre.json, box-text-pre.json) remain as the historical
+# record, and retire_box_fields() below deletes the remaining definitions.
 
 
 def snapshot_three_lane():
 	"""Pre-change snapshot for the T35 cutover: the affected Work Order Custom
 	Field definitions (the OLD Select options included) plus the distinct live
 	values of every field the migration may rewrite. Runs BEFORE any three-lane
-	change; apply() calls it only when the file is absent (idempotent)."""
+	change; apply() calls it only when the file is absent (idempotent).
+	FU96: the box fields are no longer part of this snapshot — they have
+	their own retirement snapshot (retire_box_fields)."""
 	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-	fieldnames = ("custom_handover_status", THREE_LANE_LINK_FIELD, *THREE_LANE_BOX_FIELDS)
+	fieldnames = ("custom_handover_status", THREE_LANE_LINK_FIELD)
 	data = {
 		"captured_at": frappe.utils.now(),
 		"custom_fields": frappe.get_all(
@@ -1221,6 +999,97 @@ def retire_gudang_confirmed_field():
 		frappe.clear_cache(doctype=DOCTYPE)
 		result = "deleted"
 	return result
+
+
+# ---------------------------------------------------------------------------
+# FU96 (2026-10-06) — Box 1..3 fully retired (user decision: weighing is
+# abandoned permanently). The Custom Field definitions on Work Order (6:
+# custom_box_1..3 + _qty) and Material Request (2 legacy: custom_box_1/2) are
+# deleted; the DB COLUMNS ARE KEPT AS AN ARCHIVE (frappe's on_trash never
+# drops columns — same preservation pattern as custom_default_uom_warehouse;
+# warehouse_app's Serah Terima report still reads them in raw SQL). Snapshot-
+# first; idempotent (second run "unchanged").
+# ---------------------------------------------------------------------------
+
+BOX_RETIRE_FIELDS = {
+	DOCTYPE: (
+		"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
+		"custom_box_3", "custom_box_3_qty",
+	),
+	"Material Request": ("custom_box_1", "custom_box_2"),
+}
+BOX_RETIRE_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu96-box-retire-pre.json")
+
+
+def snapshot_box_retire():
+	"""FU96 pre-change snapshot: every box Custom Field definition plus every
+	row still holding a box value (rollback source of truth — the columns stay
+	but the metadata is gone after this migration). apply() runs it only when
+	the file is absent (idempotent)."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	data = {
+		"captured_at": frappe.utils.now(),
+		"custom_fields": frappe.get_all(
+			"Custom Field",
+			filters={"dt": ("in", list(BOX_RETIRE_FIELDS)), "fieldname": ("in", [f for fs in BOX_RETIRE_FIELDS.values() for f in fs])},
+			fields=[
+				"name", "dt", "fieldname", "label", "fieldtype", "options",
+				"insert_after", "allow_on_submit", "read_only", "non_negative",
+				"description", "hidden",
+			],
+			order_by="dt, fieldname",
+		),
+		"rows": {},
+	}
+	for dt, fieldnames in BOX_RETIRE_FIELDS.items():
+		or_filters = [[f, "is", "set"] for f in fieldnames]
+		data["rows"][dt] = frappe.get_all(
+			dt, or_filters=or_filters, fields=["name", *fieldnames], order_by="name", limit=0
+		)
+	with open(BOX_RETIRE_SNAPSHOT, "w") as f:
+		json.dump(data, f, indent=2, sort_keys=True, default=str)
+	return BOX_RETIRE_SNAPSHOT
+
+
+def retire_box_fields():
+	"""FU96: delete the box Custom Field definitions (idempotent). Snapshot
+	first; columns and their stored values are left untouched. Also re-anchors
+	the handover Link field when its insert_after points at a now-deleted box
+	field (existing sites keep a sane form layout)."""
+	parts = []
+	names = frappe.get_all(
+		"Custom Field",
+		filters={"dt": ("in", list(BOX_RETIRE_FIELDS)), "fieldname": ("in", [f for fs in BOX_RETIRE_FIELDS.values() for f in fs])},
+		pluck="name",
+		order_by="dt, fieldname",
+	)
+	if names:
+		if not os.path.exists(BOX_RETIRE_SNAPSHOT):
+			snapshot_box_retire()  # never drop metadata without a pre-state
+		for name in names:
+			frappe.delete_doc("Custom Field", name, force=1)
+		parts.append(f"deleted {len(names)} fields (columns kept as archive)")
+	# the Link field may still point at a deleted box anchor: re-anchor after
+	# the leader field so the WO form has no dangling layout reference
+	link = frappe.db.get_value(
+		"Custom Field",
+		{"dt": DOCTYPE, "fieldname": "custom_handover_material_request"},
+		["name", "insert_after"],
+		as_dict=True,
+	)
+	if link and link.insert_after and link.insert_after.startswith("custom_"):
+		if not frappe.db.exists(
+			"Custom Field", {"dt": DOCTYPE, "fieldname": link.insert_after}
+		):
+			frappe.db.set_value(
+				"Custom Field", link.name, "insert_after", "custom_leader_produksi"
+			)
+			parts.append("handover Link re-anchored after custom_leader_produksi")
+	if not parts:
+		return "unchanged"
+	frappe.clear_cache(doctype=DOCTYPE)
+	frappe.clear_cache(doctype="Material Request")
+	return "; ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -1448,19 +1317,18 @@ def apply():
 	if not os.path.exists(FU58_SNAPSHOT):
 		snapshot_fu58()  # never add the company gate without a pre-state
 
-	# T39: rename the count columns BEFORE the three-lane resync reads them
-	# (create_only above already created the new _qty fields)
-	result["box_qty_rename"] = migrate_box_qty_rename()
 	result["adonan_ke_int"] = reconcile_adonan_ke_int()
 
 	# T35: resolve/backfill/resync handover state BEFORE the full upsert below
 	# narrows the custom_handover_status options (data first, metadata second)
 	result["three_lane_handover"] = ensure_three_lane_handover()
 
-	result["box_kg_fields"] = ensure_box_kg_fields()
 	result["name_text_fields"] = ensure_name_text_fields()
 	result["qc_packing_text"] = ensure_qc_packing_text_field()
 	result["gudang_confirmed"] = retire_gudang_confirmed_field()
+	# FU96: delete the box Custom Field definitions (data first: the resync
+	# above already stopped touching them; columns kept as archive)
+	result["retired_box_fields"] = retire_box_fields()
 
 	leader = frappe.db.get_value(
 		"Custom Field", {"dt": DOCTYPE, "fieldname": LEADER_FIELDNAME}, ["name", "fieldtype"], as_dict=True

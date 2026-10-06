@@ -285,8 +285,7 @@ class TestHandoverBoard(IntegrationTestCase):
 				"schedule_date": add_days(now(), 1),
 				"set_from_warehouse": cls.cold_wh,
 				"set_warehouse": cls.target_wh,
-				"custom_box_1": 12.5,
-				"custom_box_2": None,  # empty is dropped from display
+				# FU96: field box MR dipensiunkan — fixture tidak lagi menulisnya
 				"items": [
 					{
 						"item_code": wo.production_item,
@@ -693,12 +692,12 @@ class TestHandoverBoard(IntegrationTestCase):
 		self.assertIsNone(req["stock_entry"])
 		self.assertEqual(flt(req["qty"]), 40)
 		# T35: the doc_events sync claims the WO Link on submit; the row reads
-		# the (still empty) WO summary — legacy MR kg only shows pre-cutover
+		# the (still empty) WO summary. FU96: box fields are retired — request
+		# rows carry NO box keys at all (bukan None, bukan kosong)
 		self.assertEqual(self._lot(board, wo.name)["custom_handover_material_request"], mr.name)
-		self.assertIsNone(req["box_1"])
-		self.assertIsNone(req["box_1_qty"])  # Pack never invented from MR data
-		self.assertIsNone(req["box_2"])
-		self.assertEqual(req["boxes"], [])
+		self.assertNotIn("box_1", req)
+		self.assertNotIn("box_2", req)
+		self.assertNotIn("boxes", req)
 		self.assertEqual(req["from_warehouse"], self.cold_wh)
 		self.assertEqual(req["to_warehouse"], self.target_wh)
 		self.assertEqual(req["batch"], self._lot(board, wo.name)["batch"])
@@ -757,11 +756,11 @@ class TestHandoverBoard(IntegrationTestCase):
 		self.assertEqual(req["stock_entry"], se.name)
 		self.assertEqual(handover_api._handover_lanes([wo.name]), {wo.name: "terkirim"})
 
-	def test_t35_wo_summary_bulk_mapping_and_fallback(self):
-		"""Request rows read box kg/Pack from the BULK Work Order lot rows only
-		while the WO Link points at the MR; a pre-cutover MR (empty Link) falls
-		back to its own kg with empty Pack — and the mapping performs no
-		per-card Work Order lookup."""
+	def test_fu96_request_rows_carry_no_box_keys_and_bulk_mapping(self):
+		"""FU96: box (kg/jumlah) dipensiunkan — request rows TIDAK lagi membawa
+		kunci box apa pun (bukan None, kunci tidak ada). Mapping tetap bulk:
+		tidak ada lookup Work Order per kartu di dalam _requests; display_uom
+		per baris tetap ada untuk UI qty."""
 		from production_app.api import handover as handover_api
 
 		wo1 = self._make_wo(self.bom, 100, self.fg, "1")
@@ -772,30 +771,21 @@ class TestHandoverBoard(IntegrationTestCase):
 		self._manufacture(wo2, 100, "11:00:00")
 		mr1 = self._make_mr(wo1, 100)
 		mr2 = self._make_mr(wo2, 50)
-		# pre-cutover simulation: the doc_events sync claims the Link on MR
-		# submit, so clear it explicitly (db_set fires no hooks)
+		# pre-cutover simulation: clear the Link on wo2 (db_set fires no hooks)
 		wo2.db_set("custom_handover_material_request", None)
-
 		wo1.db_set("custom_handover_material_request", mr1.name)
+		# nilai kolom arsip ditulis langsung — harus TIDAK pernah muncul lagi
+		# di payload (kolom tetap ada, tetapi tidak dibaca)
 		wo1.db_set("custom_box_1", 12.5)
 		wo1.db_set("custom_box_1_qty", 20)
-		wo1.db_set("custom_box_2", 8.0)
-		wo1.db_set("custom_box_2_qty", 19)
-		row = self._req(handover_board(), mr1.name)
-		self.assertEqual((row["box_1"], row["box_1_qty"]), (12.5, 20))
-		self.assertEqual((row["box_2"], row["box_2_qty"]), (8.0, 19))
-		# T39: every request row carries its item's count unit for the UI
-		self.assertEqual(row["display_uom"], "Pack")
-		# kg precedence proof: the WO value outranks the MR's legacy kg (12.5)
-		wo1.db_set("custom_box_1", 21.5)
-		self.assertEqual(self._req(handover_board(), mr1.name)["box_1"], 21.5)
-
-		# pre-cutover fallback: MR kg fields, both Pack values stay empty
 		mr2.db_set("custom_box_1", 6.5)
-		mr2.db_set("custom_box_2", 2.25)
-		row2 = self._req(handover_board(), mr2.name)
-		self.assertEqual((row2["box_1"], row2["box_1_qty"]), (6.5, None))
-		self.assertEqual((row2["box_2"], row2["box_2_qty"]), (2.25, None))
+
+		board = handover_board()
+		for mr in (mr1, mr2):
+			row = self._req(board, mr.name)
+			for key in ("box_1", "box_1_qty", "box_2", "box_2_qty", "box_3", "box_3_qty", "boxes"):
+				self.assertNotIn(key, row, f"FU96: kunci {key} harus absen dari baris request")
+		self.assertEqual(self._req(board, mr1.name)["display_uom"], "Pack")
 
 		# the mapping is bulk: no per-card Work Order lookup inside _requests
 		real_get_value = frappe.db.get_value
@@ -809,38 +799,8 @@ class TestHandoverBoard(IntegrationTestCase):
 		with patch.object(frappe.db, "get_value", side_effect=no_wo_lookups):
 			rows = handover_api._requests(wo_rows, wo_names=[wo1.name, wo2.name])
 		by_mr = {r["mr"]: r for r in rows}
-		self.assertEqual((by_mr[mr1.name]["box_1"], by_mr[mr1.name]["box_1_qty"]), (21.5, 20))
-		self.assertEqual((by_mr[mr2.name]["box_1"], by_mr[mr2.name]["box_1_qty"]), (6.5, None))
-		self.assertIsNone(by_mr[mr2.name]["box_2_qty"])
-
-	def test_fu71_qty_only_summary_maps_to_no_boxes_on_board(self):
-		"""FU71: a qty-only WO summary (Link set, ALL six box fields 0) reads on
-		the board request row as NO boxes — the mapping's `or None` turns the
-		stored 0 into the falsy None (box_1 is None, never 0, and the MR's
-		legacy kg cannot leak past a Link that points here), and the truthiness
-		filter empties the `boxes` chip list entirely."""
-		fg = _make_item(f"{PREFIX}-FGQO-{random_string(4).upper()}", self.group, self.uom, batch=False)
-		bom = self._make_bom(fg)
-		wo = self._make_wo(bom, 100, fg, "1")
-		self._transfer(wo)
-		self._manufacture(wo, 100, "10:00:00")
-		mr = self._make_mr(wo, 100)
-		# the doc_events sync claimed the Link on MR submit; write the qty-only
-		# box block directly (no box payload was ever sent for this request)
-		wo.db_set("custom_handover_material_request", mr.name)
-		wo.db_set("custom_box_1", 0)
-		wo.db_set("custom_box_1_qty", 0)
-		wo.db_set("custom_box_2", 0)
-		wo.db_set("custom_box_2_qty", 0)
-		wo.db_set("custom_box_3", 0)
-		wo.db_set("custom_box_3_qty", 0)
-
-		row = self._req(handover_board(), mr.name)
-		self.assertEqual(row["lane"], "request")
-		self.assertEqual(row["work_order"], wo.name)
-		self.assertIsNone(row["box_1"])
-		self.assertIsNone(row["box_1_qty"])
-		self.assertEqual(row["boxes"], [])
+		self.assertNotIn("box_1", by_mr[mr1.name])
+		self.assertNotIn("box_1", by_mr[mr2.name])
 
 	def test_t36_board_single_bulk_seams_no_fan_out(self):
 		"""T36: ONE full board build for MULTIPLE Work Orders hits each bulk
@@ -917,12 +877,10 @@ class TestHandoverBoard(IntegrationTestCase):
 
 		row_a = self._req(board, mr_a.name)
 		row_b = self._req(board, mr_b.name)
-		# Link/kg/Pack read from the single bulk Work Order result set
-		self.assertEqual((row_a["box_1"], row_a["box_1_qty"]), (21.5, 9))
-		self.assertEqual((row_a["box_2"], row_a["box_2_qty"]), (7.0, 2))
+		# FU96: tidak ada kunci box di baris; Link tetap dari satu bulk result
+		self.assertNotIn("box_1", row_a)
+		self.assertNotIn("box_1", row_b)
 		self.assertEqual(self._lot(board, wo_a.name)["custom_handover_material_request"], mr_a.name)
-		# pre-cutover fallback: legacy MR kg, Pack never invented
-		self.assertEqual((row_b["box_1"], row_b["box_1_qty"]), (12.5, None))
 
 	# ------------------------- 4. legacy unsupported + empty-lot drop rule
 

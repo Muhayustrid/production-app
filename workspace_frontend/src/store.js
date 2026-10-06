@@ -687,13 +687,10 @@ function mapRequest(r) {
     company: r.company || '',
     requestedQtyPcs: r.qty, stockUom: r.stock_uom, qtyInPack: r.qty_in_pack,
     adonanKe: r.adonan_ke, batch: r.batch,
-    // T35/T39: alokasi box (kg + jumlah) dari ringkasan Work Order / MR
-    // legacy; `unit` = satuan gudang item (Pack/Pcs/dll.) untuk label UI
-    box1: r.box_1, box1Qty: r.box_1_qty,
-    box2: r.box_2, box2Qty: r.box_2_qty,
-    box3: r.box_3, box3Qty: r.box_3_qty,
-    // W19: grup box bersama — rencana fisik dipakai bersama anggota grup
-    boxPlan: r.box_plan || null, groupBoxes: r.group_boxes || [], groupSize: r.group_size ?? null,
+    // FU96: alokasi box (kg + jumlah) dipensiunkan dari alur serah terima —
+    // request = dokumen qty murni. W19: identitas grup tetap ada (plan +
+    // jumlah anggota hidup) utk pill grup & cancel-grup.
+    boxPlan: r.box_plan || null, groupSize: r.group_size ?? null,
     unit: r.display_uom || r.stock_uom,
     lane: r.lane, flag: r.flag,
     fromWarehouse: r.from_warehouse, toWarehouse: r.to_warehouse,

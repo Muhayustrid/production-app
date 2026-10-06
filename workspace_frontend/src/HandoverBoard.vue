@@ -19,7 +19,6 @@ import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
 import { distinctItems, filterSerahRows, serahFilterCount } from './handover-filter.js'
 import { rowClickAction, seRouteLabel } from './handover-se.js'
-import { boxAllocationText, groupBoxText } from './handover-box.js'
 import { laneStatusMeta } from './form-order.js'
 import RangeField from './RangeField.vue'
 import {
@@ -63,7 +62,6 @@ function lotCard(lot) {
       quantity: '—',
       timestampLabel: '',
       timestamp: '',
-      box: '',
       note: lot.unsupportedReason
     }
   }
@@ -78,8 +76,7 @@ function lotCard(lot) {
       quantityLabel: 'Hasil WO',
       timestampLabel: 'Selesai',
       timestamp: lot.completedAt || lot.enteredAt,
-      units: lot,
-      box: null
+      units: lot
     }),
     note: lot.batchless
       ? `Stok item digabung${reserved > 0 ? ` · tertahan ${fmtInt(reserved)} PCS` : ''}`
@@ -89,9 +86,9 @@ function lotCard(lot) {
   }
 }
 
-// W19: grup box bersama → satu baris ringkasan grup; baris normal tetap
-// chip per-box (incl. Box 3 W18). groupBoxText '' di baris non-grup.
-const boxText = (r) => groupBoxText(r) || boxAllocationText(r) || undefined
+// FU96: box (kg) dipensiunkan — permintaan grup ditandai lewat plan + jumlah
+// anggota (mekanisme W19 hidup), tanpa baris ringkasan box lagi.
+const groupText = (r) => (r.boxPlan ? `Grup ${r.boxPlan}${r.groupSize != null ? ` (${r.groupSize} WO)` : ''}` : undefined)
 
 function reqCard(r) {
   const lot0 = lotForWo(r.workOrder)
@@ -100,6 +97,8 @@ function reqCard(r) {
     kind: 'request', ref: r.id, key: r.id,
     live: !stopped,
     name: r.item,
+    note: [stopped ? 'Dihentikan di Desk. Aktifkan kembali sebelum dilanjutkan.' : '', routeWarn(r)]
+      .filter(Boolean).join(' · '),
     ...handoverCard({
       workOrder: r.workOrder,
       document: r.materialRequest,
@@ -110,10 +109,8 @@ function reqCard(r) {
       timestampLabel: 'Waktu',
       timestamp: r.createdAt,
       units: lot0 || r,
-      box: boxText(r)
-    }),
-    note: [stopped ? 'Dihentikan di Desk. Aktifkan kembali sebelum dilanjutkan.' : '', routeWarn(r)]
-      .filter(Boolean).join(' · ')
+      box: groupText(r)
+    })
   }
 }
 
@@ -133,7 +130,7 @@ function doneCard(r) {
       timestampLabel: 'Dikirim',
       timestamp: r.sentAt,
       units: lot0 || r,
-      box: boxText(r)
+      box: groupText(r)
     }),
     note: ''
   }
@@ -659,9 +656,9 @@ onMounted(() => {
             <span class="k">Batch</span>
             <span class="v">{{ kirimReq.batch || '-' }}</span>
           </div>
-          <div class="sum-row">
-            <span class="k">Box</span>
-            <span class="v" style="white-space: pre-line">{{ boxText(kirimReq) || '-' }}</span>
+          <div v-if="kirimReq.boxPlan" class="sum-row">
+            <span class="k">Grup</span>
+            <span class="v">{{ groupText(kirimReq) }}</span>
           </div>
         </div>
         <div class="boxgroup" style="margin-top: 14px">

@@ -26,7 +26,8 @@ test('keeps request document and batch on separate rows', () => {
     quantity: '22 Pcs',
     timestampLabel: 'Waktu',
     timestamp: '15 Sep, 06:23',
-    box: 'Box kosong'
+    // FU96: box dipensiunkan — tanpa argumen box = tanpa pill
+    box: ''
   })
 })
 
@@ -40,12 +41,13 @@ test('omits an absent batch and shows alternate quantity on one line', () => {
     timestampLabel: 'Dikirim',
     timestamp: '2026-09-15 07:05:00',
     units: { stockUom: 'Pcs', displayUom: 'Pack', qtyInPack: 6 },
-    box: '12.5 / 8.25 kg'
+    // FU96: satu-satunya pemakaian pill kini penanda grup (W19 hidup)
+    box: 'Grup HBP-00012 (3 WO)'
   })
 
   assert.equal(card.batch, '')
   assert.equal(card.quantity, '36 Pack · 216 Pcs')
-  assert.equal(card.box, '12.5 / 8.25 kg')
+  assert.equal(card.box, 'Grup HBP-00012 (3 WO)')
 })
 
 test('does not show a box status on Cold Storage cards', () => {
@@ -55,11 +57,15 @@ test('does not show a box status on Cold Storage cards', () => {
     quantityLabel: 'Hasil WO',
     timestampLabel: 'Selesai',
     timestamp: '2026-09-15 06:23:00',
-    units,
-    box: null
+    units
   })
 
   assert.equal(card.box, '')
+})
+
+test('box null/kosong tidak pernah jadi "Box kosong" (FU96 pensiun)', () => {
+  assert.equal(handoverCard({ workOrder: 'W', quantity: 1, units, box: null }).box, '')
+  assert.equal(handoverCard({ workOrder: 'W', quantity: 1, units, box: undefined }).box, '')
 })
 
 test('adonan 0 (kosong pasca-Int) tampil kosong, bukan nol', () => {

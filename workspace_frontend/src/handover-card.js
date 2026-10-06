@@ -1,5 +1,7 @@
 import { fmtStampShort, qtyMain } from './format.js'
 
+// FU96: box (kg) dipensiunkan — `box` kini hanya penanda grup opsional
+// ('' = tidak ada pill; request kartu lot tidak pernah mengirimnya).
 export function handoverCard(values) {
   return {
     workOrder: values.workOrder || '',
@@ -10,6 +12,6 @@ export function handoverCard(values) {
     quantity: qtyMain(values.quantity, values.units),
     timestampLabel: values.timestampLabel || '',
     timestamp: fmtStampShort(values.timestamp).replace(' · ', ', '),
-    box: values.box === undefined ? 'Box kosong' : (values.box || '')
+    box: values.box || ''
   }
 }

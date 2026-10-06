@@ -36,8 +36,6 @@ import json
 
 import math
 
-from decimal import Decimal
-
 import frappe
 from frappe import _
 from frappe.utils import add_days, flt, get_link_to_form, now
@@ -205,8 +203,6 @@ def _wo_lot_rows(wo_names=None, company=None):
 				"fg_warehouse", "creation", "company",
 				# T35 summary block: bulk-loaded once, mapped onto request rows
 				"custom_handover_material_request",
-				"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
-				"custom_box_3", "custom_box_3_qty",
 			],
 			order_by="creation desc",
 			limit_page_length=0,
@@ -322,12 +318,6 @@ def _wo_lot_rows(wo_names=None, company=None):
 				"unsupported_reason": None,
 				"has_older_lot_same_item": False,
 				"custom_handover_material_request": w.custom_handover_material_request,
-				"custom_box_1": w.custom_box_1,
-				"custom_box_1_qty": w.custom_box_1_qty,
-				"custom_box_2": w.custom_box_2,
-				"custom_box_2_qty": w.custom_box_2_qty,
-				"custom_box_3": w.custom_box_3,
-				"custom_box_3_qty": w.custom_box_3_qty,
 			}
 		)
 		unique = {b for b in cur["batches"] if b}
@@ -422,7 +412,8 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 				"name", "docstatus", "status", "owner", "creation",
 				"set_from_warehouse", "set_warehouse",
 				"company",
-				"custom_box_1", "custom_box_2",
+				# FU96: field box MR legacy (custom_box_1/2) dipensiunkan —
+				# tidak pernah lagi dibaca (request = dokumen qty murni)
 				"custom_good_qty_postpacking", "custom_reject_qty_postpacking",
 				"custom_trial_qty_postpacking", "custom_sisa_qty_postpacking",
 				"custom_jam_packing", "custom_qc_packing",
@@ -460,22 +451,11 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 		{m.owner for m in mrs} | {m.custom_qc_packing for m in mrs if m.custom_qc_packing}
 	)
 
-	# W19 shared-box groups: the plan's physical rows + live member count are
-	# bulk-loaded ONCE per call when any MR references a plan (per-WO box chips
-	# do not exist for groups — kg was weighed per physical box, not per WO).
-	group_boxes_by_plan, group_size_by_plan = {}, {}
+	# W19 groups (FU96: tanpa box): sisi klien hanya butuh identitas grup +
+	# jumlah anggota HIDUP — bulk-loaded ONCE per call saat ada MR berplan
+	group_size_by_plan = {}
 	box_plan_names = sorted({m.custom_handover_box_plan for m in mrs if m.custom_handover_box_plan})
 	if box_plan_names:
-		for r in frappe.get_all(
-			"Handover Box Plan Item",
-			filters={"parent": ("in", box_plan_names)},
-			fields=["parent", "kg", "qty"],
-			order_by="idx asc",
-			limit=0,
-		):
-			group_boxes_by_plan.setdefault(r.parent, []).append(
-				{"kg": flt(r.kg), "qty": int(r.qty)}
-			)
 		# group_size = LIVE members only: submitted (active request OR shipped);
 		# cancelled/draft members never counted (one grouped query)
 		for r in frappe.get_all(
@@ -517,16 +497,6 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 			display_uom = enriched.display_uom or enriched.stock_uom
 		else:
 			display_uom = lot.display_uom or lot.stock_uom
-		if lot is not None and lot.custom_handover_material_request == m.name:
-			# the WO summary owns the boxes while its Link points here
-			box_1, box_1_qty = lot.custom_box_1 or None, lot.custom_box_1_qty or None
-			box_2, box_2_qty = lot.custom_box_2 or None, lot.custom_box_2_qty or None
-			box_3, box_3_qty = lot.custom_box_3 or None, lot.custom_box_3_qty or None
-		else:
-			# pre-cutover MR: legacy MR kg, count values never invented
-			box_1, box_1_qty = m.custom_box_1 or None, None
-			box_2, box_2_qty = m.custom_box_2 or None, None
-			box_3, box_3_qty = None, None  # MR never carried a Box 3 field
 		rows.append(
 			{
 				"mr": m.name,
@@ -546,17 +516,9 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 				"qty_in_pack": qty_in_pack,
 				"display_uom": display_uom,
 				"adonan_ke": adonan_ke,
-				"box_1": box_1,
-				"box_1_qty": box_1_qty,
-				"box_2": box_2,
-				"box_2_qty": box_2_qty,
-				"box_3": box_3,
-				"box_3_qty": box_3_qty,
-				"boxes": [b for b in (box_1, box_2, box_3) if b],
+				# FU96: field box (kg/jumlah) dipensiunkan — grup request tetap
+				# dikenali lewat plan + jumlah anggota (mekanisme W19 hidup)
 				"box_plan": m.custom_handover_box_plan or None,
-				"group_boxes": group_boxes_by_plan.get(m.custom_handover_box_plan, []),
-				# plan rows always carry an int count (0 = no live member);
-				# non-group rows stay None
 				"group_size": (
 					group_size_by_plan.get(m.custom_handover_box_plan, 0)
 					if m.custom_handover_box_plan
@@ -740,11 +702,10 @@ def _handover_lanes(wo_names):
 	}
 
 
-WO_SUMMARY_FIELDS = (
-	"custom_handover_material_request",
-	"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
-	"custom_box_3", "custom_box_3_qty",
-)
+# FU96: field box WO (custom_box_1..3 + _qty) dipensiunkan (definisi dihapus;
+# kolom DB dibiarkan utuh sebagai arsip). Ringkasan serah terima kini HANYA
+# Link + status — nilai box historis tidak pernah lagi dibaca/ditulis.
+WO_SUMMARY_FIELDS = ("custom_handover_material_request",)
 
 
 def _sync_handover_summary(wo_names):
@@ -752,10 +713,9 @@ def _sync_handover_summary(wo_names):
 	documents (_handover_state) and write ONLY actual diffs. The summary
 	fields are read_only on the form — this controlled db write is the gate
 	(the role-gated actions + this sync + the migration share it). Clearing
-	rules (T35): a WO whose only evidence vanished (unsent cancelled MR, no
-	replacement) loses the Link and all box values; a live or sent
-	request keeps the kg and never gains invented count values. Returns the
-	WO names actually written."""
+	rule (T35, FU96): a WO whose only evidence vanished (unsent cancelled MR,
+	no replacement) loses the Link and the status. Returns the WO names
+	actually written."""
 	wo_names = sorted({n for n in wo_names if n})
 	if not wo_names:
 		return []
@@ -775,13 +735,6 @@ def _sync_handover_summary(wo_names):
 		if state:
 			if link != state["mr"]:
 				values["custom_handover_material_request"] = state["mr"]
-				# T36 ruling: the box values belong to the request that owned
-				# the outgoing Link. Falling back to another MR (cancelled-unsent
-				# M2 above a sent M1) must never inherit them — and the MR is a
-				# pure request document, so the previous allocation is unrecoverable:
-				# cleared is the honest value.
-				if any(flt(prior.get(f)) for f in WO_SUMMARY_FIELDS[1:]):
-					values.update({f: 0 for f in WO_SUMMARY_FIELDS[1:]})
 			label = HANDOVER_STATUS_LABEL[state["lane"]]
 			if status != label:
 				values[HANDOVER_STATUS_FIELD] = label
@@ -790,9 +743,8 @@ def _sync_handover_summary(wo_names):
 				values[HANDOVER_STATUS_FIELD] = None
 			if link:
 				# the current Link has no SE evidence (else state would exist):
-				# cancelled unsent request with no replacement -> clear all
+				# cancelled unsent request with no replacement -> clear the Link
 				values["custom_handover_material_request"] = None
-				values.update({f: 0 for f in WO_SUMMARY_FIELDS[1:]})
 		if values:
 			frappe.db.set_value("Work Order", prior.name, values, update_modified=False)
 			written.append(prior.name)
@@ -1130,45 +1082,6 @@ def _target_warehouse_or_throw(company=None):
     return target
 
 
-# Box kg columns are decimal(18,6): 12 integer + 6 fractional digits. Decimal
-# (not float) because float("999999999999.999999") == 1e12 — a float bound
-# would let exactly that value through to an out-of-range db write.
-MAX_BOX_KG = Decimal("999999999999.999999")
-
-# FU71: the qty-only WO summary block — shared read-only (the only consumer,
-# _insert_submitted_handover_mr, splats it via **box_values and never mutates)
-ZERO_BOXES = {
-    "custom_box_1": 0,
-    "custom_box_1_qty": 0,
-    "custom_box_2": 0,
-    "custom_box_2_qty": 0,
-    "custom_box_3": 0,
-    "custom_box_3_qty": 0,
-}
-
-
-def _finite_kg(value, label, allow_blank=False):
-    """T35 box kg parser: a finite, non-negative number is REQUIRED for Box 1;
-    Box 2 may be blank (= 0 kg). The upper bound is the decimal(18,6) column
-    capacity — a finite float beyond it (e.g. 1e308) must die HERE with an
-    actionable message, never at the db write as a driver error."""
-    if value is None or str(value).strip() == "":
-        if allow_blank:
-            return 0.0
-        frappe.throw(_("{0} harus angka kg yang valid").format(label))
-    try:
-        amount = float(value)
-    except (TypeError, ValueError):
-        frappe.throw(_("{0} harus angka kg yang valid").format(label))
-    if not math.isfinite(amount) or amount < 0 or Decimal(str(amount)) > MAX_BOX_KG:
-        frappe.throw(
-            _("{0} harus angka kg non-negatif yang valid (maksimal {1} kg).").format(
-                label, MAX_BOX_KG
-            )
-        )
-    return amount
-
-
 def _expected_unit_count(wo, lot, amount):
     """Whole count of the full `amount` in the item's warehouse display UOM
     (T39 universal: the stock UOM itself at EXACT factor 1 — not a fallback —
@@ -1195,47 +1108,14 @@ def _expected_unit_count(wo, lot, amount):
     return int(expected)
 
 
-def _whole_count(value, label):
-    """A whole, non-negative count (Int): no fractions, no NaN/inf."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        frappe.throw(_("{0} harus bilangan bulat.").format(label))
-    if not math.isfinite(number) or number < 0 or number != int(number):
-        frappe.throw(_("{0} harus bilangan bulat non-negatif.").format(label))
-    return int(number)
-
-
-def _validate_box_allocation(box_1, qty_1, box_2, qty_2, box_3, qty_3, expected, unit):
-    """Box 1 always positive; Box 2/3 exactly 0 kg/0 count or positive/positive;
-    the count sum must equal the server-computed count of the full amount."""
-    if box_1 <= 0 or qty_1 <= 0:
-        frappe.throw(_("Box 1 harus diisi: berat kg dan jumlah {0} harus positif.").format(unit))
-    if box_2 <= 0 and qty_2 <= 0:
-        box_2 = qty_2 = 0  # Box 2 kosong sah (0 kg / 0 jumlah)
-    elif box_2 <= 0 or qty_2 <= 0:
-        frappe.throw(_("Box 2 harus kosong (0 kg / 0 jumlah) atau terisi keduanya."))
-    if box_3 <= 0 and qty_3 <= 0:
-        box_3 = qty_3 = 0  # Box 3 kosong sah (0 kg / 0 jumlah)
-    elif box_3 <= 0 or qty_3 <= 0:
-        frappe.throw(_("Box 3 harus kosong (0 kg / 0 jumlah) atau terisi keduanya."))
-    if qty_1 + qty_2 + qty_3 != expected:
-        frappe.throw(
-            _("Jumlah {0} Box 1 + Box 2 + Box 3 ({1}) harus tepat {2} {0}.").format(
-                unit, qty_1 + qty_2 + qty_3, expected
-            )
-        )
-    return box_1, qty_1, box_2, qty_2, box_3, qty_3
-
-
-def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_values, box_plan=None):
+def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_plan=None):
     """Shared per-WO tail of create_request / create_group_request: insert +
     submit the native Material Transfer MR (full produced qty, pool source,
     target setting, row custom_work_order) and write the Work Order summary
-    atomically in the SAME transaction (read_only fields: the controlled
-    db_set gate), then sync the status. box_values is the WO summary box
-    block; group requests pass all zeros (no per-WO-per-box attribution) and
-    carry the shared plan on the MR header instead. Returns the submitted MR."""
+    atomically in the SAME transaction (read_only field: the controlled
+    db_set gate), then sync the status. FU96: no box values anymore — group
+    requests carry the shared plan on the MR header only. Returns the
+    submitted MR."""
     mr = frappe.get_doc(
         {
             "doctype": "Material Request",
@@ -1265,7 +1145,7 @@ def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_val
     frappe.db.set_value(
         "Work Order",
         wo.name,
-        {"custom_handover_material_request": mr.name, **box_values},
+        {"custom_handover_material_request": mr.name},
         update_modified=False,
     )
     _sync_handover_summary([wo.name])  # fail-honest: status Diminta Gudang
@@ -1274,26 +1154,18 @@ def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_val
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0, box_3=0, box_3_qty=0, company=None):
+def create_request(work_order, company=None):
     """Gudang side (Stock User / Stock Manager / Gudang Barang Jadi): submit a Material Transfer
     request for the Work Order's FULL produced qty (R3 — no qty dialog, drag is
-    the direct action) carrying the validated box allocation. The source
-    warehouse is the handover source setting when set, else the SE-derived lot
-    warehouse (R2). One ACTIVE (unshipped, unstopped) request per Work Order;
-    a duplicate throws.
+    the direct action). The source warehouse is the handover source setting
+    when set, else the SE-derived lot warehouse (R2). One ACTIVE (unshipped,
+    unstopped) request per Work Order; a duplicate throws.
 
-    FU71 qty-only mode: a caller that omits the box payload ENTIRELY
-    (box_1 is None — the W30 warehouse_app caller sends only {work_order})
-    skips the box parsing/allocation and requests on the produced counts
-    alone; the WO summary box block is written as all zeros. Only a full
-    omission triggers it — a blank ("") or zero box_1 stays on the legacy
-    path and is rejected there.
-
-    T35: ALL box/count validation happens under the WO row lock BEFORE any
-    write; the native MR is inserted + submitted WITHOUT any box/postpacking
-    custom field, then the Work Order summary (Link + box values) is
-    written atomically and the status synchronized — one transaction, zero
-    writes on any failure."""
+    FU96: the box payload is RETIRED — this is the only (qty-only) contract.
+    Legacy callers that still send box args are accepted: frappe's get_newargs
+    filters unknown kwargs before the function is invoked. The native MR is
+    inserted + submitted, then the Work Order summary (Link + status) is
+    written atomically — one transaction, zero writes on any failure."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
@@ -1337,33 +1209,11 @@ def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0,
             _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, link_now)
         )
 
-    # T35 box form: compute + validate EVERYTHING before any write. FU71:
-    # box_1 is None (payload omitted entirely) is the qty-only mode — the
-    # server-side count guard still runs, only the box parsing/allocation is
-    # skipped and the summary box block is ZERO_BOXES.
+    # FU96: qty-only contract — the server-side count guard still runs
+    # (item with an invalid display-UOM conversion or a non-whole output is
+    # refused with a clear message); no box parsing/allocation anymore.
     expected_units = _expected_unit_count(wo, lot, amount)
     unit = lot.display_uom or lot.stock_uom
-    if box_1 is None:
-        kg_1 = qtys_1 = kg_2 = qtys_2 = kg_3 = qtys_3 = 0
-        box_values = ZERO_BOXES
-    else:
-        kg_1 = _finite_kg(box_1, "Box 1")
-        qtys_1 = _whole_count(box_1_qty, f"Box 1 ({unit})")
-        kg_2 = _finite_kg(box_2, "Box 2", allow_blank=True)
-        qtys_2 = _whole_count(box_2_qty, f"Box 2 ({unit})")
-        kg_3 = _finite_kg(box_3, "Box 3", allow_blank=True)
-        qtys_3 = _whole_count(box_3_qty, f"Box 3 ({unit})")
-        kg_1, qtys_1, kg_2, qtys_2, kg_3, qtys_3 = _validate_box_allocation(
-            kg_1, qtys_1, kg_2, qtys_2, kg_3, qtys_3, expected_units, unit
-        )
-        box_values = {
-            "custom_box_1": kg_1,
-            "custom_box_1_qty": qtys_1,
-            "custom_box_2": kg_2,
-            "custom_box_2_qty": qtys_2,
-            "custom_box_3": kg_3,
-            "custom_box_3_qty": qtys_3,
-        }
 
     stock_uom = lot.stock_uom or frappe.db.get_value("Item", wo.production_item, "stock_uom")
     _enforce_whole_uom(amount, stock_uom, "Qty")
@@ -1379,19 +1229,13 @@ def create_request(work_order, box_1=None, box_1_qty=None, box_2=0, box_2_qty=0,
         )
 
     source = _pool_warehouse(lot)  # setting override, else SE-derived (R2)
-    mr = _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_values)
+    mr = _insert_submitted_handover_mr(wo, amount, stock_uom, source, target)
     return {
         "ok": True,
         "material_request": mr.name,
         "qty": amount,
         "unit": unit,
         "expected_unit_count": expected_units,
-        "box_1": kg_1,
-        "box_1_qty": qtys_1,
-        "box_2": kg_2,
-        "box_2_qty": qtys_2,
-        "box_3": kg_3,
-        "box_3_qty": qtys_3,
         "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }
 
@@ -1427,7 +1271,7 @@ def _cancel_unsent_request(material_request):
         )
     mr.cancel()  # native; permission-checked as session user
     if wo_name:
-        _sync_handover_summary([wo_name])  # fail-honest: clears Link/boxes/status
+        _sync_handover_summary([wo_name])  # fail-honest: clears Link/status
     return wo_name
 
 
@@ -1438,8 +1282,8 @@ def cancel_request(material_request, company=None):
     (native cancel; audit history stays, reservation is released). The Work
     Order lock is taken FIRST (no MR->WO lock inversion), then the MR is
     re-read and its submitted-SE evidence re-checked; the summary (Link +
-    boxes) clears through document-derived synchronization in the same
-    transaction. W19: a member of a shared-box group may only be cancelled
+    status) clears through document-derived synchronization in the same
+    transaction. W19: a member of a shared plan group may only be cancelled
     through cancel_group_request while any sibling member is still active."""
     _require_role(
         ROLES_GUDANG,
@@ -1456,7 +1300,7 @@ def cancel_request(material_request, company=None):
             },
         )
         if siblings:
-            frappe.throw(_("MR ini bagian grup box ({0}); batalkan seluruh grup.").format(plan))
+            frappe.throw(_("MR ini bagian grup serah terima ({0}); batalkan seluruh grup.").format(plan))
     _cancel_unsent_request(material_request)
     return {"ok": True, "material_request": material_request, "board": _build_board(company)}
 
@@ -1476,26 +1320,19 @@ def _json_list(value, label):
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_group_request(work_orders, boxes=None, company=None):
-    """Gudang side: request a GROUP of Work Orders of the SAME item whose
-    output was packed into SHARED physical boxes (e.g. 3 boxes hold output
-    mixed from 10 WOs — kg is weighed per physical box once, so per-WO-per-box
-    attribution does not exist). The grain stays 1 MR per Work Order (full
-    produced qty each, R3); the group is expressed by one Handover Box Plan
-    that every member MR links (custom_handover_box_plan), while the WO
-    summary box fields stay 0.
+def create_group_request(work_orders, company=None):
+    """Gudang side: request a GROUP of Work Orders of the SAME item. The grain
+    stays 1 MR per Work Order (full produced qty each, R3); the group is
+    expressed by one Handover Box Plan that every member MR links
+    (custom_handover_box_plan), because the group pill and the cancel-group
+    mechanism ride that Link. FU96: boxes are RETIRED — the plan carries ONE
+    zero-kg row with the whole expected count purely as the group marker (no
+    weighing data anywhere). Legacy callers that still send box args are
+    accepted: frappe's get_newargs filters unknown kwargs before invocation.
 
-    FU71 qty-only mode: omitting `boxes` ENTIRELY (None — no box payload was
-    sent) requests on the produced counts alone; the plan is STILL created
-    with ONE zero-kg row carrying the whole expected count, because the group
-    pill and the cancel-group mechanism ride the Material Request's
-    custom_handover_box_plan link. An explicit empty list stays on the legacy
-    path and is rejected ("Minimal 1 box").
-
-    Contract (mirrors create_request): role gate + every validation under the
-    member-WO locks BEFORE any write; hard invariant Σ(box qty) == Σ(expected
-    units of every member WO) — a mismatch is a zero-write rejection; then ONE
-    transaction inserts the plan and one submitted MR per WO."""
+    Contract: role gate + every validation under the member-WO locks BEFORE
+    any write; then ONE transaction inserts the plan and one submitted MR per
+    WO."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
@@ -1505,24 +1342,6 @@ def create_group_request(work_orders, boxes=None, company=None):
     wo_names = sorted({str(n).strip() for n in _json_list(work_orders, "Work Orders") if str(n or "").strip()})
     if len(wo_names) < 2:
         frappe.throw(_("Grup serah terima butuh minimal 2 Work Order."))
-    # FU71: boxes omitted ENTIRELY (None) is the qty-only mode — skip the box
-    # parsing loop; an explicit payload (even "" or []) stays on the legacy
-    # path below with its JSON / "Minimal 1 box" rejections.
-    box_rows = []
-    if boxes is not None:
-        for i, box in enumerate(_json_list(boxes, "Box"), 1):
-            # every row is a WEIGHED physical box: no blank allowance here
-            if not isinstance(box, dict):
-                frappe.throw(_("Box {0} harus objek {{kg, qty}}.").format(i))
-            kg = _finite_kg(box.get("kg"), f"Box {i}")
-            if kg <= 0:
-                frappe.throw(_("Box {0}: berat kg harus positif.").format(i))
-            qty = _whole_count(box.get("qty"), f"Box {i}")
-            if qty <= 0:
-                frappe.throw(_("Box {0}: jumlah harus bilangan bulat positif.").format(i))
-            box_rows.append({"kg": kg, "qty": qty})
-        if not box_rows:
-            frappe.throw(_("Minimal 1 box wajib diisi."))
 
     # lock every member WO first, sorted-name order (deadlock-safe)
     wos = []
@@ -1553,7 +1372,6 @@ def create_group_request(work_orders, boxes=None, company=None):
 
     members = []
     expected_total = 0
-    unit = None
     claimed = 0
     for wo in wos:
         lot = _checked_lot(wo.name)
@@ -1583,36 +1401,23 @@ def create_group_request(work_orders, boxes=None, company=None):
                 _("Qty melebihi lot tersedia: diminta {0}, tersedia {1}.").format(amount, available)
             )
         claimed += amount
-        unit = unit or lot.display_uom or lot.stock_uom
         members.append((wo, amount, stock_uom, lot))
         expected_total += expected
 
-    # FU71 qty-only: ONE zero-kg row carrying the whole expected count keeps
-    # the plan (and the group pill / cancel-group riding its Link) alive; the
-    # Σ invariant below then holds trivially.
-    if boxes is None:
-        box_rows = [{"kg": 0, "qty": expected_total}]
-    box_total = sum(r["qty"] for r in box_rows)
-    if box_total != expected_total:
-        frappe.throw(
-            _("Jumlah {0} semua box ({1}) harus tepat {2} {0} (hasil {3} Work Order).").format(
-                unit, box_total, expected_total, len(wos)
-            )
-        )
-
-    # ONE transaction: the plan first (the MR links target it), then the
-    # identical per-WO MR shape of create_request via the shared helper
+    # FU96: ONE zero-kg row carrying the whole expected count keeps the plan
+    # (and the group pill / cancel-group riding its Link) alive — a group
+    # MARKER, not weighing data (boxes retired).
     plan = frappe.get_doc(
         {
             "doctype": "Handover Box Plan",
             "item_code": item_code,
-            "boxes": box_rows,
+            "boxes": [{"kg": 0, "qty": expected_total}],
         }
     ).insert()  # session user (in-doctype gudang create perm)
     mr_names = []
     for wo, amount, stock_uom, lot in members:
         mr = _insert_submitted_handover_mr(
-            wo, amount, stock_uom, _pool_warehouse(lot), target, ZERO_BOXES, box_plan=plan.name
+            wo, amount, stock_uom, _pool_warehouse(lot), target, box_plan=plan.name
         )
         mr_names.append(mr.name)
     return {
@@ -1631,8 +1436,8 @@ def cancel_group_request(box_plan, company=None):
     Handover Box Plan in one transaction (the group guard of cancel_request
     never lets the members die one by one). Members already shipped keep their
     Stock Entry evidence and are left alone; cancelled/stopped/draft members
-    are skipped; the plan document remains as the audit record of what was
-    packed. Returns the per-member outcome."""
+    are skipped; the plan document remains as the audit record of the grouped
+    requests. Returns the per-member outcome."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat membatalkan permintaan serah terima."),
@@ -1687,11 +1492,12 @@ def _handover_mr(material_request):
 
 
 @frappe.whitelist()
-def save_post_packing(material_request, box_1=None, box_2=None):
-    """Compatibility only (T35): verification moved into create_request — the
-    Request Gudang form owns the box allocation now. Always rejects with the
-    reload message BEFORE any lock/write so an old cached client can neither
-    write the retired four-lane state nor half-mutate a request."""
+def save_post_packing(material_request):
+    """Compatibility only (T35/FU96): the verify step is retired entirely
+    (boxes too). Always rejects with the reload message BEFORE any lock/write
+    so an old cached client can neither write retired state nor half-mutate a
+    request. Legacy callers sending box_1/box_2 are filtered by
+    frappe.get_newargs before invocation."""
     frappe.throw(_(
         "Verifikasi Siap Kirim sudah dipindahkan ke form Request Gudang. "
         "Muat ulang halaman sebelum melanjutkan."

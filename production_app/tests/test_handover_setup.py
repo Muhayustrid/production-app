@@ -234,17 +234,20 @@ class TestHandoverSetup(IntegrationTestCase):
 
 	def test_t22_apply_idempotent_and_drift_reconciled(self):
 		"""apply() twice: no error; the second run reports every handover step
-		'unchanged' (incl. box_kg_fields); the Manufacturing User MR row runs
-		the full FO lifecycle with delete; MR Item has NO custom rows (FU64 —
-		child table is parent-governed)."""
+		'unchanged' (incl. retired_box_fields — FU96); the Manufacturing User
+		MR row runs the full FO lifecycle with delete; MR Item has NO custom
+		rows (FU64 — child table is parent-governed)."""
 		r1 = upgrade.apply()
 		r2 = upgrade.apply()
-		for key in ("box_kg_fields", "handover_mr_fields", "docperm_matrix", "warehouse_default_fields"):
+		for key in ("handover_mr_fields", "docperm_matrix", "warehouse_default_fields"):
 			entries = r2[key].values() if isinstance(r2[key], dict) else r2[key]
 			self.assertTrue(
 				all(entry.endswith(": unchanged") for entry in entries),
 				f"{key} not idempotent: {r2[key]}",
 			)
+		# FU96: box retirement converges — second apply neither deletes nor
+		# re-anchors anything again
+		self.assertEqual(r2["retired_box_fields"], "unchanged")
 		# FU64: retirement konvergen — apply ke-2 tidak menghapus apa pun lagi
 		self.assertEqual(r2["retired_docperms"], [])
 		# FU64: kelima doctype retired benar-benar bersih dari Custom DocPerm
@@ -282,33 +285,34 @@ class TestHandoverSetup(IntegrationTestCase):
 		self.assertIsNone(_mr_flags("Material Request Item", HANDOVER_ROLE))
 		self.assertIsNone(_mr_flags("Material Request Item", "Manufacturing User"))
 		self.assertIsNone(_mr_flags("Stock Entry", HANDOVER_ROLE))
-		# T31 (R8): WO AND MR box fields are Float kg (allow_on_submit — written
-		# at Verifikasi Siap Kirim on submitted docs)
-		wo_meta = frappe.get_meta("Work Order")
-		mr_meta = frappe.get_meta("Material Request")
-		for meta, doctype in ((wo_meta, "Work Order"), (mr_meta, "Material Request")):
-			for fieldname in ("custom_box_1", "custom_box_2"):
-				df = meta.get_field(fieldname)
-				self.assertEqual(df.fieldtype, "Float", f"{doctype}.{fieldname}")
-				self.assertTrue(df.allow_on_submit, f"{doctype}.{fieldname}")
-		# W18: Box 3 exists ONLY on the Work Order summary — the MR hidden
-		# box fields stay 1/2 (pre-cutover fallback, deliberately not extended)
-		wo_box3 = wo_meta.get_field("custom_box_3")
-		self.assertIsNotNone(wo_box3)
-		self.assertEqual(wo_box3.fieldtype, "Float")
-		self.assertTrue(wo_box3.allow_on_submit)
-		self.assertTrue(wo_box3.non_negative)
-		self.assertIsNone(mr_meta.get_field("custom_box_3"))
-		self.assertEqual(
-			frappe.get_meta("Material Request").get_field("custom_box_1").allow_on_submit, 1
-		)
-		# T35/T39: three-lane handover metadata — Link + unit-free count fields
+		# FU96: Box 1..3 (kg + jumlah) DIPENSIUNKAN — tidak ada lagi definisi
+		# Custom Field box di Work Order maupun Material Request; kolom DB
+		# dibiarkan utuh sebagai arsip (data historis tak hilang).
 		wo_meta = frappe.get_meta("Work Order", cached=False)
+		mr_meta = frappe.get_meta("Material Request", cached=False)
+		for fieldname in (
+			"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
+			"custom_box_3", "custom_box_3_qty",
+		):
+			self.assertIsNone(
+				frappe.db.exists("Custom Field", {"dt": "Work Order", "fieldname": fieldname}),
+				f"Work Order.{fieldname} harus terhapus (FU96)",
+			)
+		for fieldname in ("custom_box_1", "custom_box_2"):
+			self.assertIsNone(
+				frappe.db.exists("Custom Field", {"dt": "Material Request", "fieldname": fieldname}),
+				f"Material Request.{fieldname} harus terhapus (FU96)",
+			)
+		# dan kolom DB tetap ada (arsip) — warehouse_app report masih membacanya
+		for column in ("custom_box_1", "custom_box_1_qty", "custom_box_3_qty"):
+			self.assertTrue(
+				frappe.db.has_column("Work Order", column),
+				f"kolom {column} harus DIPERTAHANKAN sebagai arsip",
+			)
+		# T35 (narrowed FU96): tiga-lane handover metadata — Link saja; TIDAK
+		# ada lagi field count box
 		expected = {
 			"custom_handover_material_request": ("Link", "Material Request"),
-			"custom_box_1_qty": ("Int", None),
-			"custom_box_2_qty": ("Int", None),
-			"custom_box_3_qty": ("Int", None),
 		}
 		for fieldname, (fieldtype, options) in expected.items():
 			df = wo_meta.get_field(fieldname)
@@ -317,25 +321,17 @@ class TestHandoverSetup(IntegrationTestCase):
 			self.assertEqual(df.options or None, options)
 			self.assertTrue(df.allow_on_submit)
 			self.assertTrue(df.read_only)
-		# T39 rename: the unit-carrying _pack fields are retired for good
-		for fieldname in upgrade.BOX_QTY_OLD_FIELDS:
-			self.assertIsNone(wo_meta.get_field(fieldname))
-		self.assertEqual(wo_meta.get_field("custom_box_1_qty").label, "Box 1 (Jumlah)")
-		self.assertEqual(wo_meta.get_field("custom_box_2_qty").label, "Box 2 (Jumlah)")
-		self.assertEqual(wo_meta.get_field("custom_box_3_qty").label, "Box 3 (Jumlah)")
-		# and the rename migration itself converges on the second apply
-		entries = (
-			r2["box_qty_rename"].values()
-			if isinstance(r2["box_qty_rename"], dict)
-			else [r2["box_qty_rename"]]
+		# Link field tidak menggantung: anchor harus field yang masih ada
+		link_cf = frappe.db.get_value(
+			"Custom Field",
+			{"dt": "Work Order", "fieldname": upgrade.THREE_LANE_LINK_FIELD},
+			["insert_after"],
+			as_dict=True,
 		)
 		self.assertTrue(
-			all(str(entry).endswith(": unchanged") for entry in entries),
-			f"box_qty_rename not idempotent: {r2['box_qty_rename']}",
+			frappe.get_meta("Work Order", cached=False).get_field(link_cf.insert_after),
+			f"anchor {link_cf.insert_after} harus field yang ada",
 		)
-
-		for fieldname in ("custom_box_1", "custom_box_2", "custom_box_3"):
-			self.assertTrue(wo_meta.get_field(fieldname).read_only)
 
 		self.assertEqual(
 			wo_meta.get_field("custom_handover_status").options,
@@ -358,22 +354,18 @@ class TestHandoverSetup(IntegrationTestCase):
 		# narrowed options/contract instead (it never saw the old option).
 		with open(upgrade.THREE_LANE_SNAPSHOT) as f:
 			snap = json.load(f)
-		# T39: a pre-rename capture still keys its counts as the OLD _pack
-		# fieldnames (historical evidence); a post-T39/fresh capture keys the
-		# current _qty fieldnames. Both are valid point-in-time contracts.
-		allowed_key_sets = (
-			{
-				"custom_handover_status",
-				upgrade.THREE_LANE_LINK_FIELD,
-				"custom_box_1", "custom_box_1_pack", "custom_box_2", "custom_box_2_pack",
-			},
-			{
-				"custom_handover_status",
-				upgrade.THREE_LANE_LINK_FIELD,
-				*upgrade.THREE_LANE_BOX_FIELDS,
-			},
-		)
-		self.assertIn(set(snap["stored_values"]), allowed_key_sets)
+		# snapshot historis (pre-FU96) boleh memuat kunci box (T39/T31); capture
+		# baru hanya link+status. Yang diuji: key set ⊆ kandidat yang dikenal.
+		known = {
+			"custom_handover_status",
+			upgrade.THREE_LANE_LINK_FIELD,
+			"custom_box_1", "custom_box_1_pack", "custom_box_1_qty",
+			"custom_box_2", "custom_box_2_pack", "custom_box_2_qty",
+			"custom_box_3", "custom_box_3_qty",
+		}
+		self.assertLessEqual(set(snap["stored_values"]), known)
+		self.assertIn("custom_handover_status", snap["stored_values"])
+		self.assertIn(upgrade.THREE_LANE_LINK_FIELD, snap["stored_values"])
 		status_fields = [
 			cf for cf in snap["custom_fields"] if cf["fieldname"] == "custom_handover_status"
 		]
@@ -395,7 +387,7 @@ class TestHandoverSetup(IntegrationTestCase):
 				self.assertEqual(
 					status_fields[0].get("options"), "\nDiminta Gudang\nTerkirim"
 				)
-		for fieldname in ("custom_handover_status", "custom_box_1", "custom_box_2"):
+		for fieldname in ("custom_handover_status", upgrade.THREE_LANE_LINK_FIELD):
 			self.assertIsInstance(snap["stored_values"][fieldname], dict)
 
 	# ------------------------------------------------ permission: gudang

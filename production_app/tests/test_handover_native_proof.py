@@ -48,13 +48,11 @@ STATUS_TRANSFERRED = "Transferred"
 STATUS_STOPPED = "Stopped"
 STATUS_CANCELLED = "Cancelled"
 
-# The 10 fields the handover design plans (HANDOVER_PLAN.md §3); created and
+# The 10 fields the handover design planned (HANDOVER_PLAN.md §3); created and
 # left in place by T21 (controller ruling 3), reused idempotently by T22.
-# Boxes are Float kg weights (T31, R8): written at Verifikasi Siap Kirim on
-# the submitted MR, allow_on_submit, never converted to PCS.
+# FU96: the two legacy Box kg fields are RETIRED — the eight remaining fields
+# keep their exact contract.
 PLANNED_MR_FIELDS = [
-	("Material Request", "custom_box_1", "Float", 1),
-	("Material Request", "custom_box_2", "Float", 1),
 	("Material Request", "custom_good_qty_postpacking", "Float", 1),
 	("Material Request", "custom_reject_qty_postpacking", "Float", 1),
 	("Material Request", "custom_trial_qty_postpacking", "Float", 1),
@@ -63,6 +61,15 @@ PLANNED_MR_FIELDS = [
 	("Material Request", "custom_qc_packing", "Link", 1),
 	("Material Request", "custom_postpacking_confirmed", "Check", 1),
 	("Material Request Item", "custom_work_order", "Link", 0),
+]
+
+# FU96: box Custom Field definitions must be GONE from the schema while their
+# DB columns stay behind as an archive (raw-SQL readers keep working).
+RETIRED_BOX_FIELDS = [
+	("Work Order", "custom_box_1"),
+	("Work Order", "custom_box_2"),
+	("Material Request", "custom_box_1"),
+	("Material Request", "custom_box_2"),
 ]
 
 
@@ -249,14 +256,24 @@ class TestHandoverNativeProof(IntegrationTestCase):
 	# ------------------------------------------------- planned field schema
 
 	def test_t21_planned_mr_custom_fields_schema(self):
-		"""Draft-schema check: the 10 planned fields exist with exact names,
-		types and allow_on_submit (created by T21, reused by T22)."""
+		"""Draft-schema check: the eight remaining planned fields exist with
+		exact names, types and allow_on_submit; the retired box fields (FU96)
+		have NO definitions left while their DB columns stay as an archive."""
 		for dt, fieldname, fieldtype, aos in PLANNED_MR_FIELDS:
 			meta = frappe.get_meta(dt)
 			self.assertTrue(meta.has_field(fieldname), f"{dt}.{fieldname} missing")
 			df = meta.get_field(fieldname)
 			self.assertEqual(df.fieldtype, fieldtype, f"{dt}.{fieldname} type")
 			self.assertEqual(bool(df.allow_on_submit), bool(aos), f"{dt}.{fieldname} allow_on_submit")
+		for dt, fieldname in RETIRED_BOX_FIELDS:
+			self.assertIsNone(
+				frappe.db.exists("Custom Field", {"dt": dt, "fieldname": fieldname}),
+				f"{dt}.{fieldname} definisi harus terhapus (FU96)",
+			)
+			self.assertTrue(
+				frappe.db.has_column(dt, fieldname),
+				f"{dt}.{fieldname} kolom harus dipertahankan sebagai arsip",
+			)
 
 	# ------------------------------------------------- native MR -> SE path
 

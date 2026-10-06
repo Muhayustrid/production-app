@@ -1426,65 +1426,58 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self.assertEqual(detail["suggested_leader"], "Rina")
 		self.assertNotEqual(detail["suggestion_sources"].get("penimbang"), other_name)
 
-	def test_t35_wo_handover_summary_field_contract(self):
-		"""T35: the five handover summary fields exist on the Work Order as
-		read-only + allow-on-submit with exact types — written only through
-		controlled db_set by the server gate, round-trippable on submitted WOs."""
-		meta = frappe.get_meta("Work Order")
-		expected = {
-			"custom_handover_material_request": ("Link", "Material Request"),
-			"custom_box_1": ("Float", None),
-			"custom_box_1_qty": ("Int", None),
-			"custom_box_2": ("Float", None),
-			"custom_box_2_qty": ("Int", None),
-		}
-		for fieldname, (fieldtype, options) in expected.items():
-			df = meta.get_field(fieldname)
-			self.assertIsNotNone(df, fieldname)
-			self.assertEqual(df.fieldtype, fieldtype, fieldname)
-			self.assertEqual(df.options or None, options, fieldname)
-			self.assertTrue(df.read_only, fieldname)
-			self.assertTrue(df.allow_on_submit, fieldname)
+	def test_fu96_wo_handover_summary_field_contract(self):
+		"""FU96: the handover summary on the Work Order is the Link field alone
+		(read-only + allow-on-submit) — the six Box fields are RETIRED with no
+		definitions left; their DB columns stay as an archive. The Link is
+		written only through controlled db_set by the server gate and
+		round-trips on submitted WOs."""
+		meta = frappe.get_meta("Work Order", cached=False)
+		df = meta.get_field("custom_handover_material_request")
+		self.assertIsNotNone(df)
+		self.assertEqual(df.fieldtype, "Link")
+		self.assertEqual(df.options, "Material Request")
+		self.assertTrue(df.read_only)
+		self.assertTrue(df.allow_on_submit)
+		for fieldname in (
+			"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
+			"custom_box_3", "custom_box_3_qty",
+		):
+			self.assertIsNone(
+				frappe.db.exists("Custom Field", {"dt": "Work Order", "fieldname": fieldname}),
+				f"Work Order.{fieldname} definisi harus terhapus (FU96)",
+			)
+			self.assertTrue(
+				frappe.db.has_column("Work Order", fieldname),
+				f"kolom {fieldname} harus dipertahankan sebagai arsip",
+			)
 
 		self._receipt(self.rm1, 1000)
 		self._receipt(self.rm2, 1000)
 		wo = self._make_wo(100)
-		wo.db_set("custom_box_1", 3.5)
-		wo.db_set("custom_box_1_qty", 12)
-		wo.db_set("custom_box_2", 1.25)
-		wo.db_set("custom_box_2_qty", 2)
+		wo.db_set("custom_handover_material_request", None)
 		wo.reload()
-		self.assertEqual(flt(wo.custom_box_1), 3.5)
-		self.assertEqual(wo.custom_box_1_qty, 12)
-		self.assertEqual(flt(wo.custom_box_2), 1.25)
-		self.assertEqual(wo.custom_box_2_qty, 2)
+		self.assertFalse(wo.custom_handover_material_request)
 
-	def test_t05_box_identifier_and_leader_name_persist_after_submit(self):
+	def test_fu96_workspace_fields_persist_after_submit(self):
 		self._receipt(self.rm1, 1000)
 		self._receipt(self.rm2, 1000)
 		wo = self._make_wo(100)
 
 		# submitted WO: workspace fields must be editable via update-after-submit
-		# (T31 ruling R8: Box 1/2 are Float kg weights written at Verifikasi Siap
-		# Kirim; the FU7 text-identifier era was migrated back by upgrade.py)
-		wo.db_set("custom_box_1", 12.5)
-		wo.db_set("custom_box_2", 8.25)
+		# (FU96: box fields retired — prepacking marker + leader name prove the
+		# update-after-submit contract instead)
 		wo.db_set("custom_prepacking_confirmed", 1)
 		wo.db_set("custom_leader_produksi", "Budi Santoso")
 		wo.reload()
 
-		# decimal kg round-trip — never converted to PCS/pack units
-		self.assertEqual(flt(wo.custom_box_1), 12.5)
-		self.assertEqual(flt(wo.custom_box_2), 8.25)
 		self.assertEqual(wo.custom_prepacking_confirmed, 1)
 		self.assertEqual(wo.custom_leader_produksi, "Budi Santoso")
 
-		# a whole number stays a plain kg number, not a text or a pack count
-		wo.db_set("custom_leader_produksi", "12")  # leader stays text
-		wo.db_set("custom_box_1", 12)
+		# a whole number stays text for the leader (name field, not a count)
+		wo.db_set("custom_leader_produksi", "12")
 		wo.reload()
 		self.assertEqual(wo.custom_leader_produksi, "12")
-		self.assertEqual(flt(wo.custom_box_1), 12)
 
 
 class TestWorkOrderOperationsProof(IntegrationTestCase):
