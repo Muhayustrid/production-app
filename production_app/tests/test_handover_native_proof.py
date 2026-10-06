@@ -63,8 +63,8 @@ PLANNED_MR_FIELDS = [
 	("Material Request Item", "custom_work_order", "Link", 0),
 ]
 
-# FU96: box Custom Field definitions must be GONE from the schema while their
-# DB columns stay behind as an archive (raw-SQL readers keep working).
+# FU96 + FU97: box Custom Field definitions AND their DB columns must be
+# GONE (definitions dropped by FU96, the columns themselves by FU97).
 RETIRED_BOX_FIELDS = [
 	("Work Order", "custom_box_1"),
 	("Work Order", "custom_box_2"),
@@ -257,8 +257,8 @@ class TestHandoverNativeProof(IntegrationTestCase):
 
 	def test_t21_planned_mr_custom_fields_schema(self):
 		"""Draft-schema check: the eight remaining planned fields exist with
-		exact names, types and allow_on_submit; the retired box fields (FU96)
-		have NO definitions left while their DB columns stay as an archive."""
+		exact names, types and allow_on_submit; the retired box fields
+		(FU96 + FU97) have NO definitions AND no DB columns left."""
 		for dt, fieldname, fieldtype, aos in PLANNED_MR_FIELDS:
 			meta = frappe.get_meta(dt)
 			self.assertTrue(meta.has_field(fieldname), f"{dt}.{fieldname} missing")
@@ -270,9 +270,9 @@ class TestHandoverNativeProof(IntegrationTestCase):
 				frappe.db.exists("Custom Field", {"dt": dt, "fieldname": fieldname}),
 				f"{dt}.{fieldname} definisi harus terhapus (FU96)",
 			)
-			self.assertTrue(
+			self.assertFalse(
 				frappe.db.has_column(dt, fieldname),
-				f"{dt}.{fieldname} kolom harus dipertahankan sebagai arsip",
+				f"{dt}.{fieldname} kolom harus sudah dihapus (FU97)",
 			)
 
 	# ------------------------------------------------- native MR -> SE path

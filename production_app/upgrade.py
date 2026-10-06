@@ -1005,10 +1005,9 @@ def retire_gudang_confirmed_field():
 # FU96 (2026-10-06) — Box 1..3 fully retired (user decision: weighing is
 # abandoned permanently). The Custom Field definitions on Work Order (6:
 # custom_box_1..3 + _qty) and Material Request (2 legacy: custom_box_1/2) are
-# deleted; the DB COLUMNS ARE KEPT AS AN ARCHIVE (frappe's on_trash never
-# drops columns — same preservation pattern as custom_default_uom_warehouse;
-# warehouse_app's Serah Terima report still reads them in raw SQL). Snapshot-
-# first; idempotent (second run "unchanged").
+# deleted. This step KEEPS the DB columns as a temporary archive; FU97 below
+# drops them for real once warehouse_app's Serah Terima report stopped reading
+# them (same apply() run). Snapshot-first; idempotent.
 # ---------------------------------------------------------------------------
 
 BOX_RETIRE_FIELDS = {
@@ -1053,7 +1052,8 @@ def snapshot_box_retire():
 
 def retire_box_fields():
 	"""FU96: delete the box Custom Field definitions (idempotent). Snapshot
-	first; columns and their stored values are left untouched. Also re-anchors
+	first; columns and their stored values are left for drop_box_columns()
+	(FU97, same apply run) to remove. Also re-anchors
 	the handover Link field when its insert_after points at a now-deleted box
 	field (existing sites keep a sane form layout)."""
 	parts = []
@@ -1089,6 +1089,103 @@ def retire_box_fields():
 		return "unchanged"
 	frappe.clear_cache(doctype=DOCTYPE)
 	frappe.clear_cache(doctype="Material Request")
+	return "; ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# FU97 (2026-10-06) — user: "data lama hapus aja, karna nanti bener2 fresh".
+# The FU96 archive is over: the box DB COLUMNS themselves are dropped (Work
+# Order 6 + Material Request 2). Snapshot-first (fu97-box-columns-pre.json:
+# column definitions + every row still holding values); idempotent; reads
+# information_schema directly and invalidates frappe's `table_columns::` cache
+# so has_column()/meta report the truth immediately. warehouse_app W38 stopped
+# reading the columns in the Serah Terima report first.
+# ---------------------------------------------------------------------------
+
+BOX_DROP_COLUMNS = {
+	DOCTYPE: (
+		"custom_box_1", "custom_box_1_qty", "custom_box_2", "custom_box_2_qty",
+		"custom_box_3", "custom_box_3_qty",
+	),
+	"Material Request": ("custom_box_1", "custom_box_2"),
+}
+BOX_COLUMN_SNAPSHOT = os.path.join(SNAPSHOT_DIR, "fu97-box-columns-pre.json")
+
+
+def _fresh_table_columns(table):
+	"""information_schema read that bypasses frappe's `table_columns::` redis
+	cache (the cache is exactly why has_column() cannot be trusted right after
+	a DDL drop)."""
+	rows = frappe.db.sql(
+		"""
+		select column_name from information_schema.columns
+		where table_schema = database() and table_name = %s
+		""",
+		(table,),
+		pluck=True,
+	)
+	return set(rows or [])
+
+
+def snapshot_box_columns():
+	"""FU97 pre-drop snapshot: per dropped column the information_schema
+	definition plus every row still holding a value in any box column (the
+	data about to disappear — rollback source of truth). apply() runs it only
+	when the file is absent (idempotent)."""
+	os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+	columns, rows = {}, {}
+	for dt, fieldnames in BOX_DROP_COLUMNS.items():
+		table = "tab" + dt
+		present = [f for f in fieldnames if f in _fresh_table_columns(table)]
+		columns[dt] = frappe.db.sql(
+			"""
+			select column_name, column_type, is_nullable, column_default
+			from information_schema.columns
+			where table_schema = database() and table_name = %s
+			  and column_name like 'custom_box%%'
+			order by column_name
+			""",
+			(table,),
+			as_dict=1,
+		)
+		rows[dt] = (
+			frappe.get_all(
+				dt,
+				or_filters=[[f, "!=", 0] for f in present],
+				fields=["name", *present],
+				order_by="name",
+				limit=0,
+			)
+			if present
+			else []
+		)
+	with open(BOX_COLUMN_SNAPSHOT, "w") as f:
+		json.dump(
+			{"captured_at": frappe.utils.now(), "columns": columns, "rows": rows},
+			f, indent=2, sort_keys=True, default=str,
+		)
+	return BOX_COLUMN_SNAPSHOT
+
+
+def drop_box_columns():
+	"""FU97: DROP the archived box columns (idempotent). Snapshot-first; each
+	table's `table_columns::` cache is invalidated so meta/has_column stop
+	"seeing" the dropped columns in the live process. Returns "unchanged"
+	when there is nothing left to drop."""
+	parts = []
+	for dt, fieldnames in BOX_DROP_COLUMNS.items():
+		table = "tab" + dt
+		present = [f for f in fieldnames if f in _fresh_table_columns(table)]
+		if not present:
+			continue
+		if not os.path.exists(BOX_COLUMN_SNAPSHOT):
+			snapshot_box_columns()  # never drop data without a pre-state
+		for column in present:
+			frappe.db.sql_ddl(f"ALTER TABLE `{table}` DROP COLUMN `{column}`")
+		frappe.client_cache.delete_value(f"table_columns::{table}")
+		parts.append(f"{dt}: dropped {len(present)} columns")
+	if not parts:
+		return "unchanged"
 	return "; ".join(parts)
 
 
@@ -1327,8 +1424,9 @@ def apply():
 	result["qc_packing_text"] = ensure_qc_packing_text_field()
 	result["gudang_confirmed"] = retire_gudang_confirmed_field()
 	# FU96: delete the box Custom Field definitions (data first: the resync
-	# above already stopped touching them; columns kept as archive)
+	# above already stopped touching them). FU97: drop the archived columns.
 	result["retired_box_fields"] = retire_box_fields()
+	result["dropped_box_columns"] = drop_box_columns()
 
 	leader = frappe.db.get_value(
 		"Custom Field", {"dt": DOCTYPE, "fieldname": LEADER_FIELDNAME}, ["name", "fieldtype"], as_dict=True

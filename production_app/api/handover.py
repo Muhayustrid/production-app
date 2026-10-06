@@ -412,8 +412,8 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 				"name", "docstatus", "status", "owner", "creation",
 				"set_from_warehouse", "set_warehouse",
 				"company",
-				# FU96: field box MR legacy (custom_box_1/2) dipensiunkan —
-				# tidak pernah lagi dibaca (request = dokumen qty murni)
+				# FU96/FU97: field box MR legacy (custom_box_1/2) dipensiunkan
+				# total (definisi + kolom DB) — request = dokumen qty murni
 				"custom_good_qty_postpacking", "custom_reject_qty_postpacking",
 				"custom_trial_qty_postpacking", "custom_sisa_qty_postpacking",
 				"custom_jam_packing", "custom_qc_packing",
@@ -702,9 +702,9 @@ def _handover_lanes(wo_names):
 	}
 
 
-# FU96: field box WO (custom_box_1..3 + _qty) dipensiunkan (definisi dihapus;
-# kolom DB dibiarkan utuh sebagai arsip). Ringkasan serah terima kini HANYA
-# Link + status — nilai box historis tidak pernah lagi dibaca/ditulis.
+# FU96/FU97: field box WO (custom_box_1..3 + _qty) dipensiunkan total —
+# definisi DAN kolom DB sudah dihapus (upgrade.drop_box_columns). Ringkasan
+# serah terima kini HANYA Link + status.
 WO_SUMMARY_FIELDS = ("custom_handover_material_request",)
 
 

@@ -774,11 +774,10 @@ class TestHandoverBoard(IntegrationTestCase):
 		# pre-cutover simulation: clear the Link on wo2 (db_set fires no hooks)
 		wo2.db_set("custom_handover_material_request", None)
 		wo1.db_set("custom_handover_material_request", mr1.name)
-		# nilai kolom arsip ditulis langsung — harus TIDAK pernah muncul lagi
-		# di payload (kolom tetap ada, tetapi tidak dibaca)
-		wo1.db_set("custom_box_1", 12.5)
-		wo1.db_set("custom_box_1_qty", 20)
-		mr2.db_set("custom_box_1", 6.5)
+		# FU97: kolom arsip box sudah DI-DROP dari DB — tidak ada lagi nilai
+		# historis yang bisa bocor ke payload; buktikan level schema juga.
+		self.assertFalse(frappe.db.has_column("Work Order", "custom_box_1"))
+		self.assertFalse(frappe.db.has_column("Material Request", "custom_box_1"))
 
 		board = handover_board()
 		for mr in (mr1, mr2):
@@ -806,8 +805,8 @@ class TestHandoverBoard(IntegrationTestCase):
 		"""T36: ONE full board build for MULTIPLE Work Orders hits each bulk
 		seam exactly once — a single (get_available_batches +
 		get_stock_ledgers_batches) pair covers every batch balance, the single
-		bulk Work Order result set already carries the summary Link/kg/Pack
-		fields onto the request rows, and nothing fans out per card:
+		bulk Work Order result set already carries the summary Link onto the
+		request rows, and nothing fans out per card:
 		_checked_lot is never used while building the board, and neither
 		frappe.db.get_value nor frappe.get_doc touches a Work Order."""
 		suffix = random_string(4).upper()
@@ -825,14 +824,10 @@ class TestHandoverBoard(IntegrationTestCase):
 		mr_b = self._make_mr(wo_b, 60)
 		batch_a = self._lot_in_cold(wo_a)
 		batch_b = self._lot_in_cold(wo_b)
-		# pre-cutover B keeps only its legacy MR kg (Link cleared, no hooks)
+		# pre-cutover B keeps only its legacy Link-less state (Link cleared,
+		# no hooks); A carries the summary Link from the bulk WO row
 		wo_b.db_set("custom_handover_material_request", None)
-		# A's summary: distinct kg proves the BULK WO row wins over the MR's 12.5
 		wo_a.db_set("custom_handover_material_request", mr_a.name)
-		wo_a.db_set("custom_box_1", 21.5)
-		wo_a.db_set("custom_box_1_qty", 9)
-		wo_a.db_set("custom_box_2", 7.0)
-		wo_a.db_set("custom_box_2_qty", 2)
 
 		from production_app.api import handover
 

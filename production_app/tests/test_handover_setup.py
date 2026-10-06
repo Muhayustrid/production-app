@@ -248,6 +248,8 @@ class TestHandoverSetup(IntegrationTestCase):
 		# FU96: box retirement converges — second apply neither deletes nor
 		# re-anchors anything again
 		self.assertEqual(r2["retired_box_fields"], "unchanged")
+		# FU97: drop kolom arsip juga konvergen — apply ke-2 tak menyentuh DDL
+		self.assertEqual(r2["dropped_box_columns"], "unchanged")
 		# FU64: retirement konvergen — apply ke-2 tidak menghapus apa pun lagi
 		self.assertEqual(r2["retired_docperms"], [])
 		# FU64: kelima doctype retired benar-benar bersih dari Custom DocPerm
@@ -285,9 +287,10 @@ class TestHandoverSetup(IntegrationTestCase):
 		self.assertIsNone(_mr_flags("Material Request Item", HANDOVER_ROLE))
 		self.assertIsNone(_mr_flags("Material Request Item", "Manufacturing User"))
 		self.assertIsNone(_mr_flags("Stock Entry", HANDOVER_ROLE))
-		# FU96: Box 1..3 (kg + jumlah) DIPENSIUNKAN — tidak ada lagi definisi
-		# Custom Field box di Work Order maupun Material Request; kolom DB
-		# dibiarkan utuh sebagai arsip (data historis tak hilang).
+		# FU96 + FU97: Box 1..3 (kg + jumlah) DIPENSIUNKAN TOTAL — definisi
+		# Custom Field DAN kolom DB-nya sudah hilang dari Work Order maupun
+		# Material Request (permintaan user "data lama hapus aja, karna nanti
+		# bener2 fresh"; report warehouse_app W38 berhenti membacanya dulu).
 		wo_meta = frappe.get_meta("Work Order", cached=False)
 		mr_meta = frappe.get_meta("Material Request", cached=False)
 		for fieldname in (
@@ -298,16 +301,18 @@ class TestHandoverSetup(IntegrationTestCase):
 				frappe.db.exists("Custom Field", {"dt": "Work Order", "fieldname": fieldname}),
 				f"Work Order.{fieldname} harus terhapus (FU96)",
 			)
+			self.assertFalse(
+				frappe.db.has_column("Work Order", fieldname),
+				f"kolom Work Order.{fieldname} harus sudah DIHAPUS (FU97)",
+			)
 		for fieldname in ("custom_box_1", "custom_box_2"):
 			self.assertIsNone(
 				frappe.db.exists("Custom Field", {"dt": "Material Request", "fieldname": fieldname}),
 				f"Material Request.{fieldname} harus terhapus (FU96)",
 			)
-		# dan kolom DB tetap ada (arsip) — warehouse_app report masih membacanya
-		for column in ("custom_box_1", "custom_box_1_qty", "custom_box_3_qty"):
-			self.assertTrue(
-				frappe.db.has_column("Work Order", column),
-				f"kolom {column} harus DIPERTAHANKAN sebagai arsip",
+			self.assertFalse(
+				frappe.db.has_column("Material Request", fieldname),
+				f"kolom Material Request.{fieldname} harus sudah DIHAPUS (FU97)",
 			)
 		# T35 (narrowed FU96): tiga-lane handover metadata — Link saja; TIDAK
 		# ada lagi field count box

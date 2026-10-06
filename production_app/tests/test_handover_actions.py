@@ -603,7 +603,10 @@ class TestHandoverActions(IntegrationTestCase):
 
 	def test_t35_save_post_packing_is_a_compatibility_rejection(self):
 		"""The retired verify endpoint always rejects with the reload message —
-		for any role, before any lock/write — and mutates neither MR nor WO."""
+		for any role, before any lock/write — and mutates neither MR nor WO.
+		FU96: signature param box-nya sudah hilang; kwarg box lama dari klien
+		HTTP difilter get_newargs sebelum dipanggil (dibuktikan test FU96
+		signature), jadi di sini panggilan qty-only murni."""
 		wo, _ = self._lot_ready(100)
 		result = self._request(wo)
 		mr = frappe.get_doc("Material Request", result["material_request"])
@@ -613,7 +616,7 @@ class TestHandoverActions(IntegrationTestCase):
 			frappe.set_user(user)
 			try:
 				with self.assertRaises(frappe.ValidationError) as ctx:
-					save_post_packing(mr.name, box_1=12.5, box_2=8)
+					save_post_packing(mr.name)
 				self.assertIn("Muat ulang halaman", str(ctx.exception))
 			finally:
 				frappe.set_user("Administrator")

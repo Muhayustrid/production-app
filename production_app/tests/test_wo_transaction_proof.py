@@ -1427,11 +1427,11 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 		self.assertNotEqual(detail["suggestion_sources"].get("penimbang"), other_name)
 
 	def test_fu96_wo_handover_summary_field_contract(self):
-		"""FU96: the handover summary on the Work Order is the Link field alone
-		(read-only + allow-on-submit) — the six Box fields are RETIRED with no
-		definitions left; their DB columns stay as an archive. The Link is
-		written only through controlled db_set by the server gate and
-		round-trips on submitted WOs."""
+		"""FU96 + FU97: the handover summary on the Work Order is the Link
+		field alone (read-only + allow-on-submit) — the six Box fields are
+		RETIRED with no definitions left AND no DB columns left (FU97).
+		The Link is written only through controlled db_set by the server gate
+		and round-trips on submitted WOs."""
 		meta = frappe.get_meta("Work Order", cached=False)
 		df = meta.get_field("custom_handover_material_request")
 		self.assertIsNotNone(df)
@@ -1447,9 +1447,9 @@ class TestWorkOrderTransactionProof(IntegrationTestCase):
 				frappe.db.exists("Custom Field", {"dt": "Work Order", "fieldname": fieldname}),
 				f"Work Order.{fieldname} definisi harus terhapus (FU96)",
 			)
-			self.assertTrue(
+			self.assertFalse(
 				frappe.db.has_column("Work Order", fieldname),
-				f"kolom {fieldname} harus dipertahankan sebagai arsip",
+				f"kolom {fieldname} harus sudah dihapus (FU97)",
 			)
 
 		self._receipt(self.rm1, 1000)

@@ -1,0 +1,392 @@
+{
+  "captured_at": "2026-10-06 22:04:54.371821",
+  "custom_fields": [
+    {
+      "allow_on_submit": 1,
+      "description": null,
+      "dt": "Material Request",
+      "fieldname": "custom_box_1",
+      "fieldtype": "Float",
+      "hidden": 1,
+      "insert_after": "custom_note",
+      "label": "Box 1",
+      "name": "Material Request-custom_box_1",
+      "non_negative": 0,
+      "options": null,
+      "read_only": 0
+    },
+    {
+      "allow_on_submit": 1,
+      "description": null,
+      "dt": "Material Request",
+      "fieldname": "custom_box_2",
+      "fieldtype": "Float",
+      "hidden": 1,
+      "insert_after": "custom_box_1",
+      "label": "Box 2",
+      "name": "Material Request-custom_box_2",
+      "non_negative": 0,
+      "options": null,
+      "read_only": 0
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Berat Box 1 (kg) untuk request serah terima aktif/terakhir",
+      "dt": "Work Order",
+      "fieldname": "custom_box_1",
+      "fieldtype": "Float",
+      "hidden": 0,
+      "insert_after": "custom_leader_produksi",
+      "label": "Box 1 (kg)",
+      "name": "Work Order-custom_box_1",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Jumlah Box 1 dalam satuan gudang item (Pack/Pcs/dll.) untuk request serah terima aktif/terakhir",
+      "dt": "Work Order",
+      "fieldname": "custom_box_1_qty",
+      "fieldtype": "Int",
+      "hidden": 0,
+      "insert_after": "custom_box_1",
+      "label": "Box 1 (Jumlah)",
+      "name": "Work Order-custom_box_1_qty",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Berat Box 2 (kg) untuk request serah terima aktif/terakhir",
+      "dt": "Work Order",
+      "fieldname": "custom_box_2",
+      "fieldtype": "Float",
+      "hidden": 0,
+      "insert_after": "custom_box_1_qty",
+      "label": "Box 2 (kg)",
+      "name": "Work Order-custom_box_2",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Jumlah Box 2 dalam satuan gudang item (Pack/Pcs/dll.) untuk request serah terima aktif/terakhir",
+      "dt": "Work Order",
+      "fieldname": "custom_box_2_qty",
+      "fieldtype": "Int",
+      "hidden": 0,
+      "insert_after": "custom_box_2",
+      "label": "Box 2 (Jumlah)",
+      "name": "Work Order-custom_box_2_qty",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Berat Box 3 (kg) untuk request serah terima aktif/terakhir",
+      "dt": "Work Order",
+      "fieldname": "custom_box_3",
+      "fieldtype": "Float",
+      "hidden": 0,
+      "insert_after": "custom_box_2_qty",
+      "label": "Box 3 (kg)",
+      "name": "Work Order-custom_box_3",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    },
+    {
+      "allow_on_submit": 1,
+      "description": "Jumlah Box 3 dalam satuan gudang item (Pack/Pcs/dll.) untuk request serah terima aktif/terakhir",
+      "dt": "Work Order",
+      "fieldname": "custom_box_3_qty",
+      "fieldtype": "Int",
+      "hidden": 0,
+      "insert_after": "custom_box_3",
+      "label": "Box 3 (Jumlah)",
+      "name": "Work Order-custom_box_3_qty",
+      "non_negative": 1,
+      "options": null,
+      "read_only": 1
+    }
+  ],
+  "rows": {
+    "Material Request": [],
+    "Work Order": [
+      {
+        "custom_box_1": 28.38,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 42.07,
+        "custom_box_2_qty": 64,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004173"
+      },
+      {
+        "custom_box_1": 28.17,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 42.99,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004174"
+      },
+      {
+        "custom_box_1": 28.49,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 43.17,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004175"
+      },
+      {
+        "custom_box_1": 28.69,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 39.63,
+        "custom_box_2_qty": 60,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004176"
+      },
+      {
+        "custom_box_1": 28.28,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 42.84,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004177"
+      },
+      {
+        "custom_box_1": 28.21,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 42.62,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004178"
+      },
+      {
+        "custom_box_1": 28.22,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 42.73,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004179"
+      },
+      {
+        "custom_box_1": 28.17,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 43.83,
+        "custom_box_2_qty": 67,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004180"
+      },
+      {
+        "custom_box_1": 28.17,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 39.84,
+        "custom_box_2_qty": 61,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004181"
+      },
+      {
+        "custom_box_1": 28.96,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 43.58,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004182"
+      },
+      {
+        "custom_box_1": 28.59,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 43.37,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004183"
+      },
+      {
+        "custom_box_1": 28.87,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 43.26,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004184"
+      },
+      {
+        "custom_box_1": 28.07,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 42.97,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004185"
+      },
+      {
+        "custom_box_1": 28.65,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 43.5,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004186"
+      },
+      {
+        "custom_box_1": 28.64,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 43.51,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004187"
+      },
+      {
+        "custom_box_1": 29.01,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 53.29,
+        "custom_box_2_qty": 80,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004188"
+      },
+      {
+        "custom_box_1": 29.24,
+        "custom_box_1_qty": 45,
+        "custom_box_2": 14.34,
+        "custom_box_2_qty": 23,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004189"
+      },
+      {
+        "custom_box_1": 29.15,
+        "custom_box_1_qty": 45,
+        "custom_box_2": 14.85,
+        "custom_box_2_qty": 23,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004190"
+      },
+      {
+        "custom_box_1": 29.25,
+        "custom_box_1_qty": 45,
+        "custom_box_2": 14.88,
+        "custom_box_2_qty": 23,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004191"
+      },
+      {
+        "custom_box_1": 29.13,
+        "custom_box_1_qty": 45,
+        "custom_box_2": 14.66,
+        "custom_box_2_qty": 23,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004192"
+      },
+      {
+        "custom_box_1": 16.57,
+        "custom_box_1_qty": 37,
+        "custom_box_2": 0.0,
+        "custom_box_2_qty": 0,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004193"
+      },
+      {
+        "custom_box_1": 17.15,
+        "custom_box_1_qty": 38,
+        "custom_box_2": 0.0,
+        "custom_box_2_qty": 0,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004194"
+      },
+      {
+        "custom_box_1": 16.77,
+        "custom_box_1_qty": 37,
+        "custom_box_2": 0.0,
+        "custom_box_2_qty": 0,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004195"
+      },
+      {
+        "custom_box_1": 16.66,
+        "custom_box_1_qty": 37,
+        "custom_box_2": 0.0,
+        "custom_box_2_qty": 0,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004196"
+      },
+      {
+        "custom_box_1": 17.27,
+        "custom_box_1_qty": 38,
+        "custom_box_2": 0.0,
+        "custom_box_2_qty": 0,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004197"
+      },
+      {
+        "custom_box_1": 16.85,
+        "custom_box_1_qty": 37,
+        "custom_box_2": 0.0,
+        "custom_box_2_qty": 0,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004198"
+      },
+      {
+        "custom_box_1": 28.66,
+        "custom_box_1_qty": 43,
+        "custom_box_2": 42.85,
+        "custom_box_2_qty": 65,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004233"
+      },
+      {
+        "custom_box_1": 27.86,
+        "custom_box_1_qty": 45,
+        "custom_box_2": 14.69,
+        "custom_box_2_qty": 23,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004250"
+      },
+      {
+        "custom_box_1": 29.6,
+        "custom_box_1_qty": 45,
+        "custom_box_2": 15.28,
+        "custom_box_2_qty": 23,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004251"
+      },
+      {
+        "custom_box_1": 30.0,
+        "custom_box_1_qty": 45,
+        "custom_box_2": 14.33,
+        "custom_box_2_qty": 22,
+        "custom_box_3": 0.0,
+        "custom_box_3_qty": 0,
+        "name": "WO-JURI-261004252"
+      }
+    ]
+  }
+}
