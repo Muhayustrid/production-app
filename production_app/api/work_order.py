@@ -5,6 +5,7 @@
 # / has_permission. The stage is ALWAYS derived from current documents here —
 # the UI never saves or sends a stage.
 
+import json
 import math
 
 import frappe
@@ -126,6 +127,40 @@ def derive_stage(wo, operations=None):
 	return STAGE_FINISH
 
 
+def _filter_list(value, name, limit=100):
+	"""FU100: nilai filter multi-value — terima list asli (JSON body), string
+	JSON, atau skalar lama (pemanggil FU72 dst tak berubah); kembalikan
+	list[str] bersih (trim, buang kosong, dedupe). [] = tanpa filter — JANGAN
+	pernah membangun IN (). Nilai dikirim sebagai bound parameter, bukan
+	f-string, jadi tidak ada celah injeksi; identifier tetap milik server
+	(pola whitelist token `order` FU94). Melebihi `limit` → ValidationError."""
+	if value is None:
+		return []
+	if isinstance(value, str):
+		text = value.strip()
+		if not text:
+			return []
+		try:
+			parsed = json.loads(text)
+		except ValueError:
+			parsed = [text]
+		if not isinstance(parsed, list):
+			parsed = [parsed]
+	elif isinstance(value, (list, tuple)):
+		parsed = list(value)
+	else:
+		frappe.throw(f"Filter {name} tidak valid.", exc=frappe.ValidationError)
+	out, seen = [], set()
+	for item in parsed:
+		item = str(item or "").strip()
+		if item and item not in seen:
+			seen.add(item)
+			out.append(item)
+	if len(out) > limit:
+		frappe.throw(f"Filter {name} maksimal {limit} nilai.", exc=frappe.ValidationError)
+	return out
+
+
 def _base_filters(search=None, production_item=None, status=None, start_date=None, end_date=None, company=None):
 	filters, or_filters = [], []
 	if search:
@@ -142,10 +177,14 @@ def _base_filters(search=None, production_item=None, status=None, start_date=Non
 		)
 		if item_codes:
 			or_filters.append([DOCTYPE, "production_item", "in", item_codes])
-	if production_item:
-		filters.append([DOCTYPE, "production_item", "=", production_item])
-	if status:
-		filters.append([DOCTYPE, "status", "=", status])
+	# FU100: multi-value (IN dalam satu field, AND antar field); skalar lama
+	# masuk jalur sama (["ABC"] ≡ = "ABC")
+	production_items = _filter_list(production_item, "produk")
+	if production_items:
+		filters.append([DOCTYPE, "production_item", "in", production_items])
+	statuses = _filter_list(status, "status")
+	if statuses:
+		filters.append([DOCTYPE, "status", "in", statuses])
 	if start_date:
 		filters.append([DOCTYPE, "planned_start_date", ">=", start_date])
 	if end_date:
@@ -212,11 +251,16 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 	"""Permission-filtered, paginated Work Order list for the workspace.
 
 	FU94: `order` = token whitelist WO_LIST_ORDERS (klik header tabel); token
-	tak dikenal/kosong jatuh ke urutan default."""
+	tak dikenal/kosong jatuh ke urutan default. FU100: `production_item`,
+	`status`, dan `stage` boleh berupa list (JSON body) — IN dalam satu
+	field, AND antar field; skalar lama tetap diterima (pemetaan _filter_list).
+	Tahap majemuk lolos lewat pencocokan post-fetch (derive_stage), tanpa
+	penyempitan SQL per tahap yang hanya sah untuk satu tahap."""
 	start, page_len = max(int(start), 0), max(min(int(page_len), 2500), 1)
 	filters, or_filters = _base_filters(search, production_item, status, start_date, end_date, company)
-	if stage:
-		filters.extend(_stage_filters(stage))
+	stages = _filter_list(stage, "tahap")
+	if len(stages) == 1:
+		filters.extend(_stage_filters(stages[0]))
 	order_by = WO_LIST_ORDERS.get((str(order).strip().lower() if order else "") or "default", WO_LIST_ORDERS["default"])
 
 	def fetch(start_at, limit):
@@ -233,7 +277,7 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 		except frappe.PermissionError:
 			return []
 
-	if not stage:
+	if not stages:
 		rows = fetch(start, page_len)
 		try:
 			total = len(frappe.get_list(
@@ -247,7 +291,8 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 			total = 0
 	else:
 		rows = fetch(0, STAGE_SCAN_LIMIT)
-		rows = [r for r in rows if derive_stage(r) == stage]
+		wanted = set(stages)
+		rows = [r for r in rows if derive_stage(r) in wanted]
 		total = len(rows)
 		rows = rows[start : start + page_len]
 
@@ -259,6 +304,41 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 	if int(meta):
 		return {"rows": rows, "total": total, "start": start, "page_len": page_len}
 	return rows
+
+
+@frappe.whitelist()
+def wo_product_options():
+	"""FU100: opsi pemilih produk di panel filter (MultiSelect multi-value) —
+	distinct production_item dari Work Order yang terlihat user (get_list =
+	User Permission otomatis) + nama item untuk label. Terbatas pada produk
+	yang benar-benar punya WO, jadi daftarnya wajar ukurannya; nama yang tak
+	bisa dibaca (PermissionError Item) jatuh ke kode apa adanya."""
+	try:
+		rows = frappe.get_list(
+			DOCTYPE,
+			fields=["production_item"],
+			group_by="production_item",
+			limit_page_length=0,
+		)
+	except frappe.PermissionError:
+		return []
+	codes = sorted({r.production_item for r in rows if r.production_item})
+	if not codes:
+		return []
+	try:
+		items = frappe.get_list(
+			"Item",
+			filters=[["name", "in", codes]],
+			fields=["name", "item_name"],
+			limit_page_length=0,
+		)
+		names = {i.name: i.item_name or i.name for i in items}
+	except frappe.PermissionError:
+		names = {}
+	return [
+		{"value": code, "label": names.get(code, code)}
+		for code in sorted(codes, key=lambda c: names.get(c, c).lower())
+	]
 
 
 @frappe.whitelist()
@@ -965,6 +1045,54 @@ def _fill_warehouse_defaults(wo):
 			value = item.get(f"custom_default_{wo_field}")
 		if value:
 			setattr(wo, wo_field, value)
+
+
+# ------------------------------------------------- outlet guard (single-level BOM)
+
+# Outlet Work Orders (matang) hanya mengonsumsi dough + krim dari gudang
+# outlet — resep lengkap dough adalah resep PABRIK (docs alur
+# dough→matang→bundle). ERPNext default use_multi_level_bom=1 meledakkan
+# resep dough ke bahan mentah pabrik sehingga Manufacture mencoba
+# mengonsumsi bahan yang tidak pernah ada di gudang outlet (insiden cloud
+# 7 Okt: SE-MFG-261007001 gagal "Valuation Rate for Item BB260055 is
+# required" karena 18 baris meledak dicoba keluar dari Stores outlet).
+OUTLET_ITEM_GROUP = "Produk Jadi Outlet"
+
+
+def _is_outlet_item(item_code):
+	"""Item grup `Produk Jadi Outlet` ATAU turunannya (nested set lft/rgt) —
+	item outlet baru yang lahir di sub-grup tetap kena guard."""
+	bounds = frappe.get_cached_value("Item Group", OUTLET_ITEM_GROUP, ["lft", "rgt"], as_dict=True)
+	if not bounds:
+		return False
+	group = frappe.get_cached_value("Item", item_code, "item_group")
+	if not group:
+		return False
+	node = frappe.get_cached_value("Item Group", group, ["lft", "rgt"], as_dict=True)
+	return bool(node) and node.lft >= bounds.lft and node.rgt <= bounds.rgt
+
+
+def enforce_single_level_bom_for_outlet(doc, method=None):
+	"""doc_events Work Order `before_validate` — paksa outlet WO single-level.
+
+	`before_validate`, bukan `validate`: Production Plan native meng-insert
+	Work Order-nya dengan flags.ignore_validate=1 dan required_items yang
+	sudah meledak (production_plan.create_work_order), sementara frappe tetap
+	menjalankan before_validate di bawah ignore_validate (document.py
+	run_before_save_methods) — satu-satunya titik yang dilewati SEMUA jalur
+	pembuatan WO (pos_next start_production, plan make_work_order, Desk).
+	Baris lama dibangun ulang dari BOM WO sendiri di level tunggal supaya
+	baris hasil ledakan tidak ikut lolos. WO item grup lain (pabrik) tidak
+	disentuh.
+	"""
+	if not cint(doc.get("use_multi_level_bom")):
+		return
+	if not (doc.get("production_item") and doc.get("bom_no") and flt(doc.get("qty"))):
+		return
+	if not _is_outlet_item(doc.production_item):
+		return
+	doc.use_multi_level_bom = 0
+	doc.set_required_items()
 
 
 @frappe.whitelist()

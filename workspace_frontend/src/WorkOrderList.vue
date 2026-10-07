@@ -1,22 +1,22 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { companyFilterState, HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveCompanyFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
+import { call, companyFilterState, HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveCompanyFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
 import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtDate, qtyStack } from './format.js'
 import { buildWorkOrderPreferences, normalizeWorkOrderPreferences } from './work-order-preferences.js'
+import { countFilters, normalizeFilters } from './filter-rows.js'
 import { nextSortDir } from './table-sort.js'
 import { Search, Filter, ChevronRight, SearchX, Table, Kanban, X, ArrowDown } from 'lucide-vue-next'
 import WorkOrderKanban from './WorkOrderKanban.vue'
-import RangeField from './RangeField.vue'
+import FilterRows from './FilterRows.vue'
 
 const q = ref('')
-const fProduct = ref('all')
-const fStatus = ref('all')
-const fStage = ref('all')
-const fFrom = ref('')
-const fTo = ref('')
-// FU95: company = filter GLOBAL (companyFilterState, tersimpan per-user di
-// server) — bukan preferensi daftar; ikut tampil di panel & hitungan badge
+// FU100: filter halaman = objek baris ala ERPNext (key = field, nilai array
+// multi-value / objek rentang) — company TETAP global (companyFilterState).
+// Draft ada di dalam FilterRows; `applied` baru berubah saat Terapkan/panel
+// ditutup → satu fetch lewat watcher di bawah.
+const applied = ref({})
+const frowsRef = ref(null) // FilterRows — commit draft saat panel ditutup (FU100)
 const companies = computed(() => companyFilterState.companies)
 const showCompany = computed(() => showCompanyPicker(companies.value))
 const companyOptions = computed(() => companySelectOptions(companies.value))
@@ -27,7 +27,7 @@ let reloadTimer
 // FU72: filter satu-shot dari Dashboard (tahap/tanggal) — override runtime
 // saja. FU95: company satu-shot DIHAPUS (kini filter global tersimpan).
 let oneShotStage = false
-const STAGE_FILTER_MAP = { pre_packing: 'prepacking', post_packing: 'postpacking', selesai_hari_ini: 'done' }
+const STAGE_FILTER_MAP = { pre_packing: 'prepacking', post_packing: 'postpacking', selesai_hari_ini: 'selesai' }
 function consumePendingStage() {
   const pending = pendingStageFilter
   if (!pending.stage && !pending.from) return
@@ -35,25 +35,80 @@ function consumePendingStage() {
   pendingStageFilter.stage = '' // one-shot: langsung dikosongkan
   pendingStageFilter.from = ''
   pendingStageFilter.to = ''
+  const patch = {}
   if (stage) {
     const value = STAGE_FILTER_MAP[stage] || stage
-    if (['persiapan', 'material', 'operasi', 'prepacking', 'postpacking', 'finish', 'done'].includes(value)) {
-      fStage.value = value
+    if (['persiapan', 'material', 'operasi', 'prepacking', 'postpacking', 'finish', 'selesai'].includes(value)) {
+      patch.tahap = [value]
       oneShotStage = true
     }
   }
-  if (from) { fFrom.value = from; fTo.value = to || from; oneShotStage = true }
+  if (from) { patch.jadwal = { dari: from, sampai: to || from }; oneShotStage = true }
+  if (Object.keys(patch).length) applied.value = { ...applied.value, ...patch }
 }
 
 const products = computed(() => [...new Map(workOrders.map((w) => [w.itemCode, w.product]))].sort((a, b) => a[1].localeCompare(b[1])))
+// FU100: opsi produk MultiSelect = distinct production_item dari WO yang
+// terlihat user (server); dimuat sekali saat panel pertama dibuka, fallback
+// daftar dari halaman ter-muat bila endpoint gagal
+const productOptions = ref([])
+const productOptionsLoaded = ref(false)
+async function ensureProductOptions() {
+  if (productOptionsLoaded.value) return
+  productOptionsLoaded.value = true
+  try {
+    productOptions.value = (await call('production_app.api.work_order.wo_product_options')) || []
+  } catch {
+    productOptions.value = []
+  }
+  if (!productOptions.value.length) {
+    productOptions.value = products.value.map(([code, name]) => ({ value: code, label: name }))
+  }
+}
+// deskriptor untuk normalize (key+type stabil); options dilampirkan di computed
+const WO_FILTER_SHAPE = [
+  { key: 'produk', type: 'multi' },
+  { key: 'status', type: 'multi' },
+  { key: 'tahap', type: 'multi' },
+  { key: 'jadwal', type: 'range' }
+]
+const filterFields = computed(() => [
+  {
+    key: 'produk', label: 'Produk', type: 'multi', filter: true,
+    placeholder: 'Pilih satu atau lebih produk',
+    options: productOptions.value.length
+      ? productOptions.value
+      : products.value.map(([code, name]) => ({ value: code, label: name }))
+  },
+  {
+    key: 'status', label: 'Status', type: 'multi',
+    options: [
+      { value: 'Draft', label: 'Draft' },
+      { value: 'In Process', label: 'In Process' },
+      { value: 'Completed', label: 'Completed' }
+    ]
+  },
+  {
+    key: 'tahap', label: 'Tahap', type: 'multi',
+    options: [
+      { value: 'persiapan', label: 'Persiapan' },
+      { value: 'material', label: 'Material' },
+      { value: 'operasi', label: 'Operasi' },
+      { value: 'prepacking', label: 'Pre-Packing' },
+      { value: 'postpacking', label: 'Post-Packing' },
+      { value: 'finish', label: 'Finish' },
+      { value: 'selesai', label: 'Selesai' }
+    ]
+  },
+  { key: 'jadwal', label: 'Jadwal', type: 'range', placeholder: 'Semua jadwal' }
+])
 const todayLabel = new Date().toLocaleDateString('id-ID', {
   weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
 })
 const totalPages = computed(() => Math.max(1, Math.ceil(listState.total / pageSize.value)))
 const currentPage = computed(() => listState.page)
 const activeFilters = computed(() =>
-  (fProduct.value !== 'all') + (fStatus.value !== 'all') + (fStage.value !== 'all') +
-  (fFrom.value || fTo.value ? 1 : 0) +
+  countFilters(applied.value) +
   (showCompany.value && companyFilterState.company ? 1 : 0)
 )
 
@@ -68,11 +123,15 @@ async function applyCompany(value) {
 }
 
 function filterPayload() {
+  const f = applied.value
   return {
-    search: q.value.trim(), productionItem: fProduct.value === 'all' ? '' : fProduct.value,
-    status: fStatus.value === 'all' ? '' : fStatus.value,
-    stage: fStage.value === 'all' ? '' : (fStage.value === 'done' ? 'selesai' : fStage.value),
-    startDate: fFrom.value, endDate: fTo.value, start: 0, pageLen: pageSize.value,
+    search: q.value.trim(),
+    productionItem: f.produk?.length ? f.produk : '',
+    status: f.status?.length ? f.status : '',
+    stage: f.tahap?.length ? f.tahap : '',
+    startDate: f.jadwal?.dari || '',
+    endDate: f.jadwal?.sampai || '',
+    start: 0, pageLen: pageSize.value,
     order: orderToken.value
   }
 }
@@ -97,11 +156,11 @@ function saveWoPreferences() {
   return saveListPreferences({
     workOrder: buildWorkOrderPreferences({
       q: q.value,
-      product: fProduct.value,
-      status: fStatus.value,
-      stage: fStage.value,
-      from: fFrom.value,
-      to: fTo.value,
+      products: applied.value.produk || [],
+      statuses: applied.value.status || [],
+      stages: applied.value.tahap || [],
+      from: applied.value.jadwal?.dari || '',
+      to: applied.value.jadwal?.sampai || '',
       pageSize: pageSize.value,
       filterOpen: filterOpen.value,
       view: listPrefs.view
@@ -125,7 +184,8 @@ function scheduleReload() {
   reloadTimer = setTimeout(reload, 180)
 }
 function clearFilters() {
-  q.value = ''; fProduct.value = 'all'; fStatus.value = 'all'; fStage.value = 'all'; fFrom.value = ''; fTo.value = ''
+  q.value = ''
+  applied.value = {}
   filterOpen.value = false
   // FU95: "Hapus semua filter" juga melepas filter company GLOBAL (tersimpan);
   // applyCompany sendiri yang reload bila berubah — tanpa perubahan, reload di sini
@@ -133,30 +193,43 @@ function clearFilters() {
   else reload()
 }
 function goPage(page) { listState.page = page; loadList({ ...filterPayload(), start: (page - 1) * pageSize.value, pageLen: pageSize.value }) }
-const filtered = computed(() => workOrders
-  .filter(w => fProduct.value === 'all' || w.itemCode === fProduct.value)
-  .filter(w => fStatus.value === 'all' || w.status === fStatus.value)
-  .filter(w => fStage.value === 'all' || (fStage.value === 'done' ? w.stage === 'completed' : w.stage === fStage.value))
-  .filter(w => !fFrom.value || w.plannedDate >= fFrom.value)
-  .filter(w => !fTo.value || w.plannedDate <= fTo.value)
-  .filter(w => { const t = q.value.trim().toLowerCase(); return !t || w.id.toLowerCase().includes(t) || w.product.toLowerCase().includes(t) || w.itemCode.toLowerCase().includes(t) }))
+const filtered = computed(() => {
+  const f = applied.value
+  return workOrders
+    .filter(w => !f.produk?.length || f.produk.includes(w.itemCode))
+    .filter(w => !f.status?.length || f.status.includes(w.status))
+    .filter(w => !f.tahap?.length || f.tahap.some((s) => (s === 'selesai' ? w.stage === 'completed' : w.stage === s)))
+    .filter(w => !f.jadwal?.dari || w.plannedDate >= f.jadwal.dari)
+    .filter(w => !f.jadwal?.sampai || w.plannedDate <= f.jadwal.sampai)
+    .filter(w => { const t = q.value.trim().toLowerCase(); return !t || w.id.toLowerCase().includes(t) || w.product.toLowerCase().includes(t) || w.itemCode.toLowerCase().includes(t) })
+})
 const pagedFiltered = computed(() => filtered.value)
-watch([q, fProduct, fStatus, fStage, fFrom, fTo], () => {
+watch(applied, () => {
+  if (restoring.value) return
+  listState.page = 1
+  scheduleReload()
+}, { deep: true })
+watch([q], () => {
   if (restoring.value) return
   listState.page = 1
   scheduleReload()
 })
-watch(filterOpen, saveWoPreferences)
+watch(filterOpen, (open, sebelum) => {
+  if (!open && sebelum) frowsRef.value?.commitIfChanged() // tutup panel = commit draft (FU100)
+  if (open) ensureProductOptions()
+  saveWoPreferences()
+})
 watch(() => listPrefs.view, saveWoPreferences)
 onMounted(() => {
   const apply = async () => {
     const p = normalizeWorkOrderPreferences(savedListPreferences.workOrder)
     q.value = p.q
-    fProduct.value = p.product
-    fStatus.value = p.status
-    fStage.value = p.stage
-    fFrom.value = p.from
-    fTo.value = p.to
+    applied.value = normalizeFilters({
+      produk: p.products,
+      status: p.statuses,
+      tahap: p.stages,
+      jadwal: { dari: p.from, sampai: p.to }
+    }, WO_FILTER_SHAPE)
     listState.pageSize = normalizePageSize(p.pageSize)
     filterOpen.value = p.filterOpen
     listPrefs.view = p.view
@@ -167,8 +240,8 @@ onMounted(() => {
   }
   if (listPreferencesState.loaded) apply()
   else {
-    let applied = false
-    const run = () => { if (applied) return; applied = true; apply() }
+    let appliedPrefs = false
+    const run = () => { if (appliedPrefs) return; appliedPrefs = true; apply() }
     const timer = setInterval(() => { if (listPreferencesState.loaded) { clearInterval(timer); run() } }, 25)
     setTimeout(() => { clearInterval(timer); run() }, 2000)
   }
@@ -176,8 +249,15 @@ onMounted(() => {
 function open(id) { window.location.hash = '#/wo/' + id }
 function statusClass(s) { return s === 'Draft' ? 'b-draft' : s === 'Completed' ? 'b-done' : 'b-run' }
 function stageLabel(w) { return w.stage === 'completed' ? 'Selesai' : STAGE_LABELS[w.stage] }
-// FU72: chip filter tahap aktif (termasuk hasil one-shot dari Dashboard)
-const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STAGE_LABELS[fStage.value]))
+// FU72/FU100: chip tahap tunggal (hasil one-shot dari Dashboard atau pilihan
+// satu tahap); lebih dari satu tahap cukup diwakili badge panel
+const stageChipKey = computed(() => (applied.value.tahap?.length === 1 ? applied.value.tahap[0] : ''))
+const stageChipLabel = computed(() => (stageChipKey.value === 'selesai' ? 'Selesai' : STAGE_LABELS[stageChipKey.value]))
+function removeStageChip() {
+  const d = { ...applied.value }
+  delete d.tahap
+  applied.value = d
+}
 </script>
 
 <template>
@@ -212,47 +292,15 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
         <div v-if="showCompany" class="ffield">
           <label>Company</label>
           <!-- FU95: filter company GLOBAL — pilihan ini berlaku di semua
-               halaman dan tersimpan per-user (tidak hilang saat refresh) -->
+               halaman dan tersimpan per-user (tidak hilang saat refresh);
+               FU100: di luar baris filter, tak ikut "Hapus semua" -->
           <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
             <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
         </div>
-        <div class="ffield">
-          <label>Produk</label>
-          <select v-model="fProduct" class="select">
-            <option value="all">Semua produk</option>
-            <option v-if="fProduct !== 'all' && !products.some(([code]) => code === fProduct)" :value="fProduct">{{ fProduct }}</option>
-            <option v-for="([code, name]) in products" :key="code" :value="code">{{ name }}</option>
-          </select>
-        </div>
-        <div class="ffield">
-          <label>Status</label>
-          <select v-model="fStatus" class="select">
-            <option value="all">Semua status</option>
-            <option value="Draft">Draft</option>
-            <option value="In Process">In Process</option>
-            <option value="Completed">Completed</option>
-          </select>
-        </div>
-          <div class="ffield">
-            <label>Tahap</label>
-            <select v-model="fStage" class="select">
-              <option value="all">Semua tahap</option>
-              <option value="persiapan">Persiapan</option>
-              <option value="material">Material</option>
-              <option value="operasi">Operasi</option>
-              <option value="prepacking">Pre-Packing</option>
-              <option value="postpacking">Post-Packing</option>
-              <option value="finish">Finish</option>
-              <option value="done">Selesai</option>
-            </select>
-          </div>
-        <div class="ffield">
-          <label>Jadwal</label>
-          <!-- FU79d: field tunggal; to belum dipilih = filter dari aja (terbuka, semantik lama) -->
-          <RangeField v-model:dari="fFrom" v-model:sampai="fTo" placeholder="Semua jadwal" />
-        </div>
-        <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
+        <!-- FU100: baris filter ERPNext-style (multi-value, tambah/hapus
+             baris, Terapkan/Hapus semua) — pilot halaman Work Order -->
+        <FilterRows ref="frowsRef" :fields="filterFields" v-model="applied" />
         </div>
       </Transition>
     </div>
@@ -279,10 +327,10 @@ const stageChipLabel = computed(() => (fStage.value === 'done' ? 'Selesai' : STA
     </div>
   </div>
 
-  <!-- FU72: chip filter tahap aktif (satu-shot dari Dashboard atau manual);
-       FU95: chip company dihapus — company kini tampil di panel filter -->
-  <div v-if="fStage !== 'all'" class="filterchips">
-    <button type="button" class="chip chip-filter" @click="fStage = 'all'">
+  <!-- FU72: chip filter tahap aktif (satu-shot dari Dashboard atau satu
+       tahap terpilih); FU95: chip company dihapus — company kini tampil di panel -->
+  <div v-if="stageChipKey" class="filterchips">
+    <button type="button" class="chip chip-filter" @click="removeStageChip">
       Tahap: {{ stageChipLabel }}
       <X :size="12" :stroke-width="2.2" />
     </button>
