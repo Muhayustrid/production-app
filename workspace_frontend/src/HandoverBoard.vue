@@ -19,7 +19,9 @@ import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
 import { distinctItems, filterSerahRows, serahFilterCount } from './handover-filter.js'
 import { rowClickAction, seRouteLabel } from './handover-se.js'
+import { normalizeFilters, countFilters } from './filter-rows.js'
 import { laneStatusMeta } from './form-order.js'
+import FilterRows from './FilterRows.vue'
 import RangeField from './RangeField.vue'
 import {
   ArrowDown, CheckCircle2, ChevronRight, ClipboardList, Filter, Inbox, KanbanSquare,
@@ -149,17 +151,28 @@ const coldPage = ref(1)
 // papan sudah termuat penuh; sengaja tidak dipersisten agar reload selalu
 // menampilkan papan utuh.
 const searchQ = ref('')
-// FU50: filter mode tabel — status/item/tanggal dibuat; tersimpan per-user
-// (pola FU18, panel + persistence meniru halaman Work Order).
-const seStatus = ref('all')
-const seItem = ref('all')
-const seFrom = ref('')
-const seTo = ref('')
+// FU50/FU103: filter mode tabel — status/item (multi-nilai ala ERPNext) +
+// tanggal dibuat; tersimpan per-user (pola FU18/FU100), baris dirender
+// FilterRows dan dikomit saat Terapkan atau panel ditutup.
+const seApplied = ref({})
+const seFrowsRef = ref(null)
+const SE_FILTER_SHAPE = [
+  { key: 'status', type: 'multi' },
+  { key: 'item', type: 'multi' },
+  { key: 'dibuat', type: 'range' }
+]
+const SE_STATUS_OPTIONS = [
+  { value: 'request', label: 'Diminta' },
+  { value: 'terkirim', label: 'Terkirim' },
+  { value: 'cancelled', label: 'Dibatalkan' },
+  { value: 'stopped', label: 'Dihentikan' },
+  { value: 'draft', label: 'Draf' }
+]
 const saveHandoverPreferences = () => saveListPreferences({
   workOrder: savedListPreferences.workOrder || {},
   handover: {
     from: lotFrom.value, to: lotTo.value, pageSize: coldPageSize.value, filterOpen: lotFilterOpen.value, viewMode: viewMode.value,
-    seStatus: seStatus.value, seItem: seItem.value, seFrom: seFrom.value, seTo: seTo.value
+    seFilters: seApplied.value
   }
 })
 function setColdPageSize(value) {
@@ -183,18 +196,30 @@ const coldCards = computed(() => coldLots.value.map(lotCard).filter((c) => board
 const coldTotalPages = computed(() => Math.max(1, Math.ceil(coldCards.value.length / coldPageSize.value)))
 const pagedColdLots = computed(() => coldCards.value.slice((coldPage.value - 1) * coldPageSize.value, coldPage.value * coldPageSize.value))
 watch([lotFrom, lotTo], () => { coldPage.value = 1; saveHandoverPreferences() })
-watch([seStatus, seItem, seFrom, seTo], () => saveHandoverPreferences())
+watch(seApplied, () => saveHandoverPreferences(), { deep: true })
 watch(searchQ, () => { coldPage.value = 1 })
-// panel filter tetap terbuka setelah refresh (preferensi per-user, FU18)
-watch(lotFilterOpen, () => saveHandoverPreferences())
+// panel filter tetap terbuka setelah refresh (preferensi per-user, FU18);
+// FU103: menutup panel = commit draft baris (pola FU100 — komponen hidup di
+// v-if, jadi parent yang memicu sebelum unmount); pindah mode saat panel
+// terbuka ikut meng-commit karena tabel dan kanban punya panel berbeda.
+watch(lotFilterOpen, (open, sebelum) => {
+  if (!open && sebelum) seFrowsRef.value?.commitIfChanged()
+  saveHandoverPreferences()
+})
+// (watch viewMode dipasang di bawah deklarasi viewMode — hindari TDZ setup)
 function lotReset() {
   lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false
   // FU95: bersih total termasuk company global (konvensi FU75)
   if (companyFilterState.company) applyCompany('')
 }
 
-// FU50: aksi cepat filter tabel (pola halaman WO — panel tetap terbuka)
-const seFilter = () => ({ status: seStatus.value, item: seItem.value, from: seFrom.value, to: seTo.value })
+// FU103: payload baris filter tabel — array mengikuti kontrak filterSerahRows
+const seFilter = () => ({
+  statuses: seApplied.value.status || [],
+  items: seApplied.value.item || [],
+  from: seApplied.value.dibuat?.dari || '',
+  to: seApplied.value.dibuat?.sampai || ''
+})
 // FU95: filter company GLOBAL — satu pilihan utk papan Stock Entry (server),
 // tersimpan per-user di server; ganti company = fetch ulang papan
 const companies = computed(() => companyFilterState.companies)
@@ -207,15 +232,26 @@ async function applyCompany(value) {
   await saveCompanyFilter(v)
   loadBoard()
 }
-const seReset = () => {
-  seStatus.value = 'all'; seItem.value = 'all'; seFrom.value = ''; seTo.value = ''
-  if (companyFilterState.company) applyCompany('')
-}
 const itemOptions = computed(() => distinctItems(handoverRequests))
 // opsi item tersimpan bisa basi (item tak lagi ada di papan) — tetap
 // ditampilkan agar pilihan lama terbaca (pola fProduct halaman WO)
-const itemStale = computed(() =>
-  seItem.value !== 'all' && !itemOptions.value.some((o) => o.name === seItem.value))
+const itemFilterOptions = computed(() => {
+  const base = itemOptions.value.map((o) => ({ value: o.name, label: o.code ? `${o.code} · ${o.name}` : o.name }))
+  const known = new Set(base.map((o) => o.value))
+  const stale = (seApplied.value.item || []).filter((v) => !known.has(v)).map((v) => ({ value: v, label: v }))
+  return [...stale, ...base]
+})
+const seFilterFields = computed(() => [
+  { key: 'status', label: 'Status', type: 'multi', options: SE_STATUS_OPTIONS },
+  { key: 'item', label: 'Item', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih item', options: itemFilterOptions.value },
+  { key: 'dibuat', label: 'Dibuat', type: 'range', placeholder: 'Semua tanggal' }
+])
+// commit baris (Terapkan atau panel ditutup) — normalisasi kontrak baris
+function onSeFilters(value) {
+  const next = normalizeFilters(value, SE_FILTER_SHAPE)
+  if (JSON.stringify(next) === JSON.stringify(seApplied.value)) return
+  seApplied.value = next
+}
 // badge tombol Filter mengikuti mode yang sedang aktif; FU95: company global
 // dihitung di kedua mode (papan/server mengikuti company)
 const companyActive = computed(() => (showCompany.value && companyFilterState.company ? 1 : 0))
@@ -314,6 +350,12 @@ function setViewMode(mode) {
   viewMode.value = mode
   saveHandoverPreferences()
 }
+// FU103: pindah Tabel → Kanban saat panel tabel terbuka = commit draft baris
+// (panel ikut berganti, draft tak boleh hilang diam-diam). Dipasang di sini
+// karena viewMode baru dideklarasikan di baris ini (TDZ setup).
+watch(viewMode, (mode, sebelum) => {
+  if (sebelum === 'tabel' && mode === 'kanban') seFrowsRef.value?.commitIfChanged()
+})
 
 // baris tabel Stock Entry: seluruh request papan (status dari lane/flag),
 // dicari dengan helper kartu yang sama (nama item / WO / dokumen / batch),
@@ -359,7 +401,7 @@ function seSetPageSize(value) {
   sePageSize.value = normalizePageSize(value)
   sePage.value = 1
 }
-watch([searchQ, seStatus, seItem, seFrom, seTo, seSortKey, seSortDir], () => { sePage.value = 1 })
+watch([searchQ, seApplied, seSortKey, seSortDir], () => { sePage.value = 1 }, { deep: true })
 // FU50: empty state membedakan "belum ada request" vs "terfilter habis"
 const serahFilteredOut = computed(() =>
   !serahRows.value.length && (!!searchQ.value || serahFilterCount(seFilter()) > 0))
@@ -372,8 +414,16 @@ onMounted(() => {
     lotFrom.value = p.from || ''; lotTo.value = p.to || ''
     coldPageSize.value = normalizePageSize(p.pageSize)
     lotFilterOpen.value = !!p.filterOpen
-    seStatus.value = p.seStatus || 'all'; seItem.value = p.seItem || 'all'
-    seFrom.value = p.seFrom || ''; seTo.value = p.seTo || ''
+    // FU103: bentuk baru seFilters (objek baris); preferensi lama
+    // (seStatus/seItem/seFrom/seTo skalar) dimigrasi apa adanya.
+    // 'all' = sentinel select lama → tidak memfilter.
+    seApplied.value = p.seFilters !== undefined
+      ? normalizeFilters(p.seFilters, SE_FILTER_SHAPE)
+      : normalizeFilters({
+        status: p.seStatus && p.seStatus !== 'all' ? p.seStatus : '',
+        item: p.seItem && p.seItem !== 'all' ? p.seItem : '',
+        dibuat: { dari: p.seFrom || '', sampai: p.seTo || '' }
+      }, SE_FILTER_SHAPE)
     // preferensi eksplisit menang; tanpa preferensi → default Tabel
     if (p.viewMode === 'tabel' || p.viewMode === 'kanban') viewMode.value = p.viewMode
     loadBoard()
@@ -437,33 +487,9 @@ onMounted(() => {
                 <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
               </select>
             </div>
-            <div class="ffield">
-              <label>Status</label>
-              <select v-model="seStatus" class="select">
-                <option value="all">Semua status</option>
-                <option value="request">Diminta</option>
-                <option value="terkirim">Terkirim</option>
-                <option value="cancelled">Dibatalkan</option>
-                <option value="stopped">Dihentikan</option>
-                <option value="draft">Draf</option>
-              </select>
-            </div>
-            <div class="ffield">
-              <label>Item</label>
-              <select v-model="seItem" class="select">
-                <option value="all">Semua item</option>
-                <option v-if="itemStale" :value="seItem">{{ seItem }}</option>
-                <option v-for="o in itemOptions" :key="o.name" :value="o.name">
-                  {{ o.code ? `${o.code} · ${o.name}` : o.name }}
-                </option>
-              </select>
-            </div>
-            <div class="ffield">
-              <label>Dibuat</label>
-              <!-- FU79d: field tunggal; to belum dipilih = filter dari aja (terbuka) -->
-              <RangeField v-model:dari="seFrom" v-model:sampai="seTo" placeholder="Semua tanggal" />
-            </div>
-            <button class="linkbtn filter-clear" type="button" @click="seReset">Hapus semua filter</button>
+            <!-- FU103: baris filter ala ERPNext (status/item multi-nilai +
+               rentang dibuat) — draft dikomit saat Terapkan atau panel ditutup -->
+            <FilterRows ref="seFrowsRef" :fields="seFilterFields" :model-value="seApplied" @update:model-value="onSeFilters" />
           </template>
           <template v-else>
             <div v-if="showCompany" class="ffield">

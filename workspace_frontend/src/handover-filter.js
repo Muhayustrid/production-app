@@ -20,16 +20,17 @@ export function distinctItems(rows) {
     .map(([name, code]) => ({ name, code }))
 }
 
-// predikat baris tabel: {status, item, from, to} — 'all'/'' berarti tidak
-// memfilter. Tanggal dari createdAt (YYYY-MM-DD); baris tanpa tanggal
-// dikecualikan saat rentang aktif (pola filter lot Cold Storage).
+// predikat baris tabel: {statuses[], items[], from, to} — array KOSONG/'' =
+// tidak memfilter (FU103: multi-nilai ala ERPNext — IN dalam satu field,
+// AND antar field; pola FU100). Tanggal dari createdAt (YYYY-MM-DD); baris
+// tanpa tanggal dikecualikan saat rentang aktif (pola filter lot Cold Storage).
 export function filterSerahRows(rows, f) {
-  const status = f.status && f.status !== 'all' ? f.status : ''
-  const item = f.item && f.item !== 'all' ? f.item : ''
-  const dateActive = !!(f.from || f.to)
+  const statuses = (f?.statuses || []).filter(Boolean)
+  const items = (f?.items || []).filter(Boolean)
+  const dateActive = !!(f?.from || f?.to)
   return rows.filter((r) => {
-    if (status && rowStatusKey(r) !== status) return false
-    if (item && r.item !== item) return false
+    if (statuses.length && !statuses.includes(rowStatusKey(r))) return false
+    if (items.length && !items.includes(r.item)) return false
     if (dateActive) {
       const day = (r.createdAt || '').slice(0, 10)
       if (!day) return false
@@ -41,8 +42,9 @@ export function filterSerahRows(rows, f) {
 }
 
 export function serahFilterCount(f) {
-  // FU79d: rentang tanggal = SATU filter (satu field .rangepicker, pola bahan)
-  return (f.status && f.status !== 'all' ? 1 : 0)
-    + (f.item && f.item !== 'all' ? 1 : 0)
-    + (f.from || f.to ? 1 : 0)
+  // FU79d/FU103: rentang tanggal = SATU baris filter; field multi = satu
+  // baris walau banyak nilai (badge menghitung BARIS, bukan nilai)
+  return (f?.statuses?.length ? 1 : 0)
+    + (f?.items?.length ? 1 : 0)
+    + (f?.from || f?.to ? 1 : 0)
 }

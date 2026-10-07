@@ -28,29 +28,45 @@ test('distinctItems unik per nama, urut abjad, bawa kode', () => {
 })
 
 test('filterSerahRows tanpa filter mengembalikan semua', () => {
-  assert.equal(filterSerahRows(rows, { status: 'all', item: 'all', from: '', to: '' }).length, 5)
+  assert.equal(filterSerahRows(rows, { statuses: [], items: [], from: '', to: '' }).length, 5)
+  assert.equal(filterSerahRows(rows, {}).length, 5)
 })
 
-test('filterSerahRows status + item', () => {
+test('filterSerahRows status + item (multi-nilai FU103: IN, union)', () => {
   assert.deepEqual(
-    filterSerahRows(rows, { status: 'terkirim', item: 'all', from: '', to: '' }).map((r) => r.itemCode),
+    filterSerahRows(rows, { statuses: ['terkirim'], items: [], from: '', to: '' }).map((r) => r.itemCode),
     ['RC01']
   )
-  assert.equal(filterSerahRows(rows, { status: 'all', item: 'Roti Keju', from: '', to: '' }).length, 2)
+  assert.equal(filterSerahRows(rows, { statuses: [], items: ['Roti Keju'], from: '', to: '' }).length, 2)
+  // dua status = gabungan hasil tiap status (union), bukan irisan
+  assert.deepEqual(
+    filterSerahRows(rows, { statuses: ['terkirim', 'cancelled'], items: [], from: '', to: '' }).map((r) => r.itemCode),
+    ['RC01', 'RK03']
+  )
+  // dua item juga union
+  assert.equal(
+    filterSerahRows(rows, { statuses: [], items: ['Roti Coklat', 'Krim Kopi'], from: '', to: '' }).length,
+    3
+  )
+  // AND antar field: status ∪ status lalu dipotong item
+  assert.deepEqual(
+    filterSerahRows(rows, { statuses: ['request', 'cancelled'], items: ['Roti Keju'], from: '', to: '' }).map((r) => r.itemCode),
+    ['RK03']
+  )
 })
 
 test('filterSerahRows rentang tanggal createdAt; tanpa tanggal dikecualikan saat rentang aktif', () => {
-  const f = { status: 'all', item: 'all', from: '2026-09-17', to: '2026-09-18' }
+  const f = { statuses: [], items: [], from: '2026-09-17', to: '2026-09-18' }
   assert.deepEqual(filterSerahRows(rows, f).map((r) => r.itemCode), ['RC01', 'RC01'])
-  const onlyFrom = { status: 'all', item: 'all', from: '2026-09-18', to: '' }
+  const onlyFrom = { statuses: [], items: [], from: '2026-09-18', to: '' }
   assert.deepEqual(filterSerahRows(rows, onlyFrom).map((r) => r.itemCode), ['RC01', 'RK03'])
 })
 
-test('serahFilterCount menghitung filter aktif — rentang tanggal = SATU filter (FU79d)', () => {
-  assert.equal(serahFilterCount({ status: 'all', item: 'all', from: '', to: '' }), 0)
-  assert.equal(serahFilterCount({ status: 'terkirim', item: 'all', from: '', to: '' }), 1)
-  assert.equal(serahFilterCount({ status: 'all', item: 'Krim Kopi', from: '2026-09-01', to: '2026-09-30' }), 2)
-  assert.equal(serahFilterCount({ status: 'all', item: 'all', from: '2026-09-01', to: '' }), 1)
-  assert.equal(serahFilterCount({ status: 'all', item: 'all', from: '', to: '2026-09-30' }), 1)
-  assert.equal(serahFilterCount({ status: 'request', item: 'Krim Kopi', from: '2026-09-01', to: '2026-09-30' }), 3)
+test('serahFilterCount menghitung BARIS filter — rentang dan multi-nilai = SATU baris', () => {
+  assert.equal(serahFilterCount({ statuses: [], items: [], from: '', to: '' }), 0)
+  assert.equal(serahFilterCount({ statuses: ['terkirim'], items: [], from: '', to: '' }), 1)
+  assert.equal(serahFilterCount({ statuses: ['terkirim', 'draft'], items: [], from: '', to: '' }), 1) // 2 nilai = 1 baris
+  assert.equal(serahFilterCount({ statuses: [], items: ['Krim Kopi'], from: '2026-09-01', to: '2026-09-30' }), 2)
+  assert.equal(serahFilterCount({ statuses: [], items: [], from: '2026-09-01', to: '' }), 1)
+  assert.equal(serahFilterCount({ statuses: ['request'], items: ['Krim Kopi', 'Roti Keju'], from: '2026-09-01', to: '2026-09-30' }), 3)
 })
