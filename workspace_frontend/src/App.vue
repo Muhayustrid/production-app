@@ -12,7 +12,7 @@ import StockAvailabilityPage from './StockAvailabilityPage.vue'
 import LainnyaPage from './LainnyaPage.vue'
 import { labelPrintPrompt } from './label-print-prompt.js'
 import { workOrderLabelUrl } from './work-order-label.js'
-import { workOrders, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, loadCompanyFilter, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
+import { workOrders, listState, loadList, loadListPreferences, loadSuggestionPreferences, loadUiPreferences, loadCompanyFilter, state, uiTopLoading, handoverBoard, handoverRequests, handoverState, loadBoard, formOrderState, dashboardState } from './store.js'
 import { activeTotal } from './dashboard.js'
 import { ClipboardCheck, ClipboardList, ChevronDown, LayoutGrid, MoreHorizontal, PackageSearch, RotateCw, Settings, HelpCircle, Factory, Package, Wheat } from 'lucide-vue-next'
 
@@ -122,10 +122,20 @@ const currentUser = window.workspace_user || 'Pengguna ERPNext'
 const initials = currentUser.split(' ').slice(0, 2).map(s => s[0]).join('')
 // FU72: landing Dashboard tidak memuat daftar WO — badge pakai ringkasan tahap
 // dari dashboard_summary; setelah daftar dimuat, hitungan daftar yang menang.
+// FU112 (temuan E2E): sejak pagination (FU94) "daftar" hanyalah SATU halaman —
+// menghitung darinya bisa menampilkan 0 padahal ada puluhan WO aktif (8081:
+// halaman-1 kebetulan semua Completed → badge hilang). Aturan baru:
+// (1) daftar LENGKAP termuat (total == baris) → hitung dari daftar (bisa
+//     ter-filter, perilaku lama); (2) selain itu ringkasan tahap LIVE dari
+//     server (dashboard_summary) menang; (3) ringkasan belum ada (buka
+//     langsung #/wo) → perkiraan dari baris yang termuat (perilaku lama).
 const activeCount = computed(() => {
-  if (state.loaded) return workOrders.filter((w) => w.stage !== 'completed').length
+  if (state.loaded && listState.total > 0 && workOrders.length >= listState.total) {
+    return workOrders.filter((w) => w.stage !== 'completed').length
+  }
   const stages = dashboardState.summary?.stages
-  return stages ? activeTotal(stages) : 0
+  if (stages) return activeTotal(stages)
+  return state.loaded ? workOrders.filter((w) => w.stage !== 'completed').length : 0
 })
 const handoverCount = computed(() =>
   handoverRequests.filter((r) => r.lane === 'request').length

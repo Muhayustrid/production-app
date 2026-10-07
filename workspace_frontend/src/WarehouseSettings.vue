@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { Warehouse } from 'lucide-vue-next'
 import { call, loadSuggestionPreferences, saveSuggestionPreferences, suggestionPreferences, uiState, uiTopLoading, saveUiPreferences } from './store.js'
 import LinkInput from './LinkInput.vue'
@@ -85,8 +85,14 @@ async function toggleSuggestions() {
 }
 
 // FU70: ukuran font per-user — tersimpan saat digeser, berlaku langsung
+// FU112: preferensi dimuat TIDAK di-await saat boot (App onMounted); bila
+// halaman ini di-refresh langsung, salinan lokal di atas masih nilai default
+// saat respons server tiba — ikuti uiState agar slider tak menampilkan angka
+// basi (zoom sudah benar; hanya tampilan slider yang salah). Saat menyimpan
+// (fontSaving) jangan timpa nilai yang sedang digeser.
 const fontScale = ref(uiState.fontScale)
 const fontSaving = ref(false)
+watch(() => uiState.fontScale, (v) => { if (!fontSaving.value) fontScale.value = v })
 async function onFontScaleChange() {
   fontSaving.value = true
   error.value = ''
