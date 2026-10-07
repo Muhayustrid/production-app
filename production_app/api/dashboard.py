@@ -47,7 +47,7 @@
 # `series` per UOM (krim kopi Pcs vs dough Pack tidak pernah dijumlahkan;
 # frontend menyediakan pemilih UOM, default dominant_uom milik window).
 
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 
 import frappe
 from frappe.defaults import get_user_default, set_user_default
@@ -62,6 +62,7 @@ from frappe.utils import (
 	today,
 )
 
+from production_app.api.filter_params import filter_list as _filter_list
 from production_app.api.handover import (
 	ROLE_MANAJER_PRODUKSI,
 	ROLES_GUDANG,
@@ -158,12 +159,35 @@ RANGE_WO_FIELDS = (
 )
 
 
+def _satu_nilai(value, name):
+	"""FU102: param halaman Dashboard bernilai TUNGGAL (preset/dari/sampai/
+	mode) — perluasan FU100 yang sama: terima skalar lama (termasuk date/
+	datetime native dari pemanggil lama, distringkan dulu), list satu nilai,
+	atau string JSON satu nilai. Daftar kosong = param tidak dikirim
+	(perilaku lama/default server). Dua nilai atau lebih ditolak (limit 1):
+	satu rentang/window tidak bisa digabung dari beberapa nilai, jadi server
+	menolak alih-alih diam-diam memilih satu."""
+	if value is None:
+		return None
+	if isinstance(value, (date, datetime)):  # pemanggil lama: date/datetime native
+		value = str(value)
+	values = _filter_list(value, name, limit=1)
+	return values[0] if values else None
+
+
 def _rentang_preset(preset, dari, sampai):
 	"""(dari, sampai, preset) resolved ISO dari preset FU76 atau tanggal
 	kustom; default hari ini = perilaku lama. Tanggal server yang
 	otoritatif — preset di-resolve di sini, bukan di jam browser user.
 	dari>sampai / span > DASHBOARD_MAX_DAYS / kustom tanpa tanggal /
-	preset tak dikenal → ValidationError (HTTP 417 konvensi app)."""
+	preset tak dikenal → ValidationError (HTTP 417 konvensi app).
+
+	FU102: ketiga param lolos `_satu_nilai` dulu — skalar lama, list satu
+	nilai, dan string JSON satu nilai semuanya diterima; rentang adalah
+	nilai TUNGGAL, jadi dua nilai atau lebih ditolak (bukan digabung)."""
+	preset = _satu_nilai(preset, "preset")
+	dari = _satu_nilai(dari, "dari")
+	sampai = _satu_nilai(sampai, "sampai")
 	hari = getdate(today())
 	if not preset or preset == PRESET_HARI_INI:
 		return str(hari), str(hari), PRESET_HARI_INI
@@ -559,7 +583,11 @@ def dashboard_daily(company=None, mode=None):
 	seri pertama). Basis tanggal sengaja berbeda: hasil = posting_date SE
 	Manufacture, rencana = planned_start_date WO — di-caption frontend.
 	Permission native get_list: tanpa izin → series kosong (endpoint tetap
-	hidup, pola FU65). Mode tak dikenal → ValidationError (417 konvensi)."""
+	hidup, pola FU65). Mode tak dikenal → ValidationError (417 konvensi).
+
+	FU102: `mode` juga lolos `_satu_nilai` — skalar/list-satu/JSON-satu sama,
+	daftar kosong jatuh ke default minggu (perilaku lama)."""
+	mode = _satu_nilai(mode, "mode")
 	mode = DAILY_MODE_MINGGU if not mode else str(mode)
 	hari = getdate(today())
 	if mode == DAILY_MODE_MINGGU:

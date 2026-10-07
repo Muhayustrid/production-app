@@ -5,13 +5,14 @@
 # / has_permission. The stage is ALWAYS derived from current documents here —
 # the UI never saves or sends a stage.
 
-import json
 import math
 
 import frappe
 from frappe import _
 from frappe.defaults import get_user_default, set_user_default
 from frappe.utils import cint, flt
+
+from production_app.api.filter_params import filter_list as _filter_list
 
 DOCTYPE = "Work Order"
 SUGGESTION_DEFAULT_KEY = "production_app_metadata_suggestions"
@@ -127,38 +128,9 @@ def derive_stage(wo, operations=None):
 	return STAGE_FINISH
 
 
-def _filter_list(value, name, limit=100):
-	"""FU100: nilai filter multi-value — terima list asli (JSON body), string
-	JSON, atau skalar lama (pemanggil FU72 dst tak berubah); kembalikan
-	list[str] bersih (trim, buang kosong, dedupe). [] = tanpa filter — JANGAN
-	pernah membangun IN (). Nilai dikirim sebagai bound parameter, bukan
-	f-string, jadi tidak ada celah injeksi; identifier tetap milik server
-	(pola whitelist token `order` FU94). Melebihi `limit` → ValidationError."""
-	if value is None:
-		return []
-	if isinstance(value, str):
-		text = value.strip()
-		if not text:
-			return []
-		try:
-			parsed = json.loads(text)
-		except ValueError:
-			parsed = [text]
-		if not isinstance(parsed, list):
-			parsed = [parsed]
-	elif isinstance(value, (list, tuple)):
-		parsed = list(value)
-	else:
-		frappe.throw(f"Filter {name} tidak valid.", exc=frappe.ValidationError)
-	out, seen = [], set()
-	for item in parsed:
-		item = str(item or "").strip()
-		if item and item not in seen:
-			seen.add(item)
-			out.append(item)
-	if len(out) > limit:
-		frappe.throw(f"Filter {name} maksimal {limit} nilai.", exc=frappe.ValidationError)
-	return out
+# FU100: _filter_list kini tinggal di production_app.api.filter_params (helper
+# bersama rollout filter multi-value) — alias diimpor di atas agar pemanggil
+# lama (termasuk test_wo_filters) tetap jalan.
 
 
 def _base_filters(search=None, production_item=None, status=None, start_date=None, end_date=None, company=None):

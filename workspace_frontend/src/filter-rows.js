@@ -28,6 +28,18 @@ export function normalizeFilters(raw, fields) {
   return out
 }
 
+// FU102: salinan satu level draft/applied. Array (nilai MultiSelect) dan
+// objek rentang WAJIB dilepas dari sumbernya — dengan salinan dangkal,
+// v-model draft[key].dari menulis objek yang sama dengan applied sehingga
+// draft terpakai sebelum Terapkan (dan sameFilters selalu menganggap sama).
+export function cloneFilters(raw) {
+  const out = {}
+  for (const [key, value] of Object.entries(raw || {})) {
+    out[key] = Array.isArray(value) ? [...value] : value && typeof value === 'object' ? { ...value } : value
+  }
+  return out
+}
+
 // badge filter = jumlah BARIS aktif (bukan jumlah nilai terpilih)
 export function countFilters(filters) {
   return Object.keys(filters || {}).length
@@ -36,4 +48,19 @@ export function countFilters(filters) {
 // bandingkan draft vs applied (commit saat panel ditutup bila berubah)
 export function sameFilters(a, b) {
   return JSON.stringify(a || {}) === JSON.stringify(b || {})
+}
+
+// FU102: validasi NILAI baris rentang (dipakai FilterRows sebelum commit —
+// perilaku lama Dashboard: tombol Terapkan mati sampai nilai sah). Rentang
+// kosong dua-duanya = baris belum diisi (tidak pernah salah). `requireBoth`
+// untuk endpoint yang wajib dari+sampai; `maxSpan` batas lebar rentang.
+export function rangeFieldError(value, field) {
+  const dari = String(value?.dari ?? '')
+  const sampai = String(value?.sampai ?? '')
+  if (!dari && !sampai) return ''
+  if (field?.requireBoth && !(dari && sampai)) return 'Pilih tanggal awal dan akhir.'
+  if (!dari || !sampai) return ''
+  const span = (new Date(sampai) - new Date(dari)) / 86400000
+  if (field?.maxSpan && span > field.maxSpan) return `Rentang maksimal ${field.maxSpan} hari.`
+  return ''
 }

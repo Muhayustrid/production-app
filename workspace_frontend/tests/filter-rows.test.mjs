@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { countFilters, normalizeFilters, sameFilters } from '../src/filter-rows.js'
+import { cloneFilters, countFilters, normalizeFilters, rangeFieldError, sameFilters } from '../src/filter-rows.js'
 
 const FIELDS = [
   { key: 'produk', type: 'multi' },
@@ -51,4 +51,36 @@ test('sameFilters membandingkan isi, bukan referensi', () => {
   assert.equal(sameFilters({ produk: ['A'] }, { produk: ['A'] }), true)
   assert.equal(sameFilters({ produk: ['A'] }, { produk: ['B'] }), false)
   assert.equal(sameFilters(null, {}), true)
+})
+
+// FU102: draft/applied tidak boleh berbagi objek (bocor lewat v-model
+// draft[key].dari sebelum Terapkan) — klon satu level memutus keduanya
+test('cloneFilters melepas array dan objek rentang dari sumbernya', () => {
+  const asli = { produk: ['A', 'B'], rentang: { dari: '2026-10-01', sampai: '2026-10-02' } }
+  const salinan = cloneFilters(asli)
+  assert.deepEqual(salinan, asli)
+  salinan.produk.push('C')
+  salinan.rentang.dari = '2026-10-09'
+  assert.deepEqual(asli.produk, ['A', 'B'])
+  assert.equal(asli.rentang.dari, '2026-10-01')
+  assert.deepEqual(cloneFilters(null), {})
+})
+
+// FU102: validasi nilai baris rentang (Dashboard: wajib dari+sampai, ≤366 hari)
+test('rangeFieldError: baris kosong belum salah, wajib dua tanggal', () => {
+  const f = { requireBoth: true, maxSpan: 366 }
+  assert.equal(rangeFieldError({ dari: '', sampai: '' }, f), '')
+  assert.equal(rangeFieldError({ dari: '2026-10-01', sampai: '' }, f), 'Pilih tanggal awal dan akhir.')
+  assert.equal(rangeFieldError({ dari: '', sampai: '2026-10-02' }, f), 'Pilih tanggal awal dan akhir.')
+  assert.equal(rangeFieldError({ dari: '2026-10-01', sampai: '2026-10-02' }, f), '')
+})
+
+test('rangeFieldError: batas lebar hanya saat dua tanggal terisi', () => {
+  const f = { requireBoth: true, maxSpan: 366 }
+  assert.equal(rangeFieldError({ dari: '2026-01-01', sampai: '2026-12-31' }, f), '') // 364 hari
+  assert.equal(
+    rangeFieldError({ dari: '2025-01-01', sampai: '2026-12-31' }, f),
+    'Rentang maksimal 366 hari.'
+  )
+  assert.equal(rangeFieldError({ dari: '2026-01-01', sampai: '2026-12-31' }, {}), '') // tanpa batas
 })

@@ -11,27 +11,27 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import Chart from 'primevue/chart'
 import ProgressBar from 'primevue/progressbar'
-import { Activity, Check, ChevronDown, ChevronRight, Gauge, Layers, Package, SearchX, TriangleAlert } from 'lucide-vue-next'
+import { Activity, Check, ChevronRight, Filter, Gauge, Layers, Package, SearchX, TriangleAlert } from 'lucide-vue-next'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
 import MeterGroup from 'primevue/metergroup'
-import Popover from 'primevue/popover'
 import Paginator from 'primevue/paginator'
 import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import { companyFilterState, dashboardState, DASH_PAGE_SIZE, loadDashboard, loadDashboardDaily, loadDashboardPage, pendingStageFilter, saveCompanyFilter, STAGE_LABELS } from './store.js'
 import { companySelectOptions, showCompanyPicker } from './company-filter.js'
+import { countFilters, normalizeFilters } from './filter-rows.js'
 import { fmtId } from './format.js'
 import {
   STAGES, YIELD_LEGEND, RANGE_PRESETS, DAILY_MODES, achievementPct, activeTotal, activityText,
   activityTime, attentionText, chartDaily, deltaPctText, donutData, isOverdue,
-  materialRowText, materialSummaryText, materialUsageHref, presetLabel, qualityPerUom, rangeParams, rangeLabel,
+  materialRowText, materialSummaryText, materialUsageHref, qualityPerUom, rangeParams, rangeLabel,
   selesaiTileLabel, targetText, topMaterialRows, uomPrimaryText, variancePctText, woProgressPct,
   woQtyText, yieldPctText, yieldSegments
 } from './dashboard.js'
-import RangeField from './RangeField.vue'
+import FilterRows from './FilterRows.vue'
 
 const summary = computed(() => dashboardState.summary)
 // FU95: company kini filter GLOBAL (companyFilterState — tersimpan per-user
@@ -55,29 +55,56 @@ async function onCompany(e) {
   reload()
 }
 
-// FU76 (revisi UI): filter rentang = satu tombol + popover — daftar preset DAN
-// input kustom dalam satu panel; Terapkan = commit, tutup popover = batal.
-// FU79e: input kustom = field tunggal RangeField (sama dgn Work Order & Stock
-// Entry) — first-to 'same' krn endpoint kustom wajib dari+sampai (pilihan
-// pertama = satu hari, langsung layak diterapkan); to < from ditukar otomatis
-// sehingga rentang tak mungkin terbalik.
+// FU102: panel filter ala Work Order (filterbtn + popoverlay + filterpanel +
+// FilterRows) — dimensi filter halaman Dashboard tetap SATU: RENTANG. Enam
+// preset FU76 dipertahankan sebagai tombol token DI ATAS baris 'Rentang'
+// (nilai preset di-resolve server, bukan nilai kolom — bentuknya bukan baris);
+// baris 'Rentang' = jalur kustom (first-to 'same' seperti FU79e: pilihan
+// pertama = satu hari, langsung layak diterapkan). Perubahan baris = DRAFT;
+// parent memicu commitIfChanged saat panel ditutup (komponen hidup di v-if).
+// FU100/FU95: company TETAP filter global di luar baris (select page-head).
 const preset = ref('hari_ini')
-const customDari = ref('')
-const customSampai = ref('')
+const applied = ref({})
+const frowsRef = ref(null)
+const frowsKey = ref(0) // remount = draft FilterRows ikut kosong saat preset dipilih
+const filterOpen = ref(false)
 const rangeOptions = RANGE_PRESETS
-const rangePop = ref(null)
-const rangeOpen = ref(false)
-const kustomDraft = ref(false)
-const rangeTooLong = computed(() => {
-  if (!customDari.value || !customSampai.value) return false
-  const span = (new Date(customSampai.value) - new Date(customDari.value)) / 86400000
-  return span > 366
-})
-// kustom layak diterapkan: kedua tanggal terisi (RangeField menyetor keduanya
-// sekaligus di pilihan pertama) & rentang ≤ 366 hari
-const kustomReady = computed(() =>
-  !!(customDari.value && customSampai.value) && !rangeTooLong.value
+const DASH_FILTER_SHAPE = [
+  // requireBoth = endpoint kustom wajib dari+sampai; maxSpan = batas server
+  // (DASHBOARD_MAX_DAYS 366): nilai tak sah ditahan FilterRows + petunjuk,
+  // bukan dikirim ke endpoint lalu ditolak (perilaku lama: Terapkan mati)
+  { key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same', requireBoth: true, maxSpan: 366, placeholder: 'Pilih rentang' }
+]
+
+const rangeRow = computed(() =>
+  applied.value.rentang?.dari && applied.value.rentang?.sampai ? applied.value.rentang : null
 )
+// badge = jumlah baris (+ company) seperti pilot FU100 (rentang lewat preset
+// token bukan baris — keaktifannya tampil sebagai label tanggal .ph-date)
+const activeFilters = computed(() =>
+  countFilters(applied.value) +
+  (showCompany.value && companyFilterState.company ? 1 : 0)
+)
+// payload rentang: baris kustom bila ada, selain itu preset token. Preset
+// 'kustom' tanpa baris lengkap tak mungkin tersimpan (onFilters menjaga),
+// tapi tetap dijaga di sini agar tak pernah mengirim kustom kosong ke server.
+const rangeParamsNow = computed(() => {
+  if (rangeRow.value) return rangeParams('kustom', rangeRow.value.dari, rangeRow.value.sampai)
+  return rangeParams(preset.value === 'kustom' ? 'hari_ini' : preset.value)
+})
+
+// commit baris (Terapkan atau panel ditutup): rentang lengkap → preset kustom;
+// baris rentang dibuang (Hapus semua) → kembali ke default hari ini. Preset
+// token yang tidak berkaitan dengan baris (mis. bulan_ini) TIDAK diubah commit
+// baris kosong — pilihan preset-nya tetap.
+function onFilters(value) {
+  const next = normalizeFilters(value, DASH_FILTER_SHAPE)
+  const same = JSON.stringify(next) === JSON.stringify(applied.value)
+  applied.value = next
+  if (next.rentang?.dari && next.rentang?.sampai) preset.value = 'kustom'
+  else if (preset.value === 'kustom') preset.value = 'hari_ini'
+  if (!same) reload()
+}
 
 const dateLabel = computed(() =>
   rangeLabel(summary.value?.preset, summary.value?.dari, summary.value?.sampai)
@@ -293,33 +320,30 @@ const activityRows = computed(() =>
 function reload() {
   dashFirst.value = 0 // ganti rentang/company = kembali ke halaman pertama
   loadedAtMs.value = Date.now()
-  if (preset.value === 'kustom' && !kustomReady.value) return // draft belum lengkap/valid
   // FU95: company dibaca store dari companyFilterState (filter global)
-  loadDashboard(rangeParams(preset.value, customDari.value, customSampai.value))
+  loadDashboard(rangeParamsNow.value)
   // grafik mengikuti company (rentang halaman tidak mempengaruhinya — filter
   // lokal minggu/bulan), dimuat ringan terpisah (pola wo_list FU77)
   loadDashboardDaily(chartMode.value)
 }
-function toggleRange(e) { rangePop.value?.toggle(e) }
+// FU102: preset token = tombol cepat DI ATAS baris (perilaku FU76: langsung
+// terapkan); memilih preset mengosongkan baris rentang kustom. Token 'Kustom'
+// membuka baris Rentang (pintunya kini baris FilterRows itu sendiri).
 function pickPreset(key) {
-  if (key === 'kustom') { kustomDraft.value = true; return }
-  kustomDraft.value = false
+  if (key === 'kustom') {
+    frowsRef.value?.addRow('rentang')
+    return
+  }
+  applied.value = {}
   preset.value = key
-  rangePop.value?.hide()
+  frowsKey.value++ // draft baris (mis. rentang separuh terisi) ikut direset
   reload()
 }
-function applyKustom() {
-  if (!kustomReady.value) return
-  preset.value = 'kustom'
-  kustomDraft.value = false
-  rangePop.value?.hide()
-  reload()
-}
-// tutup tanpa Terapkan = batal: highlight kembali ke preset terpakai
-function onPopHide() {
-  rangeOpen.value = false
-  kustomDraft.value = false
-}
+// tutup panel = commit draft baris (commitIfChanged dipicu parent karena
+// komponen hidup di v-if dan ter-unmount bersamaan dengan perubahan prop)
+watch(filterOpen, (open, sebelum) => {
+  if (!open && sebelum) frowsRef.value?.commitIfChanged()
+})
 // klik kartu tahap/legend membawa konteks dashboard ke daftar WO (FU72);
 // FU95: company TIDAK lagi satu-shot — filter #/wo memakai company global
 // yang sama (tersimpan), jadi hanya tahap/tanggal yang dioper
@@ -343,17 +367,48 @@ onMounted(reload)
       <p class="sub">Ringkasan produksi.</p>
     </div>
     <div class="ph-right">
-      <button
-        type="button"
-        class="dash-range-btn"
-        aria-haspopup="true"
-        :aria-expanded="rangeOpen ? 'true' : 'false'"
-        aria-label="Filter rentang tanggal"
-        @click="toggleRange"
-      >
-        <span>{{ presetLabel(preset) }}</span>
-        <ChevronDown :size="15" :stroke-width="2" aria-hidden="true" />
-      </button>
+      <div class="filterwrap">
+        <button
+          type="button"
+          class="btn filterbtn"
+          :class="{ active: activeFilters }"
+          aria-label="Filter"
+          :aria-expanded="filterOpen ? 'true' : 'false'"
+          @click="filterOpen = !filterOpen"
+        >
+          <Filter :size="14" :stroke-width="2" />
+          <span class="btext">Filter</span>
+          <span v-if="activeFilters" class="filtercount">{{ activeFilters }}</span>
+        </button>
+        <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
+        <Transition name="pop">
+          <div v-if="filterOpen" class="filterpanel">
+            <!-- FU76 dipertahankan: daftar preset (nilai server-resolved, bukan
+               bentuk baris) sebagai tombol token DI ATAS baris FilterRows -->
+            <div class="ffield">
+              <label>Preset rentang</label>
+              <div class="dash-rlist" role="listbox" aria-label="Preset rentang tanggal">
+                <button
+                  v-for="p in rangeOptions"
+                  :key="p.key"
+                  type="button"
+                  class="dash-ropt"
+                  :class="{ on: p.key === preset }"
+                  :aria-selected="p.key === preset ? 'true' : 'false'"
+                  @click="pickPreset(p.key)"
+                >
+                  <span>{{ p.label }}</span>
+                  <Check v-if="p.key === preset" :size="15" :stroke-width="2.2" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <!-- FU102: baris filter [Label][Nilai][x] — 'Rentang' = jalur kustom;
+               draft dikomit saat Terapkan atau saat panel ditutup. auto-add
+               dimatikan: menu tambah mengapung naik menutupi token preset. -->
+            <FilterRows ref="frowsRef" :key="frowsKey" :fields="DASH_FILTER_SHAPE" :auto-add="false" :model-value="applied" @update:model-value="onFilters" />
+          </div>
+        </Transition>
+      </div>
       <Select
         v-if="showCompany"
         :modelValue="companyValue"
@@ -368,42 +423,6 @@ onMounted(reload)
       <div class="ph-date">{{ dateLabel }}</div>
     </div>
   </div>
-
-  <!-- popover filter rentang: daftar preset + form kustom dalam SATU panel
-     (appendTo body agar tidak terpotong overflow head) — perilaku FU76b -->
-  <Popover ref="rangePop" append-to="body" class="dash-rpop" @show="rangeOpen = true" @hide="onPopHide">
-    <div class="dash-rlist" role="listbox" aria-label="Preset rentang tanggal">
-      <button
-        v-for="p in rangeOptions"
-        :key="p.key"
-        type="button"
-        class="dash-ropt"
-        :class="{ on: p.key === preset || (p.key === 'kustom' && kustomDraft) }"
-        :aria-selected="p.key === preset || (p.key === 'kustom' && kustomDraft) ? 'true' : 'false'"
-        @click="pickPreset(p.key)"
-      >
-        <span>{{ p.label }}</span>
-        <Check v-if="p.key === preset || (p.key === 'kustom' && kustomDraft)" :size="15" :stroke-width="2.2" aria-hidden="true" />
-      </button>
-    </div>
-    <div v-if="kustomDraft || preset === 'kustom'" class="dash-rkustom">
-      <div class="ffield">
-        <label>Rentang kustom</label>
-        <RangeField
-          v-model:dari="customDari"
-          v-model:sampai="customSampai"
-          first-to="same"
-        />
-      </div>
-      <p v-if="rangeTooLong" class="dash-range-hint" role="status">
-        Rentang maksimal 366 hari.
-      </p>
-      <p v-else-if="!kustomReady" class="dash-range-hint" role="status">
-        Pilih tanggal untuk memuat data.
-      </p>
-      <Button label="Terapkan" size="small" :disabled="!kustomReady" @click="applyKustom" />
-    </div>
-  </Popover>
 
   <div v-if="dashboardState.error" class="callout bad dash-error" role="alert">
     <p>Gagal memuat, coba lagi</p>
