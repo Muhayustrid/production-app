@@ -174,6 +174,12 @@ doc_events = {
 		"on_submit": "production_app.api.handover.sync_from_stock_entry",
 		"on_cancel": "production_app.api.handover.sync_from_stock_entry",
 	},
+	# Outlet guard: WO produk matang (Produk Jadi Outlet) selalu single-level —
+	# resep dough penuh hanya untuk pabrik. before_validate (bukan validate)
+	# karena Production Plan native meng-insert WO dengan ignore_validate=1.
+	"Work Order": {
+		"before_validate": "production_app.api.work_order.enforce_single_level_bom_for_outlet",
+	},
 }
 
 # Scheduled Tasks
