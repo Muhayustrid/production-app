@@ -8,10 +8,45 @@ import { ArrowDown, Filter, Inbox, Plus } from 'lucide-vue-next'
 import { PAGE_SIZE_OPTIONS, cancelFormOrder, companyFilterState, formOrders, formOrderState, loadFormOrders, normalizePageSize, retryFormOrderAttachment, saveCompanyFilter, uiTopLoading } from './store.js'
 import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { foItemsText, foStatusMeta } from './form-order.js'
+import { countFilters, normalizeFilters } from './filter-rows.js'
+import FilterRows from './FilterRows.vue'
 import { nextSortDir, sortRows } from './table-sort.js'
 
 const savedMsg = ref('')
 
+// FU105: filter riwayat ala ERPNext — Status & Item multi-nilai + rentang
+// Dibutuhkan; sepenuhnya KLIEN (riwayat dimuat penuh). Company tetap filter
+// global FU95 di luar baris.
+const applied = ref({})
+const frowsRef = ref(null)
+const FO_FILTER_SHAPE = [
+  { key: 'status', type: 'multi' },
+  { key: 'item', type: 'multi' },
+  { key: 'dibutuhkan', type: 'range' }
+]
+const FO_STATUS_OPTIONS = [
+  { value: 'menunggu', label: 'Menunggu' },
+  { value: 'terkirim', label: 'Terkirim' },
+  { value: 'draf', label: 'Draf' },
+  { value: 'batal', label: 'Dibatalkan' }
+]
+// opsi item dari item pesanan yang termuat (pola distinctItems SE)
+const foItemOptions = computed(() => {
+  const seen = new Map()
+  for (const o of formOrders) {
+    for (const it of o.items || []) {
+      if (it.name && !seen.has(it.name)) seen.set(it.name, it.code || '')
+    }
+  }
+  return [...seen.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, code]) => ({ value: name, label: code && code !== name ? `${code} · ${name}` : name }))
+})
+const foFilterFields = computed(() => [
+  { key: 'status', label: 'Status', type: 'multi', options: FO_STATUS_OPTIONS },
+  { key: 'item', label: 'Item', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih item', options: foItemOptions.value },
+  { key: 'dibutuhkan', label: 'Dibutuhkan', type: 'range', placeholder: 'Semua tanggal' }
+])
 // FU95: filter company GLOBAL — panel filter gaya WorkOrderList (satu tombol
 // Filter ber-badge + popover); pilihan tersimpan per-user di server sehingga
 // riwayat tetap tersaring setelah refresh / pindah halaman / tutup browser
@@ -19,7 +54,9 @@ const filterOpen = ref(false)
 const companies = computed(() => companyFilterState.companies)
 const showCompany = computed(() => showCompanyPicker(companies.value))
 const companyOptions = computed(() => companySelectOptions(companies.value))
-const activeFilters = computed(() => (showCompany.value && companyFilterState.company ? 1 : 0))
+const activeFilters = computed(() =>
+  countFilters(applied.value) + (showCompany.value && companyFilterState.company ? 1 : 0)
+)
 async function applyCompany(value) {
   const v = value || ''
   if (v === companyFilterState.company) return
@@ -28,10 +65,16 @@ async function applyCompany(value) {
   await saveCompanyFilter(v)
   await loadFormOrders()
 }
-function clearFilters() {
-  filterOpen.value = false
-  if (companyFilterState.company) applyCompany('')
+// FU105: commit baris saat Terapkan atau panel ditutup (pola FU100 —
+// komponen hidup di v-if panel, parent yang memicu sebelum unmount)
+function onFilters(value) {
+  const next = normalizeFilters(value, FO_FILTER_SHAPE)
+  if (JSON.stringify(next) === JSON.stringify(applied.value)) return
+  applied.value = next
 }
+watch(filterOpen, (open, sebelum) => {
+  if (!open && sebelum) frowsRef.value?.commitIfChanged()
+})
 
 // FU94: sort 3-klik riwayat (client-side — daftar dimuat penuh)
 const foSortKey = ref('')
@@ -50,8 +93,28 @@ function foSetSort(key) {
     if (!foSortDir.value) foSortKey.value = '' // klik ke-3 = normal: ikon header ikut hilang
   }
 }
+// FU105: baris filter klien — status/item array (IN dalam field, AND antar
+// baris); rentang Dibutuhkan dari scheduleDate, baris tanpa tanggal
+// dikecualikan saat rentang aktif (pola filter SE)
+const foFiltered = computed(() => {
+  const status = applied.value.status || []
+  const item = applied.value.item || []
+  const dari = applied.value.dibutuhkan?.dari || ''
+  const sampai = applied.value.dibutuhkan?.sampai || ''
+  return formOrders.filter((o) => {
+    if (status.length && !status.includes(o.status)) return false
+    if (item.length && !(o.items || []).some((i) => item.includes(i.name))) return false
+    if (dari || sampai) {
+      const day = (o.scheduleDate || '').slice(0, 10)
+      if (!day) return false
+      if (dari && day < dari) return false
+      if (sampai && day > sampai) return false
+    }
+    return true
+  })
+})
 const foSorted = computed(() =>
-  sortRows(formOrders, foSortKey.value && foSortAccessors[foSortKey.value], foSortDir.value)
+  sortRows(foFiltered.value, foSortKey.value && foSortAccessors[foSortKey.value], foSortDir.value)
 )
 
 // FU98: pagination client-side — daftar dimuat penuh (sort FU94 tetap atas
@@ -68,7 +131,9 @@ function foSetPageSize(value) {
   foPageSize.value = normalizePageSize(value)
   foPage.value = 1
 }
-watch([foSortKey, foSortDir], () => { foPage.value = 1 })
+watch([foSortKey, foSortDir, applied], () => { foPage.value = 1 }, { deep: true })
+// FU105: pesan kosong membedakan "belum ada" vs "terfilter habis"
+const foFilteredOut = computed(() => !foFiltered.value.length && countFilters(applied.value) > 0)
 
 // FU98: dialog detail baca-saja — klik baris riwayat; Batalkan (status
 // menunggu) membuka dialog konfirmasi yang sudah ada.
@@ -168,7 +233,7 @@ onMounted(async () => {
     <transition name="pop" mode="out-in">
       <span v-if="savedMsg" class="why fo-saved" role="status">{{ savedMsg }}</span>
     </transition>
-    <div v-if="showCompany" class="filterwrap">
+    <div class="filterwrap">
       <button class="btn filterbtn" :class="{ active: activeFilters }" aria-label="Filter" @click="filterOpen = !filterOpen">
         <Filter :size="14" :stroke-width="2" />
         <span class="btext">Filter</span>
@@ -177,13 +242,15 @@ onMounted(async () => {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <div class="ffield">
+          <div v-if="showCompany" class="ffield">
             <label>Company</label>
             <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
               <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
             </select>
           </div>
-          <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
+          <!-- FU105: baris filter ala ERPNext — Status & Item multi-nilai +
+               rentang Dibutuhkan; draft dikomit saat Terapkan atau panel ditutup -->
+          <FilterRows ref="frowsRef" :fields="foFilterFields" :model-value="applied" @update:model-value="onFilters" />
         </div>
       </Transition>
     </div>
@@ -197,7 +264,7 @@ onMounted(async () => {
        reuse kelas FU49); FU98: klik baris = dialog detail, aksi Batalkan di
        kolom akhir (stop propagation) -->
   <div class="wo-body fo-history">
-    <div class="wo-thead" v-if="formOrders.length">
+    <div class="wo-thead" v-if="foSorted.length">
       <button type="button" class="th-sort" :class="{ on: foSortKey === 'dokumen', asc: foSortDir === 'asc' }" @click="foSetSort('dokumen')">
         Dokumen<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
       </button>
@@ -236,10 +303,10 @@ onMounted(async () => {
       </span>
     </div>
 
-    <div v-if="!formOrders.length" class="empty-inset">
+    <div v-if="!foPaged.length" class="empty-inset">
       <span class="eico"><Inbox :size="19" :stroke-width="1.8" /></span>
-      <p class="etitle">Belum ada Form Order</p>
-      <p class="ehint">Tekan "Buat Form Order" untuk menambah permintaan.</p>
+      <p class="etitle">{{ foFilteredOut ? 'Tidak ada Form Order untuk filter ini' : 'Belum ada Form Order' }}</p>
+      <p class="ehint">{{ foFilteredOut ? 'Ubah filter atau tekan Hapus semua filter di panel.' : 'Tekan "Buat Form Order" untuk menambah permintaan.' }}</p>
     </div>
   </div>
 

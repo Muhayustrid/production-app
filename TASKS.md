@@ -1045,3 +1045,17 @@ Perubahan:
 Result: **DONE (2026-10-07).** Node **112/112**; E2E `fu104_ketersediaan_e2e.mjs` **14/14 di 8082** (36 item; union 2 grup 35 = 29 + 6; AND grup+status; tutup panel commit; Hapus semua pulih; gudang tetap tunggal; mobile 390 aman) dan **14/14 di 8081** (25 item; union 24 = 23 + 1; AND terbukti dengan status 'Aman' karena grup terpilih di stack itu tidak punya item 'Habis' — skrip uji tahan variasi data: status dicoba berurutan sampai ada baris); js `bc24f5bb…` md5=host 2 stack. Screenshot `/tmp/fu104_ketersediaan.png` (panel: baris Item Group "Bahan Baku, Barang Habis Pakai" + Stock Status "Aman", badge 2).
 
 **GOTCHA:** (a) uji AND dengan nilai status hard-coded rapuh antar stack — data 8081 tidak punya 'Habis' pada grup yang dipilih; pola aman: coba berurutan lalu asersi nilai mana pun yang terbukti. (b) Panel kosong auto-membuka menu Tambah filter (perilaku benar) — screenshot saat kondisi itu menangkap menu mengapung terbuka.
+
+## Z33. FU105 — filter ala ERPNext di halaman Form Order / riwayat (rollout FU100, halaman 4/5)
+
+Status: DONE (2026-10-07) — lanjutan rollout.
+
+Desain: riwayat Form Order (daftar penuh, klien) diberi baris filter multi-nilai: Status (multi), Item (multi terhadap item pesanan — satu FO cocok bila SALAH satu item-nya terpilih), Dibutuhkan (RangeField dari scheduleDate, semantik terbuka satu sisi). Company FU95 tetap di luar baris. Tombol lama "Hapus semua filter" digantikan "Hapus semua" milik FilterRows; fungsi `clearFilters` lama dihapus (dead code yang terbukti sudah bukan bagian bundle sejak build pertama).
+
+Perubahan:
+- `FormOrderPage.vue`: `applied` objek baris + `FO_FILTER_SHAPE`; `foItemOptions` dari item pesanan termuat (label `kode · nama`); `foFiltered` klien (status IN, item some-IN, rentang scheduleDate — baris tanpa tanggal dikecualikan saat rentang aktif); sort FU94 + pagination FU98 tetap di atas hasil filter (`foSorted` kini turunan `foFiltered`); badge = baris + company; commit draft saat Terapkan atau panel ditutup; empty-state membedakan "belum ada" vs "terfilter habis"; watch halaman reset ke 1 saat filter berubah.
+- Nol perubahan server dan nol perubahan test node.
+
+Result: **DONE (2026-10-07).** Node **112/112**; E2E `fu105_form_order_e2e.mjs` **14/14 di 8082** (5 FO live: union status 5 = 5, badge 1→commit tutup panel, Hapus semua pulih 5, dialog detail tetap hidup, mobile 390 aman) dan **8/8 di 8081** (tanpa data FO — panel + mekanik terverifikasi, asersi data di-skip); js `5919d7e5…` md5=host 2 stack. Screenshot `/tmp/fu105_form_order.png` (panel: Status "Terkirim" + Item "BB26004 · Air Galon Produksi", badge 2).
+
+**GOTCHA:** (a) panel filter terbuka memblokir klik baris tabel (overlay) — skrip uji wajib menutup panel sebelum berinteraksi dengan tabel (pola lama FU95). (b) Hapus fungsi yang sudah mati tidak mengubah hash bundle (dead-code elimination) — hash identik BUKAN bukti perubahan gagal; verifikasi lewat grep kode sumber.
