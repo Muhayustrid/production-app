@@ -36,7 +36,8 @@ import {
   variancePctText, varianceTone, weightedVarPct, woStatusSummary, woStatusText, woYieldPct,
   yieldPctText, yieldTone
 } from './dashboard.js'
-import RangeField from './RangeField.vue'
+import { normalizeFilters } from './filter-rows.js'
+import FilterRows from './FilterRows.vue'
 
 const props = defineProps({
   initialBahan: { type: String, default: '' }, // prefilled search dari query ?bahan=
@@ -48,8 +49,16 @@ const props = defineProps({
 const q = ref(props.initialBahan)
 const dari = ref(props.initialDari)
 const sampai = ref(props.initialSampai)
-// sentinel ALL — PrimeVue Select memperlakukan '' sebagai "tidak ada pilihan"
-const product = ref('ALL')
+// FU106: Produk kini baris FilterRows MULTI-NILAI (IN di server, pola FU100;
+// sebelumnya select satu nilai) + Rentang sebagai baris (first-to 'same' —
+// endpoint wajib dari+sampai). Nilai canonical dari/sampai tetap ref halaman
+// (dipakai payload & export); baris `rentang` yang menyuntingnya lewat commit.
+const applied = ref({})
+const frowsRef = ref(null)
+const MU_FILTER_SHAPE = [
+  { key: 'produk', type: 'multi' },
+  { key: 'rentang', type: 'range' }
+]
 // FU95: company = filter GLOBAL (companyFilterState, tersimpan per-user di
 // server). Param lama ?company= (tautan era FU74) tetap dihormati: diadopsi
 // ke GLOBAL setelah preferensi tersimpan termuat — tunggu whenCompanyReady
@@ -85,11 +94,57 @@ const transactions = computed(() => data.value?.transactions || [])
 const seriesList = computed(() => data.value?.series || [])
 const rangeInvalid = computed(() => !!dari.value && !!sampai.value && dari.value > sampai.value)
 
+// opsi produk dari data termuat (server mengirim products sebelum filter
+// produk — kontrak FU74); label = nama item. FU106: daftar produk mengikuti
+// RENTANG (rentang tanpa WO → products kosong) sehingga nilai terpilih bisa
+// "stale" — sertakan selalu sebagai opsi cadangan (label = kode) supaya
+// pilihan tetap terbaca dan bisa dilepas (pola itemFilterOptions halaman SE)
+const muProductOptions = computed(() => {
+  const base = (data.value?.products || []).map((p) => ({ value: p.item_code, label: p.item_name || p.item_code }))
+  const known = new Set(base.map((o) => o.value))
+  const stale = (applied.value.produk || []).filter((v) => !known.has(v)).map((v) => ({ value: v, label: v }))
+  return [...stale, ...base]
+})
+const muFilterFields = computed(() => [
+  { key: 'produk', label: 'Produk', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih produk', options: muProductOptions.value },
+  {
+    key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same',
+    resetDari: basis.value.dari, resetSampai: basis.value.sampai, placeholder: 'Pilih rentang'
+  }
+])
+// FU106: commit baris saat Terapkan atau panel ditutup (pola FU100);
+// produk → payload server; baris rentang → ref dari/sampai (baris hilang =
+// kembali rentang dasar). "Hapus semua" (baris kosong) sekaligus melepas
+// centang Cakupan — konvensi bersih total FU75.
+function onFilters(value) {
+  const next = normalizeFilters(value, MU_FILTER_SHAPE)
+  const rr = next.rentang
+  if (rr?.dari || rr?.sampai) {
+    if (rr.dari !== dari.value || rr.sampai !== sampai.value) {
+      dari.value = rr.dari || rr.sampai
+      sampai.value = rr.sampai || rr.dari
+    }
+  } else if (dari.value !== basis.value.dari || sampai.value !== basis.value.sampai) {
+    dari.value = basis.value.dari
+    sampai.value = basis.value.sampai
+  }
+  if (Object.keys(next).length === 0) overOnly.value = false
+  const same = JSON.stringify(next) === JSON.stringify(applied.value)
+  applied.value = next
+  // produk/rentang berubah → muat ulang; watcher tanggal & over-only sudah
+  // menjadwalkan sendiri, debounce melebur duplikat jadi SATU request
+  if (!same) scheduleReload()
+}
+watch(filterOpen, (open, sebelum) => {
+  if (!open && sebelum) frowsRef.value?.commitIfChanged()
+})
+
 function payload() {
   return {
     dari: dari.value,
     sampai: sampai.value,
-    productionItem: product.value === 'ALL' ? '' : product.value,
+    // array kosong = tanpa filter (filter_list server; [] tidak pernah IN ())
+    productionItem: applied.value.produk || [],
     search: q.value.trim(),
     overOnly: overOnly.value
   }
@@ -100,13 +155,17 @@ async function reload() {
   await loadMaterialUsage(payload())
   // muat pertama tanpa tanggal: isi input dari jawaban server (server
   // otoritatif atas "hari ini"); setelahnya isian user tak pernah ditimpa.
-  // Rentang dasar di-catat utk "Hapus semua filter" & hitungan badge Filter
+  // Rentang dasar di-catat utk "Hapus semua filter" & hitungan badge Filter;
+  // FU106: baris `rentang` ikut disemai (panel menampilkan rentang aktif)
   const d = materialUsageState.data
   if (firstLoad && d) {
     echoingDates = true
     if (!dari.value && d.dari) dari.value = d.dari
     if (!sampai.value && d.sampai) sampai.value = d.sampai
     basis.value = { dari: dari.value, sampai: sampai.value }
+    if (!applied.value.rentang) {
+      applied.value = { ...applied.value, rentang: { dari: dari.value, sampai: sampai.value } }
+    }
     await nextTick()
     echoingDates = false
   }
@@ -118,7 +177,6 @@ function scheduleReload() {
 watch(q, scheduleReload)
 watch([dari, sampai], () => { if (!echoingDates) scheduleReload() })
 watch(overOnly, scheduleReload)
-watch(product, scheduleReload)
 // deep link saat halaman sudah terbuka (hash berubah tanpa remount — goto
 // dalam SPA hanya hashchange): ikuti perubahan props awal dari router
 watch(
@@ -250,47 +308,39 @@ function statusSeverity(status) {
 function woHref(wo) { return '#/wo/' + encodeURIComponent(wo) }
 function noPlan(w) { return !Number(w?.planned) }
 
-// badge tombol Filter (pola WorkOrderList): produk/over-only/tanggal
-// menyimpang dari dasar masing-masing dihitung 1; FU95: company GLOBAL ikut
-// dihitung (select-nya di head, di luar panel — tetap jujur di badge)
+// badge tombol Filter (pola WorkOrderList): produk/over-only/rentang
+// menyimpang dari dasar masing-masing dihitung 1 BARIS; FU95: company GLOBAL
+// ikut dihitung (select-nya di head, di luar panel — tetap jujur di badge).
+// FU106: baris rentang == rentang dasar TIDAK dihitung (default tersemai).
 const activeFilters = computed(
   () =>
-    (product.value !== 'ALL') +
+    (applied.value.produk?.length ? 1 : 0) +
     (overOnly.value ? 1 : 0) +
     (dari.value !== basis.value.dari || sampai.value !== basis.value.sampai ? 1 : 0) +
     (showCompany.value && companyFilterState.company ? 1 : 0)
 )
-// satu aksi bersih (konvensi FU75): reset ke kondisi awal halaman — watcher
-// q/tanggal/over-only/product me-lebur lewat debounce jadi SATU reload;
-// FU95: company global juga dilepas (simpan dulu, reload lewat onCompany)
-function clearFilters() {
-  q.value = ''
-  product.value = 'ALL'
-  overOnly.value = false
-  dari.value = basis.value.dari
-  sampai.value = basis.value.sampai
-  filterOpen.value = false
-  if (companyFilterState.company) onCompany({ value: 'ALL' })
-}
 
 // FU80c: unduh .xlsx = laporan tampilan aktif (rentang + semua filter) yang
 // dibangun SERVER (4 sheet: Info/Ringkasan per Bahan/Work Order/Transaksi —
 // angka mentah numerik, bisa dihitung ulang di Excel/Sheets); pilih Produk di
 // filter = laporan pemakaian bahan satu produk dalam rentang (nama file ikut
 // produk). Gagal unduh ditandai kecil di samping tombol, layar tak dibongkar
+// FU106: produk multi — wire = JSON array (dimengerti filter_list server);
+// nama file mengikuti produk HANYA bila tepat satu dipilih (paritas server)
 const exportGagal = ref(false)
 async function exportXlsx() {
   const d = dari.value || data.value?.dari || ''
   const s = sampai.value || data.value?.sampai || ''
-  const produk = product.value === 'ALL'
-    ? ''
-    : ((data.value?.products || []).find((p) => p.item_code === product.value)?.item_name || product.value)
+  const kode = applied.value.produk || []
+  const produk = kode.length === 1
+    ? ((data.value?.products || []).find((p) => p.item_code === kode[0])?.item_name || kode[0])
+    : ''
   const params = new URLSearchParams({
     dari: d || '',
     sampai: s || '',
     // FU95: company GLOBAL (sumber yang sama dgn tabel — angka file = angka layar)
     company: companyFilterState.company || '',
-    production_item: product.value === 'ALL' ? '' : product.value,
+    production_item: kode.length ? JSON.stringify(kode) : '',
     search: q.value.trim(),
     over_only: overOnly.value ? '1' : '0'
   })
@@ -363,14 +413,9 @@ async function exportXlsx() {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <div class="ffield">
-            <label>Produk</label>
-            <select v-model="product" class="select">
-              <option value="ALL">Semua produk</option>
-              <option v-if="product !== 'ALL' && !(data?.products || []).some((p) => p.item_code === product)" :value="product">{{ product }}</option>
-              <option v-for="p in data?.products || []" :key="p.item_code" :value="p.item_code">{{ p.item_name || p.item_code }}</option>
-            </select>
-          </div>
+          <!-- FU106: baris filter ala ERPNext — Produk multi-nilai + Rentang;
+               draft dikomit saat Terapkan atau panel ditutup. Cakupan
+               (over-only) tetap kontrol tunggal di luar baris. -->
           <div class="ffield">
             <label>Cakupan</label>
             <label class="mu-check" for="bahan-over">
@@ -378,17 +423,7 @@ async function exportXlsx() {
               <span>Hanya di atas rencana</span>
             </label>
           </div>
-          <div class="ffield">
-            <label>Rentang</label>
-            <RangeField
-              v-model:dari="dari"
-              v-model:sampai="sampai"
-              :reset-dari="basis.dari"
-              :reset-sampai="basis.sampai"
-              first-to="same"
-            />
-          </div>
-          <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
+          <FilterRows ref="frowsRef" :fields="muFilterFields" :model-value="applied" @update:model-value="onFilters" />
         </div>
       </Transition>
     </div>

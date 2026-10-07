@@ -48,6 +48,7 @@ from io import BytesIO
 import frappe
 from frappe.utils import add_days, cint, flt, getdate, now_datetime, today
 
+from production_app.api.filter_params import filter_list as _filter_list
 from production_app.api.production_plan import _conversion_factor
 
 # Ambang `over` (% varian terhadap expected) — keputusan owner via mockup.
@@ -158,12 +159,14 @@ def aggregate(
 ):
 	"""Inti FU74 — lihat docstring modul untuk semantik angka. WO scope:
 	docstatus < 2, planned_start_date dalam [dari, sampai 23:59:59], company
-	opsional (get_list, User Permission otomatis); production_item & search
+	opsional (get_list, User Permission otomatis); production_item (FU106:
+	menerima LIST ala FU100 — IN, daftar kosong = tanpa filter) & search
 	& over_only meneruskan hasil agregasi (bukan query). `max_days` (FU76)
 	menimpa batas rentang default 92 hari — dashboard memakai 366.
 	`include_trace` (FU79) menambah kunci work_orders/transactions/series —
 	dipakai endpoint #/penggunaan-bahan, TIDAK oleh dashboard (payload tetap ramping)."""
 	dari, sampai = _validasi_rentang(dari, sampai, max_days)
+	produk_diminta = _filter_list(production_item, "produk")
 
 	filters = [
 		["docstatus", "<", 2],
@@ -197,8 +200,8 @@ def aggregate(
 		if w.production_item:
 			produk_map.setdefault(w.production_item, w.item_name or w.production_item)
 
-	if production_item:
-		wos = [w for w in wos if w.production_item == production_item]
+	if produk_diminta:
+		wos = [w for w in wos if w.production_item in produk_diminta]
 
 	wo_names = [w.name for w in wos]
 	wo_by = {w.name: w for w in wos}
@@ -559,7 +562,11 @@ def material_usage_xlsx(
 	Data = aggregate(include_trace) dgn parameter SAMA dgn halaman #/penggunaan-bahan →
 	angka file = angka layar. Angka mentah numerik (bukan teks berformat)
 	supaya bisa dihitung ulang di Excel/Sheets; rentang di-validasi sama
-	(ValidationError 417 bila terbalik/terlalu panjang)."""
+	(ValidationError 417 bila terbalik/terlalu panjang).
+	FU106: production_item menerima LIST ala FU100 (frontend mengirim JSON
+	array lewat query string — filter_list yang mem-parse); label Info dan
+	slug nama file mengikuti: satu produk → namanya, banyak → "N produk"
+	(nama file generik tanpa slug, paritas materialUsageXlsxFilename)."""
 	data = aggregate(
 		company=company,
 		dari=dari,
@@ -573,18 +580,27 @@ def material_usage_xlsx(
 	d, s = data["dari"], data["sampai"]
 	tgl = lambda t: getdate(t).strftime("%d-%m-%Y")  # noqa: E731
 	rentang = tgl(d) if d == s else f"{tgl(d)} s.d. {tgl(s)}"
+	# FU106: label produk untuk Info + slug nama file — satu produk pakai
+	# namanya (paritas frontend), banyak produk = generik tanpa slug
+	produk_diminta = _filter_list(production_item, "produk")
 	nama_produk = None
-	for p in data.get("products") or []:
-		if p.get("item_code") == production_item:
-			nama_produk = p.get("item_name") or production_item
-			break
-	nama_produk = nama_produk or production_item or ""
+	if len(produk_diminta) == 1:
+		kode = produk_diminta[0]
+		for p in data.get("products") or []:
+			if p.get("item_code") == kode:
+				nama_produk = p.get("item_name") or kode
+				break
+		nama_produk = nama_produk or kode
+	elif len(produk_diminta) > 1:
+		nama_produk = f"{len(produk_diminta)} produk"
+	produk_label = nama_produk or ""
+	nama_produk = nama_produk if len(produk_diminta) <= 1 else ""
 
 	info = [
 		["Ekspor Penggunaan Bahan Baku", ""],
 		["Rentang", rentang],
 		["Company", company or "Semua company"],
-		["Produk", nama_produk or "Semua produk"],
+		["Produk", produk_label or "Semua produk"],
 	]
 	if (search or "").strip():
 		info.append(["Pencarian", search.strip()])
