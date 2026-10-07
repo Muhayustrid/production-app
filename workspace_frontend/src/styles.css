@@ -2410,8 +2410,6 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .dseg-btn:hover { color: var(--brand-strong); }
 .dseg-btn.on { background: var(--brand-soft); color: var(--brand-strong); }
-.dseg-uom { width: 130px; min-width: 0; }
-.dseg-uom.p-select { height: 32px; font-size: 12.5px; }
 
 /* area chart: mengisi sisa tinggi kartu (min-height menjaga bentuk saat
    kartu donut lebih pendek) — responsive:false mematikan lebar & bikin
@@ -2435,6 +2433,27 @@ textarea.input { height: auto; padding: 8px 10px; }
   height: 100% !important;
 }
 .dcap { margin: 10px 0 0; font-size: 11.5px; color: var(--faint); }
+/* FU99: selector UOM menyatu dengan kalimat caption — kata satuan itulah
+   kontrolnya: tanpa kotak, garis putus + chevron sebagai affordance.
+   Spesifisitas .dcap-uom.p-select menang atas tema PrimeVue (pola
+   .ph-pselect); overlay dropdown ikut skin global .p-select-overlay. */
+.dcap-uom.p-select {
+  width: auto;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dashed var(--line2);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 11.5px;
+  color: var(--brand-strong);
+  font-weight: 600;
+  vertical-align: middle;
+}
+.dcap-uom .p-select-label { padding: 0 0 1px 2px; font: inherit; color: inherit; }
+.dcap-uom .p-select-dropdown { width: 1rem; color: var(--faint); }
+.dcap-uom:hover { background: var(--brand-soft); }
 
 /* donut + kisi 7 tahap berdampingan (FU78b: hemat ruang — legend pindah
    ke kanan, semua tahap tampil, kosong pudar); yield menempel kaki kartu */

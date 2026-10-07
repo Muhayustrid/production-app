@@ -106,7 +106,9 @@ const attCount = computed(() => (summary.value?.attention || []).length)
 // "Minggu ini" berlabel Senin s.d. Minggu, "Bulan ini" berlabel tanggal.
 // Server mengirim series PER UOM (krim kopi Pcs vs dough Pack tidak pernah
 // dijumlahkan): chart menampilkan satu UOM terpilih, default = dominan
-// window versi server; pemilih UOM hanya muncul bila >1 seri.
+// window versi server; pemilih UOM menyatu dengan caption di kaki chart dan
+// hanya tampil bila >1 seri (FU99 — header kartu stabil, pola kontrol di
+// tempat satuan diumumkan).
 const chartMode = ref('minggu')
 const chartUom = ref('')
 const daily = computed(() => dashboardState.daily)
@@ -483,17 +485,6 @@ onMounted(reload)
                 {{ m.label }}
               </button>
             </div>
-            <!-- UOM campuran (krim kopi Pcs vs dough Pack): satu chart satu
-               satuan — pindah seri, tidak pernah menjumlahkan -->
-            <Select
-              v-if="chartUomOptions.length > 1"
-              v-model="chartUom"
-              :options="chartUomOptions"
-              optionLabel="label"
-              optionValue="value"
-              aria-label="Satuan grafik"
-              class="ph-pselect dseg-uom"
-            />
           </div>
         </div>
         <div class="panel-body dchart-body">
@@ -508,7 +499,24 @@ onMounted(reload)
             <div class="dchart-box">
               <Chart type="bar" :data="barData" :options="barOptions" aria-label="Grafik rencana vs hasil per periode" />
             </div>
-            <p class="dcap">Dalam {{ seri.uom }} · hasil = tanggal posting, rencana = tanggal mulai WO</p>
+            <p class="dcap">
+              Dalam
+              <!-- UOM campuran (krim kopi Pcs vs dough Pack): satu chart satu
+                 satuan — pindah seri, tidak pernah menjumlahkan. FU99: selector
+                 menyatu dengan kalimat caption (kata satuan itulah kontrolnya);
+                 header kartu tinggal tab. Satu UOM → teks biasa tanpa kontrol. -->
+              <Select
+                v-if="chartUomOptions.length > 1"
+                v-model="chartUom"
+                :options="chartUomOptions"
+                optionLabel="label"
+                optionValue="value"
+                aria-label="Satuan grafik"
+                class="dcap-uom"
+              />
+              <template v-else>{{ seri.uom }}</template>
+              · hasil = tanggal posting, rencana = tanggal mulai WO
+            </p>
           </template>
           <p v-else class="dash-none">Belum ada rencana maupun hasil dalam periode ini</p>
         </div>

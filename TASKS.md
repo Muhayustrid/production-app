@@ -936,3 +936,18 @@ Result: **DONE (2026-10-07).** Node **100/100**; build js `ad2f9f07…`/css `d74
 Revisi FU98c (laporan lanjutan user + screenshot pane): prop `paginator` PrimeVue DataTable **selalu merender bar walau 0 baris** — tabel Analisis kosong menampilkan bar «‹›» menyala sendirian (dan tab Work order/Transaksi membawa cacat yang sama sejak FU94). Fix: `:paginator="<list>.length > PAGE"` dinamis di ketiga DataTable (analisis/WO/Transaksi) — bar hanya saat >10 baris, konsisten dengan v-if Paginator tab trace. Verifikasi bench 8082 **2/2**: rentang kosong → 0 bar; rentang 1 Sep–7 Okt → 10/hal + bar. js `4c9d1b92…` md5 = host 2 stack; tab IAB user direload.
 
 **GOTCHA:** prop `paginator` (boolean statis) di PrimeVue 4 TIDAK menyembunyikan bar untuk tabel kosong/satu halaman — pakai binding dinamis `:paginator="rows.length > pageSize"` bila ingin bar hanya muncul saat multi-halaman; pola `v-if` Paginator standalone (tab trace) sudah benar sejak awal.
+
+## Z26. FU99 — selector UOM kartu Kinerja Output pindah ke kalimat caption (keluhan user)
+
+Status: DONE (2026-10-07) — keluhan user: "pas mode bulan ini ada mode uomnya trus pas mingguan ga ada... idealnya gimana yak?... posisi dropdown uomnya jelek banget, menurutku udh oke tab minggu dan bulannya di kanan".
+
+Akar: pemilih UOM berada di `.dhead-tools` header kartu dengan `v-if="chartUomOptions.length > 1"` (Dashboard.vue:489) — kotak Select 130px menyamping tab segmen. Header pun berubah-ubah mengikuti data: pekan kosong (Senin 5–Minggu 11 Okt, nol series dari `dashboard_daily`) menampilkan empty state tanpa selector; bulan ber-UOM-campuran (Pcs krim kopi + Pack dough) menampilkan selector. Diskusi desain: user sempat usul filter global ala FU95, lalu memilih opsi lain (AskUserQuestion): dropdown menyatu dengan kalimat caption.
+
+Perubahan (Dashboard.vue + styles.css, frontend murni):
+- Hapus `<Select class="ph-pselect dseg-uom">` dari header — kartu tinggal tab Minggu/Bulan (siluet stabil di semua kondisi data).
+- Caption kaki chart menjadi kontrol: `Dalam <Select v-if="chartUomOptions.length > 1" class="dcap-uom"> · hasil = tanggal posting, rencana = tanggal mulai WO`; satu UOM → teks biasa `Dalam {{ seri.uom }}`; kosong → `dash-none` (caption ikut hilang, seperti semula).
+- Skin `.dcap-uom.p-select`: height 18px, tanpa kotak (border 0 + border-bottom dashed var(--line2)), brand-strong 11.5px semibold, chevron 1rem faint, hover brand-soft — affordance teks-dropdown; spesifisitas pola `.ph-pselect` menang atas tema @layer PrimeVue; overlay ikut skin global `.p-select-overlay`. Rule `.dseg-uom` dihapus.
+
+Result: **DONE (2026-10-07).** Node **100/100**; build js `8e420cd0…`/css `d31e6527…` HTTP md5 = host 8081 & 8082. E2E bench 8082 (data live user, read-only) **10/10 PASS**: header kartu bebas Select di mode bulan & minggu; caption punya `.dcap-uom` di bulan; teks caption "Dalam Pack · hasil = tanggal posting..."; ganti UOM Pack→Pcs via caption (overlay buka/pilih/tutup benar); minggu kosong → `dash-none` tanpa caption; select company page-head tidak ikut terhapus; mobile 390 tanpa overflow horizontal. Screenshot `/tmp/fu99_card_tutup.png`, `/tmp/fu99_overlay_stabil.png` (overlay: Pack ter-highlight + Pcs, panel putih utuh), `/tmp/fu99_mobile.png`.
+
+**GOTCHA:** screenshot bench yang diambil segera setelah klik pembuka overlay menangkap animasi enter (`p-anchored-overlay-*`) sehingga panel tampak samar/tembus — mirip gotcha IAB "Popover SAMAR" tetapi versi transisi; buktikan sehat lewat computed style (backgroundColor rgb(255,255,255), opacity 1, z-index 1001, elementFromPoint = `.p-select-list`) + tangkapan ulang setelah jeda ~600 ms, jangan langsung curiga CSS.
