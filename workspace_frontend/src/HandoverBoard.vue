@@ -242,10 +242,25 @@ const itemFilterOptions = computed(() => {
   return [...stale, ...base]
 })
 const seFilterFields = computed(() => [
+  // FU107: Company = baris TUNGGAL (immediate) yang selalu tampil di kedua
+  // mode panel; nilainya tetap filter GLOBAL FU95 (tersimpan per-user,
+  // diterapkan segera) — presentasi pindah ke daftar baris
+  ...(showCompany.value
+    ? [{
+        key: 'company', label: 'Company', type: 'select', immediate: true,
+        ariaLabel: 'Filter company',
+        options: companyOptions.value
+      }]
+    : []),
   { key: 'status', label: 'Status', type: 'multi', options: SE_STATUS_OPTIONS },
   { key: 'item', label: 'Item', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih item', options: itemFilterOptions.value },
   { key: 'dibuat', label: 'Dibuat', type: 'range', placeholder: 'Semua tanggal' }
 ])
+// FU107: nilai baris immediate (bukan draft) — dari state global FU95
+const immediateValues = computed(() => ({ company: companyFilterState.company }))
+function onImmediate(key, value) {
+  if (key === 'company') applyCompany(value)
+}
 // commit baris (Terapkan atau panel ditutup) — normalisasi kontrak baris
 function onSeFilters(value) {
   const next = normalizeFilters(value, SE_FILTER_SHAPE)
@@ -479,26 +494,26 @@ onMounted(() => {
       <Transition name="pop">
         <div v-if="lotFilterOpen" class="filterpanel">
           <template v-if="viewMode === 'tabel'">
-            <div v-if="showCompany" class="ffield">
-              <label>Company</label>
-              <!-- FU95: filter company GLOBAL — berlaku di semua halaman,
-                   tersimpan per-user (selamat dari refresh/tutup browser) -->
-              <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
-                <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-              </select>
-            </div>
-            <!-- FU103: baris filter ala ERPNext (status/item multi-nilai +
-               rentang dibuat) — draft dikomit saat Terapkan atau panel ditutup -->
-            <FilterRows ref="seFrowsRef" :fields="seFilterFields" :model-value="seApplied" @update:model-value="onSeFilters" />
+            <!-- FU103/FU107: baris filter ala ERPNext (Company immediate +
+               status/item multi-nilai + rentang dibuat) — draft dikomit saat
+               Terapkan atau panel ditutup -->
+            <FilterRows
+              ref="seFrowsRef"
+              :fields="seFilterFields"
+              :immediate="immediateValues"
+              :model-value="seApplied"
+              @update:model-value="onSeFilters"
+              @immediate-change="onImmediate"
+            />
           </template>
           <template v-else>
-            <div v-if="showCompany" class="ffield">
-              <label>Company</label>
-              <!-- FU95: filter company GLOBAL (papan kanban ikut ter-scope server) -->
-              <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
-                <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-              </select>
-            </div>
+            <!-- FU107: panel kanban punya baris Company sendiri (immediate) -->
+            <FilterRows
+              :fields="seFilterFields.filter((f) => f.immediate)"
+              :immediate="immediateValues"
+              :model-value="{}"
+              @immediate-change="onImmediate"
+            />
             <div class="ffield">
               <label>Lot masuk</label>
               <RangeField v-model:dari="lotFrom" v-model:sampai="lotTo" placeholder="Semua tanggal" />

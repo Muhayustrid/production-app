@@ -43,6 +43,15 @@ const foItemOptions = computed(() => {
     .map(([name, code]) => ({ value: name, label: code && code !== name ? `${code} · ${name}` : name }))
 })
 const foFilterFields = computed(() => [
+  // FU107: Company = baris TUNGGAL (immediate) — nilai tetap filter GLOBAL
+  // FU95 tersimpan per-user, diterapkan segera saat diganti
+  ...(showCompany.value
+    ? [{
+        key: 'company', label: 'Company', type: 'select', immediate: true,
+        ariaLabel: 'Filter company',
+        options: companyOptions.value
+      }]
+    : []),
   { key: 'status', label: 'Status', type: 'multi', options: FO_STATUS_OPTIONS },
   { key: 'item', label: 'Item', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih item', options: foItemOptions.value },
   { key: 'dibutuhkan', label: 'Dibutuhkan', type: 'range', placeholder: 'Semua tanggal' }
@@ -57,6 +66,11 @@ const companyOptions = computed(() => companySelectOptions(companies.value))
 const activeFilters = computed(() =>
   countFilters(applied.value) + (showCompany.value && companyFilterState.company ? 1 : 0)
 )
+// FU107: nilai baris immediate (bukan draft) — dari state global FU95
+const immediateValues = computed(() => ({ company: companyFilterState.company }))
+function onImmediate(key, value) {
+  if (key === 'company') applyCompany(value)
+}
 async function applyCompany(value) {
   const v = value || ''
   if (v === companyFilterState.company) return
@@ -242,15 +256,17 @@ onMounted(async () => {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <div v-if="showCompany" class="ffield">
-            <label>Company</label>
-            <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
-              <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-            </select>
-          </div>
-          <!-- FU105: baris filter ala ERPNext — Status & Item multi-nilai +
-               rentang Dibutuhkan; draft dikomit saat Terapkan atau panel ditutup -->
-          <FilterRows ref="frowsRef" :fields="foFilterFields" :model-value="applied" @update:model-value="onFilters" />
+          <!-- FU105/FU107: baris filter ala ERPNext — Company immediate +
+               Status & Item multi-nilai + rentang Dibutuhkan; draft dikomit
+               saat Terapkan atau panel ditutup -->
+          <FilterRows
+            ref="frowsRef"
+            :fields="foFilterFields"
+            :immediate="immediateValues"
+            :model-value="applied"
+            @update:model-value="onFilters"
+            @immediate-change="onImmediate"
+          />
         </div>
       </Transition>
     </div>

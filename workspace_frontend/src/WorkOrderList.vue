@@ -73,6 +73,16 @@ const WO_FILTER_SHAPE = [
   { key: 'jadwal', type: 'range' }
 ]
 const filterFields = computed(() => [
+  // FU107: Company = baris TUNGGAL (immediate) yang selalu tampil; nilainya
+  // tetap filter GLOBAL FU95 (tersimpan per-user di server, diterapkan
+  // segera saat diganti) — hanya presentasinya yang pindah ke daftar baris
+  ...(showCompany.value
+    ? [{
+        key: 'company', label: 'Company', type: 'select', immediate: true,
+        ariaLabel: 'Filter company',
+        options: companyOptions.value
+      }]
+    : []),
   {
     key: 'produk', label: 'Produk', type: 'multi', filter: true,
     placeholder: 'Pilih satu atau lebih produk',
@@ -120,6 +130,12 @@ async function applyCompany(value) {
   companyFilterState.company = v
   await saveCompanyFilter(v)
   reload()
+}
+// FU107: baris Company = kontrol immediate (bukan draft) — perubahan langsung
+// diteruskan ke applyCompany; nilai ditampilkan dari state global FU95
+const immediateValues = computed(() => ({ company: companyFilterState.company }))
+function onImmediate(key, value) {
+  if (key === 'company') applyCompany(value)
 }
 
 function filterPayload() {
@@ -289,18 +305,18 @@ function removeStageChip() {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-        <div v-if="showCompany" class="ffield">
-          <label>Company</label>
-          <!-- FU95: filter company GLOBAL — pilihan ini berlaku di semua
-               halaman dan tersimpan per-user (tidak hilang saat refresh);
-               FU100: di luar baris filter, tak ikut "Hapus semua" -->
-          <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
-            <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-        </div>
+        <!-- FU107: Company kini BARIS di dalam daftar filter (kontrol tunggal
+             yang diterapkan segera, nilai tetap filter GLOBAL FU95 tersimpan
+             per-user); sebelumnya select terpisah di atas baris -->
         <!-- FU100: baris filter ERPNext-style (multi-value, tambah/hapus
              baris, Terapkan/Hapus semua) — pilot halaman Work Order -->
-        <FilterRows ref="frowsRef" :fields="filterFields" v-model="applied" />
+        <FilterRows
+          ref="frowsRef"
+          :fields="filterFields"
+          :immediate="immediateValues"
+          v-model="applied"
+          @immediate-change="onImmediate"
+        />
         </div>
       </Transition>
     </div>

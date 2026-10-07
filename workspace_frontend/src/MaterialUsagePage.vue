@@ -18,7 +18,6 @@ import Chart from 'primevue/chart'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
 import Paginator from 'primevue/paginator'
-import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
@@ -65,15 +64,21 @@ const MU_FILTER_SHAPE = [
 // supaya nilai tersimpan tidak dilawan balapan waktu load (lihat onMounted).
 const companies = computed(() => companyFilterState.companies)
 const showCompany = computed(() => showCompanyPicker(companies.value))
-const companyOptions = computed(() => companySelectOptions(companies.value, 'ALL'))
-const companyValue = computed(() => companyFilterState.company || 'ALL')
-async function onCompany(e) {
-  const raw = e && e.value !== undefined ? e.value : (e?.target?.value ?? 'ALL')
-  const v = raw === 'ALL' ? '' : String(raw)
-  if (v === companyFilterState.company) return
-  companyFilterState.company = v
-  await saveCompanyFilter(v)
+// FU107: setter tunggal company (baris immediate di panel; head Select lama
+// sudah tidak ada) — '' = Semua company; label 'Semua company' utk baris
+async function setCompany(v) {
+  const val = v || ''
+  if (val === companyFilterState.company) return
+  companyFilterState.company = val
+  await saveCompanyFilter(val)
   reload()
+}
+// FU107: nilai baris immediate (bukan draft) — dari state global FU95;
+// label memakai sentinel '' = "Semua company" (pola companySelectOptions)
+const companyRowOptions = computed(() => companySelectOptions(companies.value))
+const immediateValues = computed(() => ({ company: companyFilterState.company }))
+function onImmediate(key, value) {
+  if (key === 'company') setCompany(value)
 }
 const overOnly = ref(false)
 // FU79b: filter panel gaya WorkOrderList — popover dari tombol Filter;
@@ -106,6 +111,15 @@ const muProductOptions = computed(() => {
   return [...stale, ...base]
 })
 const muFilterFields = computed(() => [
+  // FU107: Company = baris TUNGGAL (immediate) — nilai tetap filter GLOBAL
+  // FU95 tersimpan per-user; pindah dari select page-head ke daftar baris
+  ...(showCompany.value
+    ? [{
+        key: 'company', label: 'Company', type: 'select', immediate: true,
+        ariaLabel: 'Filter company',
+        options: companyRowOptions.value
+      }]
+    : []),
   { key: 'produk', label: 'Produk', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih produk', options: muProductOptions.value },
   {
     key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same',
@@ -379,17 +393,8 @@ async function exportXlsx() {
       <p class="sub">Konsumsi nyata dibanding rencana BOM, diskalakan ke hasil produksi.</p>
     </div>
     <div class="ph-right">
-      <Select
-        v-if="showCompany"
-        :modelValue="companyValue"
-        :options="companyOptions"
-        optionLabel="label"
-        optionValue="value"
-        inputId="bahan-company"
-        aria-label="Filter company"
-        class="ph-pselect"
-        @change="onCompany"
-      />
+      <!-- FU107: select company page-head dipindah ke baris 'Company' di
+           panel filter (immediate — perilaku FU95 tidak berubah) -->
     </div>
   </div>
 
@@ -413,9 +418,9 @@ async function exportXlsx() {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <!-- FU106: baris filter ala ERPNext — Produk multi-nilai + Rentang;
-               draft dikomit saat Terapkan atau panel ditutup. Cakupan
-               (over-only) tetap kontrol tunggal di luar baris. -->
+          <!-- FU106/FU107: baris filter ala ERPNext — Company immediate +
+               Produk multi-nilai + Rentang; draft dikomit saat Terapkan atau
+               panel ditutup. Cakupan (over-only) tetap kontrol tunggal. -->
           <div class="ffield">
             <label>Cakupan</label>
             <label class="mu-check" for="bahan-over">
@@ -423,7 +428,14 @@ async function exportXlsx() {
               <span>Hanya di atas rencana</span>
             </label>
           </div>
-          <FilterRows ref="frowsRef" :fields="muFilterFields" :model-value="applied" @update:model-value="onFilters" />
+          <FilterRows
+            ref="frowsRef"
+            :fields="muFilterFields"
+            :immediate="immediateValues"
+            :model-value="applied"
+            @update:model-value="onFilters"
+            @immediate-change="onImmediate"
+          />
         </div>
       </Transition>
     </div>

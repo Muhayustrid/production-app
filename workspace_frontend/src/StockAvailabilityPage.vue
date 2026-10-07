@@ -117,9 +117,24 @@ watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
 })
 const avFilterFields = computed(() => [
+  // FU107: Company = baris TUNGGAL (immediate) — nilai tetap filter GLOBAL
+  // FU95 tersimpan per-user, diterapkan segera; Gudang tetap kontrol tunggal
+  // server-side di bawahnya (ganti = fetch ulang)
+  ...(showCompany.value
+    ? [{
+        key: 'company', label: 'Company', type: 'select', immediate: true,
+        ariaLabel: 'Filter company',
+        options: companyOptions.value
+      }]
+    : []),
   { key: 'grup', label: 'Item Group', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih grup', options: grupOptions.value.map((g) => ({ value: g, label: g })) },
   { key: 'status', label: 'Stock Status', type: 'multi', options: AVAIL_STATUS_OPTIONS }
 ])
+// FU107: nilai baris immediate (bukan draft) — dari state global FU95
+const immediateValues = computed(() => ({ company: companyFilterState.company }))
+function onImmediate(key, value) {
+  if (key === 'company') applyCompany(value)
+}
 // badge = baris + gudang (bila bukan default server) + company global FU95
 const activeFilters = computed(() =>
   countFilters(applied.value) +
@@ -267,25 +282,25 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <div v-if="showCompany" class="ffield">
-            <label>Company</label>
-            <!-- FU95: filter company GLOBAL — pilihan berlaku di semua halaman
-                 dan tersimpan per-user (selamat dari refresh/tutup browser) -->
-            <select class="select" :value="companyFilterState.company" aria-label="Filter company" @change="applyCompany($event.target.value)">
-              <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-            </select>
-          </div>
-          <div class="ffield">
+          <!-- FU107: Company kini baris pertama di dalam daftar filter
+               (immediate — nilai tetap global FU95); Gudang menyusul sebagai
+               kontrol tunggal server-side (ganti = fetch ulang) -->
+          <FilterRows
+            ref="frowsRef"
+            :fields="avFilterFields"
+            :immediate="immediateValues"
+            :model-value="applied"
+            @update:model-value="onFilters"
+            @immediate-change="onImmediate"
+          />
+          <div class="ffield" style="margin-top: 10px">
             <label>Gudang</label>
             <!-- FU104: gudang tetap kontrol TUNGGAL server-side (ganti = fetch
-                 ulang) — dimensi konteks di luar baris, seperti company FU95 -->
+                 ulang) — dimensi konteks halaman, di luar baris filter -->
             <select v-model="gudang" class="select" aria-label="Filter gudang">
               <option v-for="g in gudangOptions" :key="g" :value="g">{{ g }}</option>
             </select>
           </div>
-          <!-- FU104: baris filter ala ERPNext — Item Group & Stock Status
-               multi-nilai; draft dikomit saat Terapkan atau panel ditutup -->
-          <FilterRows ref="frowsRef" :fields="avFilterFields" :model-value="applied" @update:model-value="onFilters" />
         </div>
       </Transition>
     </div>

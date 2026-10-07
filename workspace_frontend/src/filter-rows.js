@@ -21,6 +21,13 @@ export function normalizeFilters(raw, fields) {
       if (dari || sampai) out[key] = { dari, sampai }
       continue
     }
+    // FU107: nilai TUNGGAL (mis. Company) — teks, bukan array; kosong
+    // (mis. 'Semua company') = baris tidak aktif dan tidak ikut tersimpan
+    if (field?.type === 'select') {
+      const v = String(value ?? '').trim()
+      if (v) out[key] = v
+      continue
+    }
     const list = Array.isArray(value) ? value : value == null || value === '' ? [] : [value]
     const clean = [...new Set(list.map((v) => String(v ?? '').trim()).filter(Boolean))]
     if (clean.length) out[key] = clean

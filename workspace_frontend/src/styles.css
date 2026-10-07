@@ -563,10 +563,12 @@ textarea.input { height: auto; padding: 8px 10px; }
 }
 .p-multiselect-overlay .p-multiselect-option.p-focus,
 .p-multiselect-overlay .p-multiselect-option.p-selected { background: var(--brand-soft); color: var(--brand-strong); }
-.frows-addwrap { position: relative; }
+/* FU107: menu IN-FLOW di bawah tombol — sebelumnya absolute (bottom 100%+6px)
+   mengapung NAIK keluar panel dan menutupi toolbar/kontrol lain (laporan
+   user); kini mendorong footer turun, tanpa tumpang tindih di semua halaman */
+.frows-addwrap { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .frows-addbtn { display: inline-flex; align-items: center; gap: 4px; }
 .frows-addmenu {
-  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 2;
   min-width: 180px; padding: 6px; display: flex; flex-direction: column;
   background: #fff; border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 12px 32px -12px rgba(36, 48, 58, 0.2);

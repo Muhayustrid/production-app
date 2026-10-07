@@ -44,15 +44,22 @@ const companies = computed(() =>
   companyFilterState.companies.length ? companyFilterState.companies : (summary.value?.companies || [])
 )
 const showCompany = computed(() => showCompanyPicker(companies.value))
-const companyOptions = computed(() => companySelectOptions(companies.value, 'ALL'))
-const companyValue = computed(() => companyFilterState.company || 'ALL')
-async function onCompany(e) {
-  const raw = e && e.value !== undefined ? e.value : (e?.target?.value ?? 'ALL')
-  const v = raw === 'ALL' ? '' : String(raw)
-  if (v === companyFilterState.company) return
-  companyFilterState.company = v
-  await saveCompanyFilter(v)
+// FU107: baris Company (immediate) memakai sentinel '' = "Semua company"
+// (native select) — berbeda dari head Select lama yang butuh 'ALL'
+const companyRowOptions = computed(() => companySelectOptions(companies.value))
+// FU107: setter tunggal company (nilai tetap filter GLOBAL FU95, tersimpan
+// per-user di server; '' = Semua company)
+async function setCompany(v) {
+  const val = v || ''
+  if (val === companyFilterState.company) return
+  companyFilterState.company = val
+  await saveCompanyFilter(val)
   reload()
+}
+// FU107: nilai baris immediate (bukan draft) — dari state global FU95
+const immediateValues = computed(() => ({ company: companyFilterState.company }))
+function onImmediate(key, value) {
+  if (key === 'company') setCompany(value)
 }
 
 // FU102: panel filter ala Work Order (filterbtn + popoverlay + filterpanel +
@@ -62,7 +69,7 @@ async function onCompany(e) {
 // baris 'Rentang' = jalur kustom (first-to 'same' seperti FU79e: pilihan
 // pertama = satu hari, langsung layak diterapkan). Perubahan baris = DRAFT;
 // parent memicu commitIfChanged saat panel ditutup (komponen hidup di v-if).
-// FU100/FU95: company TETAP filter global di luar baris (select page-head).
+// FU107: company kini BARIS pertama di panel (immediate) — head select dihapus.
 const preset = ref('hari_ini')
 const applied = ref({})
 const frowsRef = ref(null)
@@ -75,6 +82,18 @@ const DASH_FILTER_SHAPE = [
   // bukan dikirim ke endpoint lalu ditolak (perilaku lama: Terapkan mati)
   { key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same', requireBoth: true, maxSpan: 366, placeholder: 'Pilih rentang' }
 ]
+// FU107: fields = baris company (immediate) + baris rentang — key company
+// TIDAK masuk DASH_FILTER_SHAPE (nilai immediate tidak pernah jadi draft)
+const dashFilterFields = computed(() => [
+  ...(showCompany.value
+    ? [{
+        key: 'company', label: 'Company', type: 'select', immediate: true,
+        ariaLabel: 'Filter company',
+        options: companyRowOptions.value
+      }]
+    : []),
+  ...DASH_FILTER_SHAPE
+])
 
 const rangeRow = computed(() =>
   applied.value.rentang?.dari && applied.value.rentang?.sampai ? applied.value.rentang : null
@@ -403,23 +422,22 @@ onMounted(reload)
               </div>
             </div>
             <!-- FU102: baris filter [Label][Nilai][x] — 'Rentang' = jalur kustom;
-               draft dikomit saat Terapkan atau saat panel ditutup. auto-add
-               dimatikan: menu tambah mengapung naik menutupi token preset. -->
-            <FilterRows ref="frowsRef" :key="frowsKey" :fields="DASH_FILTER_SHAPE" :auto-add="false" :model-value="applied" @update:model-value="onFilters" />
+               draft dikomit saat Terapkan atau saat panel ditutup. FU107:
+               Company kini baris pertama (immediate — nilai tetap global FU95). -->
+            <FilterRows
+              ref="frowsRef"
+              :key="frowsKey"
+              :fields="dashFilterFields"
+              :auto-add="false"
+              :immediate="immediateValues"
+              :model-value="applied"
+              @update:model-value="onFilters"
+              @immediate-change="onImmediate"
+            />
           </div>
         </Transition>
       </div>
-      <Select
-        v-if="showCompany"
-        :modelValue="companyValue"
-        :options="companyOptions"
-        optionLabel="label"
-        optionValue="value"
-        inputId="dash-company"
-        aria-label="Filter company"
-        class="ph-pselect"
-        @change="onCompany"
-      />
+      <!-- FU107: select company page-head dipindah ke baris 'Company' panel -->
       <div class="ph-date">{{ dateLabel }}</div>
     </div>
   </div>
