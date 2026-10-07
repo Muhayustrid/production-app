@@ -484,6 +484,7 @@ onMounted(() => {
               :model-value="seApplied"
               @update:model-value="onSeFilters"
               @clear="onClearSe"
+              @apply="lotFilterOpen = false"
             />
           </template>
           <template v-else>

@@ -410,6 +410,7 @@ async function exportXlsx() {
             :model-value="applied"
             @update:model-value="onFilters"
             @clear="onClearMu"
+            @apply="filterOpen = false"
           />
         </div>
       </Transition>

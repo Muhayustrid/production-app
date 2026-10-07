@@ -435,6 +435,7 @@ onMounted(reload)
                Company kini baris pertama (immediate — nilai tetap global FU95). -->
             <FilterRows
               ref="frowsRef"
+              @apply="filterOpen = false"
               :key="frowsKey"
               :fields="dashFilterFields"
               :auto-add="false"

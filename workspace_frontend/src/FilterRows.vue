@@ -26,7 +26,7 @@ const props = defineProps({
   // tidak ikut menu Tambah filter / commit draft.
   immediate: { type: Object, default: () => ({}) }
 })
-const emit = defineEmits(['update:modelValue', 'immediate-change', 'clear'])
+const emit = defineEmits(['update:modelValue', 'immediate-change', 'clear', 'apply'])
 
 // FU102: draft = salinan lepas dari modelValue (klon satu level — lihat
 // cloneFilters) supaya suntingan baris rentang tidak bocor ke applied.
@@ -96,6 +96,14 @@ function commit() {
   addOpen.value = false
   // lepas dari draft juga saat keluar — parent memegang salinan sendiri
   emit('update:modelValue', cloneFilters(draft.value))
+}
+// FU110: tombol Terapkan = commit + minta parent MENUTUP panelnya (permintaan
+// user "ketika udh neken diterapkan maka filternya nutup"); tutup panel tetap
+// meng-commit draft lewat commitIfChanged seperti sebelumnya.
+function applyNow() {
+  if (blocked.value) return // tombol memang disabled — penjaga kedua
+  commit()
+  emit('apply')
 }
 // FU108: "Hapus semua" = bersih TOTAL — draft dikomit kosong (baris hilang)
 // DAN parent diminta melepas filter di luar draft (kotak cari, company
@@ -186,7 +194,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 
     <div v-if="hasDraftFields" class="frows-foot">
       <button type="button" class="linkbtn filter-clear frows-clear" @click="clearAll">Hapus semua</button>
-      <button type="button" class="btn btn-sm btn-primary" :disabled="blocked" @click="commit">Terapkan</button>
+      <button type="button" class="btn btn-sm btn-primary" :disabled="blocked" @click="applyNow">Terapkan</button>
     </div>
   </div>
 </template>

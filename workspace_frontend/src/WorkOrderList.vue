@@ -281,6 +281,7 @@ function removeStageChip() {
           :fields="filterFields"
           v-model="applied"
           @clear="clearFilters"
+          @apply="filterOpen = false"
         />
         </div>
       </Transition>

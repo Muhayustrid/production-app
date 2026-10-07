@@ -273,6 +273,7 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
             :model-value="applied"
             @update:model-value="onFilters"
             @clear="onClearFilters"
+            @apply="filterOpen = false"
           />
           <div class="ffield" style="margin-top: 10px">
             <label>Gudang</label>

@@ -240,6 +240,7 @@ onMounted(async () => {
             :fields="foFilterFields"
             :model-value="applied"
             @update:model-value="onFilters"
+            @apply="filterOpen = false"
           />
         </div>
       </Transition>
