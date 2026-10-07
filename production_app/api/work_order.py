@@ -1553,11 +1553,41 @@ def finish(name):
 				frappe.throw(_("Baris barang jadi tidak valid: {0}").format(row.item_code))
 			row.qty = good / flt(row.conversion_factor or 1)
 			row.transfer_qty = good
-		elif row.s_warehouse and not row.t_warehouse and row.item_code in transferred:
-			target = flt(transferred[row.item_code]) - flt(consumed.get(row.item_code, 0.0))
-			if target > 0:
-				row.transfer_qty = target
-				row.qty = row.transfer_qty / flt(row.conversion_factor or 1)
+
+	# F03: satu item bisa hadir di lebih dari satu baris RM (BOM dengan item sama
+	# di dua baris, mis. ditautkan ke dua operasi berbeda). Seluruh baris item itu
+	# harus BERBAGI sisa rencana (transferred − consumed) — meng-assign sisa penuh
+	# ke tiap baris membuat konsumsi RM berlipat tanpa error.
+	rm_rows = [
+		row
+		for row in se.items
+		if not row.is_finished_item
+		and row.s_warehouse
+		and not row.t_warehouse
+		and row.item_code in transferred
+	]
+	rows_by_item = {}
+	for row in rm_rows:
+		rows_by_item.setdefault(row.item_code, []).append(row)
+	for item_code, rows in rows_by_item.items():
+		balance = flt(transferred[item_code]) - flt(consumed.get(item_code, 0.0))
+		if balance <= 0:
+			continue
+		if len(rows) == 1:
+			# baris tunggal: persis perilaku lama (byte-identical)
+			row = rows[0]
+			row.transfer_qty = balance
+			row.qty = row.transfer_qty / flt(row.conversion_factor or 1)
+			continue
+		weight = sum(flt(r.qty) for r in rows) or len(rows)
+		taken = 0.0
+		for row in rows[:-1]:
+			row.transfer_qty = round(balance * flt(row.qty) / weight, 6)
+			taken += row.transfer_qty
+			row.qty = row.transfer_qty / flt(row.conversion_factor or 1)
+		last = rows[-1]
+		last.transfer_qty = round(balance - taken, 6)  # baris terakhir menyerap pembulatan
+		last.qty = last.transfer_qty / flt(last.conversion_factor or 1)
 
 	se.insert()
 	se.submit()  # StockOverProductionError / valuation failures roll the request back
