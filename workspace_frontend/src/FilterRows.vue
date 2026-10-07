@@ -72,7 +72,7 @@ function clearAll() {
         :filter="!!f.filter"
         :placeholder="f.placeholder || 'Pilih satu atau lebih'"
         selectedItemsLabel="{0} dipilih"
-        :maxSelectedLabels="0"
+        :maxSelectedLabels="3"
         class="fmulti"
         :aria-label="f.label"
       />
