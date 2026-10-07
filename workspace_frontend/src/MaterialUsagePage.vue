@@ -538,7 +538,7 @@ async function exportXlsx() {
           :rowHover="true"
           @row-click="(e) => pilihBahan(e.data)"
           removableSort
-          paginator
+          :paginator="rows.length > USAGE_PAGE"
           :rows="USAGE_PAGE"
           v-model:first="analisisFirst"
         >
@@ -669,7 +669,7 @@ async function exportXlsx() {
             dataKey="wo"
             class="dash-table mu-table"
             removableSort
-            paginator
+            :paginator="workOrders.length > USAGE_PAGE"
             :rows="USAGE_PAGE"
             v-model:first="usageFirst"
           >
@@ -718,7 +718,7 @@ async function exportXlsx() {
             dataKey="se"
             class="dash-table mu-table"
             removableSort
-            paginator
+            :paginator="txnTerfilter.length > TXN_PAGE"
             :rows="TXN_PAGE"
             v-model:first="txnFirst"
           >
