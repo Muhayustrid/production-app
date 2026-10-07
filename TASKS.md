@@ -1030,3 +1030,18 @@ Perubahan:
 Result: **DONE (2026-10-07).** Node **112/112**; E2E `fu103_stock_entry_e2e.mjs` **16/16 di 8082** (data live 156 baris: union 2 status 156 = jumlah tiap status, AND status+item 39 = 39 baris, tutup panel commit, Hapus semua kembali 156, panel kanban Lot masuk terpisah, mobile 390 aman) + **9/9 di 8081** (stack tanpa data SE — jalur panel + mekanik terverifikasi, asersi data di-skip dinamis); js `15128b83…` md5=host 2 stack. Screenshot `/tmp/fu103_stock_entry.png`.
 
 **GOTCHA:** (a) TDZ Vue setup — `watch(viewMode, ...)` yang ditulis di atas deklarasi `const viewMode` melempar "Cannot access 'X' before initialization" yang HANYA muncul saat runtime halaman (vite build tetap hijau); urutan deklarasi wajib diperiksa untuk watch baru. (b) Screenshot saat transisi enter belum selesai menampilkan panel kosong/samar (gotcha lama) — shot ulang setelah jeda.
+
+## Z32. FU104 — filter ala ERPNext di halaman Ketersediaan Stock (rollout FU100, halaman 3/5)
+
+Status: DONE (2026-10-07) — lanjutan rollout.
+
+Desain: Item Group + Stock Status menjadi baris FilterRows multi-nilai; filter tetap KLIEN (item per gudang kecil — nol perubahan server). Gudang sengaja TETAP kontrol TUNGGAL di luar baris: ganti gudang = fetch ulang server (dimensi konteks halaman, sejajar posisi company FU95). Pencarian toolbar tidak disentuh. Export .xlsx tetap mengikuti seluruh baris terfilter (tervalidasi oleh E2E: jumlah tampil = total saat bersih).
+
+Perubahan:
+- `StockAvailabilityPage.vue`: `applied` objek baris + `AVAIL_FILTER_SHAPE` (grup, status); opsi grup dari `grupOptions` (dengan pencarian), status statis 3; `terfilter` memakai keanggotaan array; badge = baris + gudang(non-default) + company; commit draft saat Terapkan atau panel ditutup (`commitIfChanged` via ref parent — pola FU100/FU102); `clearFilters` mengosongkan baris lalu commit + reset gudang + company.
+- Tidak ada prefs tersimpan di halaman ini (filter reset saat reload — perilaku lama dipertahankan).
+- Nol perubahan server dan nol perubahan test node (logika filter di dalam SFC, bukan modul murni).
+
+Result: **DONE (2026-10-07).** Node **112/112**; E2E `fu104_ketersediaan_e2e.mjs` **14/14 di 8082** (36 item; union 2 grup 35 = 29 + 6; AND grup+status; tutup panel commit; Hapus semua pulih; gudang tetap tunggal; mobile 390 aman) dan **14/14 di 8081** (25 item; union 24 = 23 + 1; AND terbukti dengan status 'Aman' karena grup terpilih di stack itu tidak punya item 'Habis' — skrip uji tahan variasi data: status dicoba berurutan sampai ada baris); js `bc24f5bb…` md5=host 2 stack. Screenshot `/tmp/fu104_ketersediaan.png` (panel: baris Item Group "Bahan Baku, Barang Habis Pakai" + Stock Status "Aman", badge 2).
+
+**GOTCHA:** (a) uji AND dengan nilai status hard-coded rapuh antar stack — data 8081 tidak punya 'Habis' pada grup yang dipilih; pola aman: coba berurutan lalu asersi nilai mana pun yang terbukti. (b) Panel kosong auto-membuka menu Tambah filter (perilaku benar) — screenshot saat kondisi itu menangkap menu mengapung terbuka.

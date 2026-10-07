@@ -27,10 +27,24 @@ import {
 import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtId, fmtStampShort } from './format.js'
 import { harusKeLogin, loginRedirectUrl, stockXlsxFilename, tanggalPendek, woQtyText } from './dashboard.js'
+import { countFilters, normalizeFilters } from './filter-rows.js'
+import FilterRows from './FilterRows.vue'
 
 const q = ref('')
-const grup = ref('ALL')
-const status = ref('ALL')
+// FU104: grup + status kini baris filter ala ERPNext (multi-nilai); Gudang
+// tetap kontrol TUNGGAL di luar baris (server-side: ganti gudang = fetch
+// ulang — dimensi konteks halaman, sejajar posisi company FU95).
+const applied = ref({})
+const frowsRef = ref(null)
+const AVAIL_FILTER_SHAPE = [
+  { key: 'grup', type: 'multi' },
+  { key: 'status', type: 'multi' }
+]
+const AVAIL_STATUS_OPTIONS = [
+  { value: 'aman', label: 'Aman' },
+  { value: 'menipis', label: 'Menipis' },
+  { value: 'habis', label: 'Habis' }
+]
 const gudang = ref('')
 // FU86: pola filter WorkOrderList — satu tombol Filter ber-badge + popover;
 // gudang/grup/status masuk panel, pencarian tetap di toolbar. "Basis" =
@@ -66,20 +80,23 @@ async function applyCompany(value) {
   await reload()
 }
 
-// filter klien: kode ATAU nama, grup, status — item per gudang jumlahnya kecil
+// filter klien FU104: kode ATAU nama (cari), baris grup + status (multi:
+// IN dalam field, AND antar baris — pola FU100); item per gudang kecil
 const terfilter = computed(() => {
   const kata = q.value.trim().toLowerCase()
+  const grup = applied.value.grup || []
+  const status = applied.value.status || []
   return items.value.filter((r) => {
     if (kata && !(`${r.item_code} ${r.item_name}`.toLowerCase().includes(kata))) return false
-    if (grup.value !== 'ALL' && r.item_group !== grup.value) return false
-    if (status.value !== 'ALL' && r.status !== status.value) return false
+    if (grup.length && !grup.includes(r.item_group)) return false
+    if (status.length && !status.includes(r.status)) return false
     return true
   })
 })
 
 const PAGE = 10
 const first = ref(0)
-watch([q, grup, status, gudang], () => { first.value = 0 })
+watch([q, applied, gudang], () => { first.value = 0 }, { deep: true })
 // FU94: paginasi pindah ke paginator bawaan DataTable (sort mencakup semua
 // baris terfilter, bukan per halaman) — slice `halaman` tidak lagi dipakai
 
@@ -89,21 +106,24 @@ watch(gudang, (val) => {
   if (val && val !== (data.value?.warehouse || '')) loadStockAvailability(val)
 })
 
-function clearFilters() {
-  q.value = ''
-  grup.value = 'ALL'
-  status.value = 'ALL'
-  gudang.value = ''
-  filterOpen.value = false
-  // FU95: bersih total termasuk company global (reload setelah simpan)
-  if (companyFilterState.company) applyCompany('')
-  else reload()
+// FU104: commit baris saat Terapkan atau panel ditutup (pola FU100 —
+// komponen hidup di v-if panel, parent yang memicu sebelum unmount)
+function onFilters(value) {
+  const next = normalizeFilters(value, AVAIL_FILTER_SHAPE)
+  if (JSON.stringify(next) === JSON.stringify(applied.value)) return
+  applied.value = next
 }
-
+watch(filterOpen, (open, sebelum) => {
+  if (!open && sebelum) frowsRef.value?.commitIfChanged()
+})
+const avFilterFields = computed(() => [
+  { key: 'grup', label: 'Item Group', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih grup', options: grupOptions.value.map((g) => ({ value: g, label: g })) },
+  { key: 'status', label: 'Stock Status', type: 'multi', options: AVAIL_STATUS_OPTIONS }
+])
+// badge = baris + gudang (bila bukan default server) + company global FU95
 const activeFilters = computed(() =>
-  (grup.value !== 'ALL') +
-  (status.value !== 'ALL') +
-  (gudang.value !== basis.value.gudang) +
+  countFilters(applied.value) +
+  (gudang.value !== basis.value.gudang ? 1 : 0) +
   (showCompany.value && companyFilterState.company ? 1 : 0)
 )
 
@@ -257,27 +277,15 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
           </div>
           <div class="ffield">
             <label>Gudang</label>
+            <!-- FU104: gudang tetap kontrol TUNGGAL server-side (ganti = fetch
+                 ulang) — dimensi konteks di luar baris, seperti company FU95 -->
             <select v-model="gudang" class="select" aria-label="Filter gudang">
               <option v-for="g in gudangOptions" :key="g" :value="g">{{ g }}</option>
             </select>
           </div>
-          <div class="ffield">
-            <label>Item Group</label>
-            <select v-model="grup" class="select" aria-label="Filter item group">
-              <option value="ALL">Semua Item Group</option>
-              <option v-for="g in grupOptions" :key="g" :value="g">{{ g }}</option>
-            </select>
-          </div>
-          <div class="ffield">
-            <label>Stock Status</label>
-            <select v-model="status" class="select" aria-label="Filter status stock">
-              <option value="ALL">Semua Status</option>
-              <option value="aman">Aman</option>
-              <option value="menipis">Menipis</option>
-              <option value="habis">Habis</option>
-            </select>
-          </div>
-          <button class="linkbtn filter-clear" type="button" @click="clearFilters">Hapus semua filter</button>
+          <!-- FU104: baris filter ala ERPNext — Item Group & Stock Status
+               multi-nilai; draft dikomit saat Terapkan atau panel ditutup -->
+          <FilterRows ref="frowsRef" :fields="avFilterFields" :model-value="applied" @update:model-value="onFilters" />
         </div>
       </Transition>
     </div>
