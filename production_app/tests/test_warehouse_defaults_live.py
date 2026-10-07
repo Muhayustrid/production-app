@@ -1,7 +1,7 @@
 # FU58/FU61 — warehouse defaults LIVE: propagasi ke WO berjalan (gate company
 # remediasi (docs/superpowers/specs/2026-09-20-fu58-live-warehouse-settings-design.md §10.1).
 #
-# 16 skenario dieksekusi pada runtime terpasang. Fixtures ber-prefix FU58;
+# 16 skenario dieksekusi pada runtime terpasang (+1 guard izin write WO F15). Fixtures ber-prefix FU58;
 # IntegrationTestCase v16 = SATU TRANSAKSI PER CLASS — tiap test membangun
 # state settings-nya sendiri dulu (baseline save menyerap transisi apa pun)
 # dan hanya meng-assert terhadap nama WO fixture-nya sendiri. Skenario yang
@@ -551,6 +551,82 @@ class TestWarehouseDefaultsLive(IntegrationTestCase):
 		self.assertEqual(entry["changes"], {"source_warehouse": [self.shared_a, self.shared_b]})
 		self.assertEqual(self._header(wo.name).source_warehouse, self.shared_b)
 		self.assertEqual(self._rows(wo.name)[self.rm1], self.shared_b)
+
+	# ------------------------------- skenario 17 (F15): guard izin write WO
+	def test_fu113_17_wo_write_permission_guard_propagation_and_remediation(self):
+		"""F15: db_set tidak memeriksa permission — propagasi & remediasi harus
+		skip WO yang tidak boleh ditulis pemanggil. User Manufacturing Manager
+		murni (write Manufacturing Settings, TANPA write/read WO) menyimpan
+		default baru: settings TERSIMPAN, WO tidak tersentuh, alasan tercatat;
+		kontrol positif user dengan write WO (MM+MU) tetap menulis."""
+		self._save_defaults()  # normalisasi tanpa propagasi (pola skenario 15)
+		self._save_defaults(source_warehouse=self.src_old)  # old kosong -> tanpa propagasi
+		wo = self._make_wo(
+			bom=self.bom, company=self.company, source=self.src_old,
+			wip=self.wip_wh, fg=self.fg_wh, submit=True,
+		)
+
+		def role_user(local, roles):
+			user = frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": f"fu113.{local}.{random_string(6).lower()}@prodapp.example.com",
+					"first_name": f"FU113 {local}",
+					"send_welcome_email": 0,
+				}
+			).insert()
+			for role in roles:
+				user.append("roles", {"role": role})
+			user.save()
+			return user.name
+
+		mm = role_user("mm", ["Manufacturing Manager"])
+		mm_mu = role_user("mmmu", ["Manufacturing Manager", "Manufacturing User"])
+		# precondition (matriks role test_docperm_matrix)
+		self.assertTrue(frappe.has_permission("Manufacturing Settings", "write", user=mm))
+		self.assertFalse(frappe.has_permission("Work Order", "read", doc=wo.name, user=mm))
+		self.assertFalse(frappe.has_permission("Work Order", "write", doc=wo.name, user=mm))
+		self.assertTrue(frappe.has_permission("Work Order", "write", doc=wo.name, user=mm_mu))
+
+		# jalur propagasi: MM murni menyimpan default — settings jalan, WO skip
+		frappe.set_user(mm)
+		try:
+			saved = self._save_defaults(source_warehouse=self.src_new)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(saved["source_warehouse"], self.src_new)
+		self.assertNotIn(wo.name, [e["name"] for e in saved["propagated"]])
+		self.assertTrue(
+			any(s["name"] == wo.name and s["reason"] == "tanpa izin write Work Order" for s in saved["skipped"])
+		)
+		self.assertEqual(self._header(wo.name).source_warehouse, self.src_old)
+		self.assertEqual(self._rows(wo.name)[self.rm1], self.src_old)
+
+		# jalur remediasi helper yang sama — guard ikut berlaku
+		frappe.set_user(mm)
+		try:
+			rem = sync_warehouse_defaults_to_running_work_orders(dry_run=0)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertNotIn(wo.name, [e["name"] for e in rem["updated"]])
+		self.assertTrue(
+			any(s["name"] == wo.name and s["reason"] == "tanpa izin write Work Order" for s in rem["skipped"])
+		)
+		self.assertEqual(self._header(wo.name).source_warehouse, self.src_old)
+
+		# kontrol positif: pemegang write WO menulis lewat helper yang sama
+		frappe.set_user(mm_mu)
+		try:
+			outcome = _apply_warehouse_changes(
+				wo.name, {"source_warehouse": (self.src_old, self.src_new)}
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertIsNotNone(outcome["written"])
+		self.assertEqual(outcome["skipped"], [])
+		self.assertEqual(self._header(wo.name).source_warehouse, self.src_new)
+		self.assertEqual(self._rows(wo.name)[self.rm1], self.src_new)
+		self.assertEqual(self._rows(wo.name)[self.rm2], self.bom_row_wh)
 
 	# ---------- skenario 18 (review FU58): preview dry_run jujur soal baris
 	def test_fu58_18_dry_run_rows_only_via_source_change(self):

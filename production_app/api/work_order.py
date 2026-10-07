@@ -862,12 +862,24 @@ def _apply_warehouse_changes(wo_name, changes):
 
 	`changes = {field: (old, new)}`. Return
 	{"written": entry|None, "skipped": [alasan], "failed": [alasan]} — tidak
-	pernah raise untuk kasus bisnis agar WO lain tetap diproses."""
+	pernah raise untuk kasus bisnis agar WO lain tetap diproses.
+	F15: gate izin write Work Order diperiksa di sini (db_set tidak
+	memeriksa permission); tanpa izin -> skipped tanpa tulisan."""
 	# 1. lock baris dulu (pola prepare/transfer/finish) — menutup lost-update
 	#    terhadap tulisan operator yang bersamaan
 	frappe.db.get_value(DOCTYPE, wo_name, "name", for_update=True)
 	# 2. selalu fresh dari DB, tidak pernah salinan basi
 	wo = frappe.get_doc(DOCTYPE, wo_name)
+	# 2b. F15: db_set di bawah TIDAK memeriksa permission — pasang gate izin
+	#     write WO di sini agar propagasi (warehouse_defaults_save) dan
+	#     remediasi (sync_warehouse_defaults_to_running_work_orders) sama-sama
+	#     ter-guard; tanpa izin -> skip, TANPA tulisan apa pun.
+	if not frappe.has_permission(DOCTYPE, "write", doc=wo_name):
+		return {
+			"written": None,
+			"skipped": ["tanpa izin write Work Order"],
+			"failed": [],
+		}
 	# 3. re-verifikasi kandidat (menutup TOCTOU antara scan dan tulisan):
 	#    gagal salah satu -> skipped, TANPA tulisan apa pun
 	if wo.docstatus >= 2 or wo.status in WO_TERMINAL_STATUSES:
