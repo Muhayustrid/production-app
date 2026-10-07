@@ -76,3 +76,17 @@ class TestWoMultiFilter(unittest.TestCase):
 	def test_over_limit_throws(self):
 		with self.assertRaises(frappe.ValidationError):
 			wo_list(production_item=[f"X{i}" for i in range(101)], meta=1)
+
+	def test_stage_alias_equals_canonical(self):
+		"""FU113: kosakata lama frontend (prepacking/postpacking) harus memberi
+		hasil sama dengan nama kanonik server (pre_packing/post_packing) —
+		total DAN daftar nama. Pre-fix: alias selalu 0 baris."""
+		for alias, canonical in (("prepacking", "pre_packing"), ("postpacking", "post_packing")):
+			via_alias = wo_list(stage=[alias], meta=1, page_len=2500)
+			via_canonical = wo_list(stage=[canonical], meta=1, page_len=2500)
+			self.assertEqual(via_alias["total"], via_canonical["total"], alias)
+			self.assertEqual(
+				sorted(r["name"] for r in via_alias["rows"]),
+				sorted(r["name"] for r in via_canonical["rows"]),
+				alias,
+			)

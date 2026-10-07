@@ -78,6 +78,7 @@ from production_app.api.work_order import (
 	STAGE_PREPACKING,
 	STAGE_PERSIAPAN,
 	STAGE_SELESAI,
+	_operations_by_parent,
 	derive_stage,
 )
 
@@ -351,20 +352,6 @@ def _wo_rows(company, extra_fields=()):
 		)
 	except frappe.PermissionError:
 		return []
-
-
-def _operations_by_parent(parents):
-	"""Operasi WO dikelompokkan per parent — preload SEKALI untuk seluruh
-	baris (hindari N+1); dipakai _stages dan attention `stagnant`."""
-	operations = {}
-	if parents:
-		for op in frappe.get_all(
-			"Work Order Operation",
-			filters={"parent": ("in", parents)},
-			fields=["parent", "completed_qty", "process_loss_qty", "status"],
-		):
-			operations.setdefault(op.parent, []).append(op)
-	return operations
 
 
 def _stages(dari, sampai, company, rows):

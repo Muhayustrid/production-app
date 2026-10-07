@@ -63,6 +63,10 @@ STAGE_SELESAI = "selesai"
 STAGE_CANCELLED = "cancelled"
 STAGE_REVIEW = "review"
 
+# FU113: kosakata lama frontend (mockup) — normalisasi sekali di pintu masuk;
+# klien lain yang mengirim nama kanonik tidak berubah.
+_STAGE_ALIASES = {"prepacking": STAGE_PREPACKING, "postpacking": STAGE_POST_PACKING}
+
 # FU46: satu-satunya role yang boleh mengoreksi Data Adonan pada WO yang sudah
 # selesai (stage selesai); keputusan enforcement ada di server (prepare gate +
 # flag can_edit_persiapan di wo_detail), frontend hanya mengikuti flag.
@@ -86,6 +90,22 @@ def _operations_complete(operations):
 	so an operation short of plan must record its shortfall as process
 	loss on its Job Card before the stage can advance."""
 	return all(op.get("status") == "Completed" for op in operations)
+
+
+def _operations_by_parent(parents):
+	"""Operasi WO dikelompokkan per parent — preload SEKALI untuk seluruh
+	baris (hindari N+1); dipakai dashboard (_stages, attention stagnant) dan
+	wo_list saat filter tahap. FU113: pindahan dari dashboard.py agar kedua
+	pemanggil berbagi satu implementasi."""
+	operations = {}
+	if parents:
+		for op in frappe.get_all(
+			"Work Order Operation",
+			filters={"parent": ("in", parents)},
+			fields=["parent", "completed_qty", "process_loss_qty", "status"],
+		):
+			operations.setdefault(op.parent, []).append(op)
+	return operations
 
 
 def _has_operations(name):
@@ -231,6 +251,7 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 	start, page_len = max(int(start), 0), max(min(int(page_len), 2500), 1)
 	filters, or_filters = _base_filters(search, production_item, status, start_date, end_date, company)
 	stages = _filter_list(stage, "tahap")
+	stages = [_STAGE_ALIASES.get(s, s) for s in stages]
 	if len(stages) == 1:
 		filters.extend(_stage_filters(stages[0]))
 	order_by = WO_LIST_ORDERS.get((str(order).strip().lower() if order else "") or "default", WO_LIST_ORDERS["default"])
@@ -261,10 +282,15 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 			))
 		except frappe.PermissionError:
 			total = 0
+		# FU113: preload operasi sekali per halaman — dulu derive_stage query
+		# per baris di loop bawah (N+1); key absen = parent tanpa operasi,
+		# jadi [] milik map identik dengan hasil refetch.
+		ops_map = _operations_by_parent([r.name for r in rows])
 	else:
 		rows = fetch(0, STAGE_SCAN_LIMIT)
+		ops_map = _operations_by_parent([r.name for r in rows])
 		wanted = set(stages)
-		rows = [r for r in rows if derive_stage(r) in wanted]
+		rows = [r for r in rows if derive_stage(r, ops_map.get(r.name, [])) in wanted]
 		total = len(rows)
 		rows = rows[start : start + page_len]
 
@@ -272,7 +298,7 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 	_enrich_units(rows)
 	_handover_enrich(rows)
 	for row in rows:
-		row["stage"] = derive_stage(row)
+		row["stage"] = derive_stage(row, ops_map.get(row.name, []))
 	if int(meta):
 		return {"rows": rows, "total": total, "start": start, "page_len": page_len}
 	return rows
