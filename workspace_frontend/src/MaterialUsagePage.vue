@@ -224,7 +224,9 @@ const usageFirst = ref(0)
 const usageHalaman = computed(() =>
   workOrders.value.slice(usageFirst.value, usageFirst.value + USAGE_PAGE)
 )
-watch(data, () => { usageFirst.value = 0 })
+// FU98c: kartu Analisis penggunaan ikut 10/halaman (DataTable paginator)
+const analisisFirst = ref(0)
+watch(data, () => { usageFirst.value = 0; analisisFirst.value = 0 })
 const bahanTerpilih = computed(() =>
   txnMaterial.value ? rows.value.find((r) => r.item_code === txnMaterial.value) : null
 )
@@ -536,6 +538,9 @@ async function exportXlsx() {
           :rowHover="true"
           @row-click="(e) => pilihBahan(e.data)"
           removableSort
+          paginator
+          :rows="USAGE_PAGE"
+          v-model:first="analisisFirst"
         >
           <Column field="item_name" header="Bahan" sortable headerClass="col-bahan" bodyClass="col-bahan">
             <template #body="{ data: r }">
@@ -586,7 +591,7 @@ async function exportXlsx() {
         </DataTable>
       </div>
       <div class="an-foot">
-        <span>Menampilkan {{ rows.length }} bahan</span>
+        <span>Total {{ rows.length }} bahan</span>
         <span class="an-threshold"><i class="dot ambang" aria-hidden="true" /> Ambang: ±5%</span>
       </div>
     </section>

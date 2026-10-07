@@ -920,3 +920,15 @@ Akar: tabel detail memakai kelas `fo-grid` yang membawa `min-width: 640px` milik
 Result: **DONE (2026-10-07).** Verifikasi bench Playwright ukuran pane persis user (795×648) pada 2 MR live user (1 item & 19 item): tabel = lebar kontainer (584=584), overflow-x 0, min-width 0px, layout fixed, header ITEM|QTY|SATUAN tampil utuh — screenshot `/tmp/fu98_gui/detail_1item_fixed.png`, `/tmp/fu98_gui/detail_19item_fixed.png`. css `d74b4a72…` HTTP md5 = host 8081 & 8082 (js tak berubah `c7821dd6…`). Tab IAB user di-reload → CSS baru live.
 
 **GOTCHA (jebakan order CSS dalam file build):** override dulu kutulis di blok fo-history (±baris 750) — di file BUILD, rule `.fo-grid{min-width:640px}` (sumber baris 2174) terletak ±32KB SETELAHnya sehingga menang order pada specificity sama (0,1,0); computed min-width tetap 640px walau `table-layout:fixed` dari rule yang sama terpasang (pola menyesatkan: satu properti kena, satu tidak). Pelajaran: override atas rule yang sama harus ditempatkan SETELAH rule aslinya di styles.css, bukan dikelompokkan per-fitur; verifikasi order rule di file build via posisi byte, bukan urutan sumber.
+
+## Z25c. FU98c — kartu Analisis penggunaan (#/penggunaan-bahan) diberi pagination 10/hal (laporan user)
+
+Status: DONE (2026-10-07) — laporan user: "pada /production_workspace#/penggunaan-bahan, tabel Analisis penggunaan, Traceability produksi di tab penggunaan bahan dan workorder harusnya ada pagination jangan tampilin semuanya sekaligus".
+
+Fakta: tiga tampilan Traceability SUDAH terpaginasi 10/hal sejak FU94 (tab "Penggunaan bahan" = kartu WO dgn Paginator standalone; tab "Work order" & "Transaksi" = DataTable paginator bawaan) — bar hanya muncul bila baris >10. Yang benar-benar bolong = kartu **Analisis penggunaan** (`:value="rows"` tanpa paginator; footer "Menampilkan N bahan").
+
+Perubahan (satu file MaterialUsagePage.vue): DataTable analisis + `paginator :rows="USAGE_PAGE" v-model:first="analisisFirst"`; reset `analisisFirst` di `watch(data)` (ganti rentang/company/produk → halaman 1); footer "Menampilkan N bahan" → "Total N bahan" (jujur di bawah pagination).
+
+Result: **DONE (2026-10-07).** Node **100/100**; build js `ad2f9f07…`/css `d74b4a72…` HTTP md5 = host 8081 & 8082. E2E bench 8082 (data live user, rentang 1 Sep–7 Okt) **6/6 PASS**: analisis 10/hal + paginator 3 halaman + pindah halaman + footer "Total 25 bahan"; tab Work order 10/hal + bar; tab Transaksi 10/hal + bar; tab trace Penggunaan bahan 10 kartu + bar. Screenshot `/tmp/fu98_gui/bahan_analisis_paged.png`. Tab IAB user direload (bundle baru live).
+
+**GOTCHA:** (a) server aggregate bahan menolak rentang >92 hari ("Rentang tanggal maksimal 92 hari") — verifikasi E2E pakai rentang ≤92 hari yang memuat data. (b) RangeField dua fase (dari→sampai) lewat SATU input `.rp-input`: set value + change, JEDA antar fase (props mengalir balik — re-render antar pilih; gotcha FU80b), dan field hidup DI DALAM `.filterpanel` (buka panel dulu). (c) trace tab "Penggunaan bahan" = daftar kartu `.trace-wo`, bukan tabel — asersi E2E jangan hitung `tbody tr`.
