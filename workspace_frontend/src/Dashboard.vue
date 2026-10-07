@@ -44,22 +44,18 @@ const companies = computed(() =>
   companyFilterState.companies.length ? companyFilterState.companies : (summary.value?.companies || [])
 )
 const showCompany = computed(() => showCompanyPicker(companies.value))
-// FU107: baris Company (immediate) memakai sentinel '' = "Semua company"
-// (native select) — berbeda dari head Select lama yang butuh 'ALL'
-const companyRowOptions = computed(() => companySelectOptions(companies.value))
-// FU107: setter tunggal company (nilai tetap filter GLOBAL FU95, tersimpan
-// per-user di server; '' = Semua company)
+// FU111: filter company DIPISAH dari panel filter — select page-head DI LUAR
+// panel (permintaan user "dipisah aja deng, jadi diluar filter"). Native
+// select memakai sentinel '' = "Semua company" (pola companySelectOptions).
+const companyOptions = computed(() => companySelectOptions(companies.value))
+// setter tunggal company (nilai tetap filter GLOBAL FU95, tersimpan per-user
+// di server; '' = Semua company)
 async function setCompany(v) {
   const val = v || ''
   if (val === companyFilterState.company) return
   companyFilterState.company = val
   await saveCompanyFilter(val)
   reload()
-}
-// FU107: nilai baris immediate (bukan draft) — dari state global FU95
-const immediateValues = computed(() => ({ company: companyFilterState.company }))
-function onImmediate(key, value) {
-  if (key === 'company') setCompany(value)
 }
 
 // FU102: panel filter ala Work Order (filterbtn + popoverlay + filterpanel +
@@ -69,7 +65,7 @@ function onImmediate(key, value) {
 // baris 'Rentang' = jalur kustom (first-to 'same' seperti FU79e: pilihan
 // pertama = satu hari, langsung layak diterapkan). Perubahan baris = DRAFT;
 // parent memicu commitIfChanged saat panel ditutup (komponen hidup di v-if).
-// FU107: company kini BARIS pertama di panel (immediate) — head select dihapus.
+// FU111: company kini select TERPISAH di page-head — panel kembali murni rentang.
 const preset = ref('hari_ini')
 const applied = ref({})
 const frowsRef = ref(null)
@@ -82,28 +78,12 @@ const DASH_FILTER_SHAPE = [
   // bukan dikirim ke endpoint lalu ditolak (perilaku lama: Terapkan mati)
   { key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same', requireBoth: true, maxSpan: 366, placeholder: 'Pilih rentang' }
 ]
-// FU107: fields = baris company (immediate) + baris rentang — key company
-// TIDAK masuk DASH_FILTER_SHAPE (nilai immediate tidak pernah jadi draft)
-const dashFilterFields = computed(() => [
-  ...(showCompany.value
-    ? [{
-        key: 'company', label: 'Company', type: 'select', immediate: true,
-        ariaLabel: 'Filter company',
-        options: companyRowOptions.value
-      }]
-    : []),
-  ...DASH_FILTER_SHAPE
-])
-
 const rangeRow = computed(() =>
   applied.value.rentang?.dari && applied.value.rentang?.sampai ? applied.value.rentang : null
 )
-// badge = jumlah baris (+ company) seperti pilot FU100 (rentang lewat preset
-// token bukan baris — keaktifannya tampil sebagai label tanggal .ph-date)
-const activeFilters = computed(() =>
-  countFilters(applied.value) +
-  (showCompany.value && companyFilterState.company ? 1 : 0)
-)
+// badge = jumlah baris panel (FU111: company select TERPISAH di luar panel —
+// tidak ikut dihitung; keaktifannya terbaca dari select itu sendiri)
+const activeFilters = computed(() => countFilters(applied.value))
 // payload rentang: baris kustom bila ada, selain itu preset token. Preset
 // 'kustom' tanpa baris lengkap tak mungkin tersimpan (onFilters menjaga),
 // tapi tetap dijaga di sini agar tak pernah mengirim kustom kosong ke server.
@@ -124,14 +104,14 @@ function onFilters(value) {
   else if (preset.value === 'kustom') preset.value = 'hari_ini'
   if (!same) reload()
 }
-// FU108: "Hapus semua" = bersih TOTAL — baris kustom dikomit kosong oleh
-// FilterRows (onFilters mengembalikan preset ke hari_ini bila kustom);
-// di sini token preset non-default dikembalikan ke "Hari ini" dan company
-// GLOBAL dilepas. Panel tetap terbuka. Halaman ini tidak punya kotak cari.
+// FU108/FU111: "Hapus semua" = bersih TOTAL filter MILIK PANEL — baris kustom
+// dikomit kosong oleh FilterRows (onFilters mengembalikan preset ke hari_ini
+// bila kustom) dan token preset non-default kembali ke "Hari ini". Company
+// (select TERPISAH di page-head) TIDAK disentuh — konsisten dengan 5 halaman
+// lain yang kontrol company-nya sudah dilepas. Panel tetap terbuka.
 function onClearDash() {
   preset.value = 'hari_ini'
-  if (companyFilterState.company) setCompany('')
-  else reload()
+  reload()
 }
 
 const dateLabel = computed(() =>
@@ -431,24 +411,33 @@ onMounted(reload)
               </div>
             </div>
             <!-- FU102: baris filter [Label][Nilai][x] — 'Rentang' = jalur kustom;
-               draft dikomit saat Terapkan atau saat panel ditutup. FU107:
-               Company kini baris pertama (immediate — nilai tetap global FU95). -->
+               draft dikomit saat Terapkan atau saat panel ditutup; FU110:
+               Terapkan menutup panel. FU111: Company keluar dari baris —
+               select terpisah di page-head (di luar panel). -->
             <FilterRows
               ref="frowsRef"
               @apply="filterOpen = false"
               :key="frowsKey"
-              :fields="dashFilterFields"
+              :fields="DASH_FILTER_SHAPE"
               :auto-add="false"
-              :immediate="immediateValues"
               :model-value="applied"
               @update:model-value="onFilters"
-              @immediate-change="onImmediate"
               @clear="onClearDash"
             />
           </div>
         </Transition>
       </div>
-      <!-- FU107: select company page-head dipindah ke baris 'Company' panel -->
+      <!-- FU111: filter company DIPISAH dari panel filter — select page-head
+           (di luar panel; nilai tetap filter GLOBAL FU95 tersimpan per-user) -->
+      <select
+        v-if="showCompany"
+        class="select ph-company"
+        :value="companyFilterState.company"
+        aria-label="Filter company"
+        @change="setCompany($event.target.value)"
+      >
+        <option v-for="o in companyOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+      </select>
       <div class="ph-date">{{ dateLabel }}</div>
     </div>
   </div>

@@ -549,7 +549,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   background: none; color: var(--muted); cursor: pointer;
 }
 .frow-x:hover { background: var(--brand-soft); color: var(--brand-strong); }
-/* MultiSelect menyatu dengan kontrol app (pola .ph-pselect) */
+/* MultiSelect menyatu dengan kontrol app */
 .fmulti.p-multiselect {
   width: 100%; height: 34px; border-radius: var(--radius);
   border-color: var(--line2); background: rgba(255, 255, 255, 0.82);
@@ -2319,19 +2319,11 @@ textarea.input { height: auto; padding: 8px 10px; }
 
 .ph-right { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 
-/* Select company (PrimeVue) disamakan dengan kontrol app — gaya unlayered
-   otomatis menang atas @layer bawaan tema */
-.ph-pselect.p-select {
-  width: auto;
-  min-width: 180px;
-  height: 34px;
-  border-radius: var(--radius);
-  border-color: var(--line2);
-  background: rgba(255, 255, 255, 0.82);
-  font: inherit;
-}
-.ph-pselect .p-select-label { padding: 0 30px 0 10px; font: inherit; color: var(--ink); }
-.ph-pselect .p-select-dropdown { width: 2rem; color: var(--muted); }
+/* FU111: select company page-head Dashboard (native) — DI LUAR panel filter
+   (dipisah dari FilterRows, permintaan user); lebar mengikuti isi, bukan
+   100% warisan .select. Diletakkan SETELAH block .input/.select (atas) —
+   specificity setara, order menang (pelajaran build CSS FU98b). */
+.ph-company { width: auto; min-width: 180px; max-width: 280px; }
 .p-select-overlay {
   border-radius: var(--radius);
   border-color: var(--line);
@@ -2488,8 +2480,8 @@ textarea.input { height: auto; padding: 8px 10px; }
    mencolok, biar user langsung ngeh"): gaya PIL var(--brand-soft) — bahasa
    visual tab aktif .dseg-btn.on yang sudah dikenal user (biru muda =
    aktif/bisa diklik), bukan lagi garis putus yang samar.
-   Spesifisitas .dcap-uom.p-select menang atas tema PrimeVue (pola
-   .ph-pselect); overlay dropdown ikut skin global .p-select-overlay. */
+   Spesifisitas .dcap-uom.p-select menang atas tema PrimeVue (pola double-
+   class .p-select); overlay dropdown ikut skin global .p-select-overlay. */
 .dcap-uom.p-select {
   width: auto;
   height: 20px;
@@ -2898,7 +2890,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   .dash-yield-row { grid-template-columns: 1fr; }
   .dash-yield-row .ypct { grid-column: 1; grid-row: auto; text-align: left; }
   .dash-card .panel-body { padding: 14px; }
-  .ph-pselect.p-select { min-width: 140px; }
+  .ph-company { min-width: 140px; }
 }
 
 /* ============ FU74: penggunaan bahan baku (panel Dashboard + halaman Bahan) ============ */
