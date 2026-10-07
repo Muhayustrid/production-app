@@ -113,6 +113,16 @@ function onFilters(value) {
   if (JSON.stringify(next) === JSON.stringify(applied.value)) return
   applied.value = next
 }
+// FU108: "Hapus semua" = bersih TOTAL — baris draft sudah dikomit kosong
+// oleh FilterRows; di sini kotak cari, gudang (dikembalikan ke default
+// server — watcher gudang tidak memuat untuk nilai kosong, jadi reload
+// eksplisit), dan company GLOBAL dilepas. Panel tetap terbuka.
+function onClearFilters() {
+  q.value = ''
+  gudang.value = ''
+  if (companyFilterState.company) applyCompany('')
+  else reload()
+}
 watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
 })
@@ -292,6 +302,7 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
             :model-value="applied"
             @update:model-value="onFilters"
             @immediate-change="onImmediate"
+            @clear="onClearFilters"
           />
           <div class="ffield" style="margin-top: 10px">
             <label>Gudang</label>

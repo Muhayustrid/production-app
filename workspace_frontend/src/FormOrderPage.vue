@@ -86,6 +86,12 @@ function onFilters(value) {
   if (JSON.stringify(next) === JSON.stringify(applied.value)) return
   applied.value = next
 }
+// FU108: "Hapus semua" = bersih TOTAL — baris draft dikomit kosong oleh
+// FilterRows (riwayat klien langsung ikut); di sini company GLOBAL dilepas.
+// Halaman ini tidak punya kotak cari. Panel tetap terbuka.
+function onClearFo() {
+  if (companyFilterState.company) applyCompany('')
+}
 watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
 })
@@ -266,6 +272,7 @@ onMounted(async () => {
             :model-value="applied"
             @update:model-value="onFilters"
             @immediate-change="onImmediate"
+            @clear="onClearFo"
           />
         </div>
       </Transition>

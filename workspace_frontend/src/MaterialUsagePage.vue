@@ -149,6 +149,13 @@ function onFilters(value) {
   // menjadwalkan sendiri, debounce melebur duplikat jadi SATU request
   if (!same) scheduleReload()
 }
+// FU108: "Hapus semua" = bersih TOTAL — baris (produk/rentang) dikomit
+// kosong oleh FilterRows (onFilters mengembalikan rentang ke basis dan
+// melepas Cakupan); di sini kotak cari dan company GLOBAL dilepas.
+function onClearMu() {
+  q.value = ''
+  if (companyFilterState.company) setCompany('')
+}
 watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
 })
@@ -435,6 +442,7 @@ async function exportXlsx() {
             :model-value="applied"
             @update:model-value="onFilters"
             @immediate-change="onImmediate"
+            @clear="onClearMu"
           />
         </div>
       </Transition>

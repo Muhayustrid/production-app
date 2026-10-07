@@ -124,6 +124,15 @@ function onFilters(value) {
   else if (preset.value === 'kustom') preset.value = 'hari_ini'
   if (!same) reload()
 }
+// FU108: "Hapus semua" = bersih TOTAL — baris kustom dikomit kosong oleh
+// FilterRows (onFilters mengembalikan preset ke hari_ini bila kustom);
+// di sini token preset non-default dikembalikan ke "Hari ini" dan company
+// GLOBAL dilepas. Panel tetap terbuka. Halaman ini tidak punya kotak cari.
+function onClearDash() {
+  preset.value = 'hari_ini'
+  if (companyFilterState.company) setCompany('')
+  else reload()
+}
 
 const dateLabel = computed(() =>
   rangeLabel(summary.value?.preset, summary.value?.dari, summary.value?.sampai)
@@ -433,6 +442,7 @@ onMounted(reload)
               :model-value="applied"
               @update:model-value="onFilters"
               @immediate-change="onImmediate"
+              @clear="onClearDash"
             />
           </div>
         </Transition>

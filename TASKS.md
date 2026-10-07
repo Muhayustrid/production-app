@@ -1090,3 +1090,22 @@ Perubahan:
 Result: **DONE (2026-10-07).** Node **112/112**; E2E baru `fu107_company_row_e2e.mjs` **25/25 di 8082 & 25/25 di 8081** (6 halaman: baris Company tampil dengan 171 opsi, menu bisa dibuka, menu tidak keluar panel di keempat sisi, ganti company memicu request berisi company terpilih); regresi penuh diulang kedua stack: FU100 WO 15/15, FU103 SE 16/16 (8082) + 9/9 (8081), FU104 SA 14/14, FU105 FO 14/14 (8082) + 8/8 (8081), FU106 MU 21/21 (8082) + 20/20 (8081), FU102 DASH 19/19 ×2; js `27621264…` css `e06486e7…` md5=host 2 stack. Screenshot `/tmp/fu107_se_menu.png` (menu in-flow di dalam panel + baris Company).
 
 **GOTCHA:** (a) baris immediate yang selalu tampil membuat panel tak pernah "kosong" — auto-open menu wajib menghitung baris draft saja. (b) Uji toggle menu harus memakai `aria-expanded` sebagai sumber kebenaran; `count()` + klik bisa balapan dengan auto-open (klik justru menutup menu yang baru terbuka otomatis).
+
+## Z36. FU108 — "Hapus semua" panel filter = bersih TOTAL halaman (permintaan user)
+
+Status: DONE (2026-10-07) — permintaan user: "aku ingin pada filter kan ada hapus semua, maka filternya kehapus semua" + "soalnya kebanyakan belum begitu" (banyak halaman baru mengosongkan baris draft, kotak cari dan filter tunggal halaman tetap terisi).
+
+Desain: tombol "Hapus semua" milik FilterRows kini membersihkan SELURUH filter halaman, bukan hanya baris draft. Komponen tidak tahu field mana milik siapa, jadi ia mengosongkan draft + commit, lalu emit `clear` — parent membersihkan sisanya (kotak cari, company immediate/global, kontrol tunggal halaman). Panel TETAP terbuka (pengguna melihat badge kosong lalu bisa menyusun filter baru). Kontrak: konvensi bersih total FU75 diperluas ke semua halaman ber-filter.
+
+Perubahan:
+- `FilterRows.vue`: `clearAll` emit `clear`; chrome tambah/terapkan/hapus disembunyikan bila tidak ada field draft (`hasDraftFields` — mini-panel kanban yang hanya berisi Company immediate tak lagi menampilkan menu "Semua field sudah dipakai").
+- WO: `clearFilters` = q kosong + company dilepas (applied sudah dikosongkan komponen; watcher yang menjadwalkan muat ulang).
+- SE: `onClearSe` (tabel) & `lotReset` (kanban) saling membersihkan lintas mode — keduanya kini juga mengosongkan kotak cari; panel tabel lepas lot masuk, kanban lepas baris tabel.
+- SA: `onClearFilters` = q + gudang kembali default + company (reload eksplisit karena watcher gudang tidak memuat untuk nilai kosong).
+- FO: `onClearFo` = company (tidak punya kotak cari; riwayat klien langsung ikut saat baris dikomit kosong).
+- MU: `onClearMu` = q + company (over-only & rentang sudah dilepas onFilters saat baris kosong).
+- DASH: `onClearDash` = token preset kembali "Hari ini" + company.
+
+Result: **DONE (2026-10-07).** Node **112/112**; E2E baru `fu108_clear_all_e2e.mjs` **23/23 di 8082** dan **21/21 di 8081** (per halaman: kotak cari kosong, badge 0, company kembali Semua company, kontrol tunggal kembali default — gudang/preset/cakupan, hasil kembali terisi penuh); regresi penuh FU100-FU107 diulang **8082 semua hijau** (WO 15/15, SE 16/16, SA 14/14, FO 14/14, MU 21/21, DASH 19/19, FU107 25/25) dan **8081 batch hijau**; js `b5a63993…` md5=host 2 stack.
+
+**GOTCHA:** (a) panel kanban SE yang memakai FilterRows mini (fields hanya immediate) tadinya menampilkan chrome tambah/terapkan/hapus yang tak bermakna + menu "Semua field sudah dipakai" — sembunyikan chrome saat `!hasDraftFields`. (b) Uji "Hapus semua" harus mencoba SEMUA sumber filter per halaman (bukan hanya baris) — itulah permintaan user-nya; indeks `.fmulti` tidak sama dengan urutan baris karena baris Company bertipe select.

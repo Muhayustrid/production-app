@@ -207,8 +207,19 @@ watch(lotFilterOpen, (open, sebelum) => {
   saveHandoverPreferences()
 })
 // (watch viewMode dipasang di bawah deklarasi viewMode — hindari TDZ setup)
+// FU108: "Hapus semua" = bersih TOTAL halaman (bukan hanya panel yang
+// tampak) — draft tabel sudah dikomit kosong; tabel juga melepas lot masuk
+// (mode kanban), kanban juga melepas baris tabel; kotak cari ikut bersih
+// dan company GLOBAL dilepas (applyCompany sendiri yang memuat ulang papan)
+function onClearSe() {
+  searchQ.value = ''
+  lotFrom.value = ''; lotTo.value = ''
+  if (companyFilterState.company) applyCompany('')
+}
 function lotReset() {
   lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false
+  seApplied.value = {}
+  searchQ.value = '' // FU108: bersih total — kotak cari ikut
   // FU95: bersih total termasuk company global (konvensi FU75)
   if (companyFilterState.company) applyCompany('')
 }
@@ -504,6 +515,7 @@ onMounted(() => {
               :model-value="seApplied"
               @update:model-value="onSeFilters"
               @immediate-change="onImmediate"
+              @clear="onClearSe"
             />
           </template>
           <template v-else>

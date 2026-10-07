@@ -199,14 +199,14 @@ function scheduleReload() {
   clearTimeout(reloadTimer)
   reloadTimer = setTimeout(reload, 180)
 }
+// FU108: "Hapus semua" panel = bersih TOTAL halaman (konvensi FU75) —
+// baris draft sudah dikosongkan commit FilterRows; di sini kotak cari dan
+// company GLOBAL dilepas. Panel TETAP terbuka (pengguna bisa melihat badge
+// kosong lalu menyusun filter baru). Watcher q/applied + applyCompany yang
+// menjadwalkan muat ulang — tak ada reload eksplisit yang dobel.
 function clearFilters() {
   q.value = ''
-  applied.value = {}
-  filterOpen.value = false
-  // FU95: "Hapus semua filter" juga melepas filter company GLOBAL (tersimpan);
-  // applyCompany sendiri yang reload bila berubah — tanpa perubahan, reload di sini
   if (companyFilterState.company) applyCompany('')
-  else reload()
 }
 function goPage(page) { listState.page = page; loadList({ ...filterPayload(), start: (page - 1) * pageSize.value, pageLen: pageSize.value }) }
 const filtered = computed(() => {
@@ -316,6 +316,7 @@ function removeStageChip() {
           :immediate="immediateValues"
           v-model="applied"
           @immediate-change="onImmediate"
+          @clear="clearFilters"
         />
         </div>
       </Transition>

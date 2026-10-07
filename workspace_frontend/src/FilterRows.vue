@@ -26,7 +26,7 @@ const props = defineProps({
   // tidak ikut menu Tambah filter / commit draft.
   immediate: { type: Object, default: () => ({}) }
 })
-const emit = defineEmits(['update:modelValue', 'immediate-change'])
+const emit = defineEmits(['update:modelValue', 'immediate-change', 'clear'])
 
 // FU102: draft = salinan lepas dari modelValue (klon satu level — lihat
 // cloneFilters) supaya suntingan baris rentang tidak bocor ke applied.
@@ -53,6 +53,10 @@ const addable = computed(() => props.fields.filter((f) => !f.immediate && draft.
 // tambah auto-terbuka; baris immediate selalu hadir sehingga tanpa pemisahan
 // ini panel tak pernah "kosong" dan menu tak akan pernah menyala
 const draftActive = computed(() => props.fields.filter((f) => !f.immediate && draft.value[f.key] !== undefined))
+// FU108: panel tanpa field draft (mis. mini-panel kanban yang hanya berisi
+// baris Company immediate) tidak butuh chrome tambah/terapkan/hapus —
+// menyembunyikannya mencegah menu "Semua field sudah dipakai" nyangkut
+const hasDraftFields = computed(() => props.fields.some((f) => !f.immediate))
 // FU102: validasi nilai baris sebelum commit (mis. Rentang Dashboard wajib
 // dari+sampai dan maksimal 366 hari — perilaku lama: tombol Terapkan mati).
 // Draft tetap boleh tidak sah; yang ditahan hanya commit-nya.
@@ -93,9 +97,14 @@ function commit() {
   // lepas dari draft juga saat keluar — parent memegang salinan sendiri
   emit('update:modelValue', cloneFilters(draft.value))
 }
+// FU108: "Hapus semua" = bersih TOTAL — draft dikomit kosong (baris hilang)
+// DAN parent diminta melepas filter di luar draft (kotak cari, company
+// immediate, preset/rentang/gudang halaman) lewat event clear; komponen
+// tidak tahu field mana milik siapa, parent yang membersihkan sisanya.
 function clearAll() {
   draft.value = {}
   commit()
+  emit('clear')
 }
 // FU107: klik di luar blok tambah menutup menu (sebelumnya menu lengket
 // terbuka sampai tombol/opsi diklik); listener dokumen dilepas saat unmount
@@ -152,7 +161,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
       <p v-if="rowErrors[f.key]" class="frow-hint" role="status">{{ rowErrors[f.key] }}</p>
     </div>
 
-    <div class="frows-addwrap">
+    <div v-if="hasDraftFields" class="frows-addwrap">
       <!-- FU107: menu IN-FLOW di bawah tombol (sebelumnya absolute mengapung
            NAIK keluar panel, menutupi toolbar/kontrol lain — laporan user).
            Urutan DOM: tombol dulu, menu menyusul agar mendorong footer turun. -->
@@ -175,7 +184,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
       </div>
     </div>
 
-    <div class="frows-foot">
+    <div v-if="hasDraftFields" class="frows-foot">
       <button type="button" class="linkbtn filter-clear frows-clear" @click="clearAll">Hapus semua</button>
       <button type="button" class="btn btn-sm btn-primary" :disabled="blocked" @click="commit">Terapkan</button>
     </div>
