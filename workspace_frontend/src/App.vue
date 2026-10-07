@@ -455,8 +455,11 @@ function muatUlangHalaman() {
       <div class="content">
         <!-- FU70: key per view/WO → wrapper remount → animasi fade halus antarhalaman -->
         <div :key="(section || '') + (foCreate ? '-baru' : '') + (woId || '')" class="view-anim">
+          <!-- F04: banner error loader latar adalah STRIP informasi, bukan
+               pengganti rute — rantai view di bawah punya v-if sendiri agar
+               satu kegagalan endpoint tidak menyembunyikan seluruh halaman -->
           <div v-if="state.error" class="appfoot" style="color:#b3261e">Gagal memuat: {{ state.error }} — <a href="#" @click.prevent="loadList()">coba lagi</a></div>
-          <WarehouseSettings v-else-if="section === 'settings'" />
+          <WarehouseSettings v-if="section === 'settings'" />
           <HandoverBoard v-else-if="section === 'handover'" />
           <FormOrderCreate v-else-if="foCreate" />
           <FormOrderPage v-else-if="section === 'form-order'" />

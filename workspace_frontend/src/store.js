@@ -411,6 +411,9 @@ export async function loadDashboard(range = null) {
       stage: null,
       start: 0,
       page_len: DASH_PAGE_SIZE,
+      // F13: halaman-1 ikut urutan sort aktif (onDashSort) — sebelumnya hanya
+      // halaman 2+ yang ter-sort, baris halaman-1 kembali ke default
+      order: dashboardState.order || null,
       meta: 1,
       company: company || null
     })

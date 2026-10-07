@@ -108,6 +108,16 @@ const currentPage = computed(() => listState.page)
 // FU109: badge = baris panel saja (company tidak lagi kontrol halaman ini)
 const activeFilters = computed(() => countFilters(applied.value))
 
+// F05: commit baris dinormalisasi (pola 5 halaman lain) — baris kosong
+// ({produk: []}) tidak lagi dihitung badge & tidak mengubah state.
+// consumePendingStage/restore preferensi meng-assign `applied` langsung
+// (keduanya sudah kanonik) dan tidak lewat sini.
+function onFilters(value) {
+  const next = normalizeFilters(value, WO_FILTER_SHAPE)
+  if (JSON.stringify(next) === JSON.stringify(applied.value)) return
+  applied.value = next
+}
+
 function filterPayload() {
   const f = applied.value
   return {
@@ -279,7 +289,8 @@ function removeStageChip() {
         <FilterRows
           ref="frowsRef"
           :fields="filterFields"
-          v-model="applied"
+          :model-value="applied"
+          @update:model-value="onFilters"
           @clear="clearFilters"
           @apply="filterOpen = false"
         />
@@ -321,14 +332,6 @@ function removeStageChip() {
 
   <template v-if="listPrefs.view === 'kanban'">
     <WorkOrderKanban :list="pagedFiltered" />
-    <div class="pagination-bar pagination-footer kanban-pagination">
-      <label class="page-size-control">
-        <span>Tampilkan</span>
-        <select class="select" :value="pageSize" aria-label="Jumlah Work Order Kanban per halaman" @change="setPageSize($event.target.value)">
-          <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-        </select>
-      </label>
-    </div>
   </template>
 
   <div class="wo-body" v-else>
@@ -386,17 +389,21 @@ function removeStageChip() {
       <p class="etitle">Tidak ada perintah kerja</p>
       <p class="ehint">Tidak ada Work Order untuk filter saat ini. Ubah filter atau kata pencarian.</p>
     </div>
-    <div class="pagination-bar pagination-footer">
-      <label class="page-size-control">
-        <span>Tampilkan</span>
-        <select class="select" :value="pageSize" aria-label="Jumlah Work Order per halaman" @change="setPageSize($event.target.value)">
-          <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-        </select>
-      </label>
-      <div class="pagination-buttons">
-        <button class="btn btn-sm" :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">‹ Sebelumnya</button>
-        <button class="btn btn-sm" :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">Berikutnya ›</button>
-      </div>
+  </div>
+
+  <!-- F06: satu footer untuk DUA tampilan (tabel + kanban) — pagedFiltered
+       hanya memuat halaman aktif, tanpa footer ini kartu halaman 2+ kanban
+       tak terjangkau -->
+  <div class="pagination-bar pagination-footer">
+    <label class="page-size-control">
+      <span>Tampilkan</span>
+      <select class="select" :value="pageSize" aria-label="Jumlah Work Order per halaman" @change="setPageSize($event.target.value)">
+        <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+      </select>
+    </label>
+    <div class="pagination-buttons">
+      <button class="btn btn-sm" :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">‹ Sebelumnya</button>
+      <button class="btn btn-sm" :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">Berikutnya ›</button>
     </div>
   </div>
 </template>

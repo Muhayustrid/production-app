@@ -84,3 +84,26 @@ test('rangeFieldError: batas lebar hanya saat dua tanggal terisi', () => {
   )
   assert.equal(rangeFieldError({ dari: '2026-01-01', sampai: '2026-12-31' }, {}), '') // tanpa batas
 })
+
+// F12: batas server Penggunaan Bahan MAX_RANGE_DAYS = 92 — formula klien &
+// server sama-sama eksklusif, jadi tepat 92 hari sah, 93 hari ditahan
+test('rangeFieldError: batas 92 hari Penggunaan Bahan (eksklusif)', () => {
+  const f = { maxSpan: 92 }
+  assert.equal(rangeFieldError({ dari: '2026-10-01', sampai: '2026-12-31' }, f), '') // 91 hari
+  assert.equal(rangeFieldError({ dari: '2026-10-01', sampai: '2027-01-01' }, f), '') // 92 hari
+  assert.equal(
+    rangeFieldError({ dari: '2026-10-01', sampai: '2027-01-02' }, f), // 93 hari
+    'Rentang maksimal 92 hari.'
+  )
+})
+
+// F05: commit baris kosong ({produk: []}) ternormalisasi hilang dan tidak
+// dihitung badge — WorkOrderList kini memakai jalur ini (sebelumnya v-model
+// mentah: badge 1 lalu berubah 0 setelah reload)
+test('F05: baris multi kosong hilang setelah normalisasi, badge tetap 0', () => {
+  const FIELDS5 = [{ key: 'produk', type: 'multi' }, { key: 'status', type: 'multi' }]
+  const kosong = normalizeFilters({ produk: [] }, FIELDS5)
+  assert.deepEqual(kosong, {})
+  assert.equal(countFilters(kosong), 0)
+  assert.equal(countFilters(normalizeFilters({ produk: ['A', 'B'], status: [] }, FIELDS5)), 1)
+})

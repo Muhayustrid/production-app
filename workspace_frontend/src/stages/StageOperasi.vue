@@ -149,6 +149,7 @@ async function confirmFinish() {
           unit-key="opSusut"
           :units="wo"
           v-model="lossPcs"
+          @update:model-value="lossDirty = true"
           @update:valid="lossValid = $event"
         />
       </div>

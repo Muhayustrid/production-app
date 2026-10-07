@@ -136,7 +136,9 @@ async function confirmComplete() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" @click="ask">Selesaikan Produksi</button>
+      <!-- F09: hardening — server tetap menolak good ≤ 0; tombol dimatikan di
+           klien agar tidak ada jalur klik yang sia-sia -->
+      <button class="btn btn-primary" :disabled="!(fg > 0)" @click="ask">Selesaikan Produksi</button>
     </div>
 
     <dialog ref="dlg" class="dialog" @click.self="closeDlg">
@@ -148,7 +150,7 @@ async function confirmComplete() {
       </p>
       <div class="dlg-actions">
         <button class="btn" @click="closeDlg">Batal</button>
-        <button class="btn btn-primary" :disabled="!!state.pending" @click="confirmComplete">Ya, Selesaikan</button>
+        <button class="btn btn-primary" :disabled="!!state.pending || !(fg > 0)" @click="confirmComplete">Ya, Selesaikan</button>
       </div>
     </dialog>
   </section>

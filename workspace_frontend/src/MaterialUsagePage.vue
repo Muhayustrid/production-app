@@ -95,7 +95,10 @@ const muProductOptions = computed(() => {
 const muFilterFields = computed(() => [
   { key: 'produk', label: 'Produk', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih produk', options: muProductOptions.value },
   {
-    key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same',
+    // F12: batas server MAX_RANGE_DAYS = 92 hari (eksklusif, formula sama) —
+    // nilai lebih lebar ditahan di klien (inline hint + Terapkan mati),
+    // bukan dikirim lalu ditolak 417 dan membongkar halaman
+    key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same', maxSpan: 92,
     resetDari: basis.value.dari, resetSampai: basis.value.sampai, placeholder: 'Pilih rentang'
   }
 ])
@@ -115,7 +118,9 @@ function onFilters(value) {
     dari.value = basis.value.dari
     sampai.value = basis.value.sampai
   }
-  if (Object.keys(next).length === 0) overOnly.value = false
+  // F10: centang Cakupan TIDAK dilepas oleh commit baris (termasuk commit
+  // kosong dari panel tanpa baris) — hanya "Hapus semua" (onClearMu) yang
+  // membersihkannya (konvensi bersih total FU75/FU108).
   const same = JSON.stringify(next) === JSON.stringify(applied.value)
   applied.value = next
   // produk/rentang berubah → muat ulang; watcher tanggal & over-only sudah
@@ -124,10 +129,11 @@ function onFilters(value) {
 }
 // FU108/FU109: "Hapus semua" = bersih TOTAL filter MILIK HALAMAN — baris
 // (produk/rentang) dikomit kosong oleh FilterRows (onFilters mengembalikan
-// rentang ke basis dan melepas Cakupan); di sini kotak cari. Company tidak
-// disentuh (kontrolnya hanya di Dashboard).
+// rentang ke basis); di sini kotak cari + centang Cakupan (F10). Company
+// tidak disentuh (kontrolnya hanya di Dashboard).
 function onClearMu() {
   q.value = ''
+  overOnly.value = false
 }
 watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
@@ -279,9 +285,13 @@ const usageHalaman = computed(() =>
 // FU98c: kartu Analisis penggunaan ikut 10/halaman (DataTable paginator)
 const analisisFirst = ref(0)
 watch(data, () => { usageFirst.value = 0; analisisFirst.value = 0 })
-const bahanTerpilih = computed(() =>
-  txnMaterial.value ? rows.value.find((r) => r.item_code === txnMaterial.value) : null
-)
+// F11: label chip bahan TIDAK boleh bergantung pada `rows` (hasil server yang
+// ikut terfilter) — chip dirender selama txnMaterial terisi agar selalu ada
+// affordance melepas; label fallback ke kode bila item_name tak ditemukan.
+const bahanLabel = computed(() => {
+  if (!txnMaterial.value) return ''
+  return rows.value.find((r) => r.item_code === txnMaterial.value)?.item_name || txnMaterial.value
+})
 function pilihBahan(row) {
   if (!row?.item_code) return
   txnMaterial.value = row.item_code
@@ -730,8 +740,8 @@ async function exportXlsx() {
         <!-- tab 3: transaksi konsumsi per SE (+filter bahan dari klik analisis) -->
         <template v-else>
           <div class="txn-chips">
-            <button v-if="bahanTerpilih" type="button" class="chip chip-filter" @click="bersihkanBahan">
-              Bahan: {{ bahanTerpilih.item_name || bahanTerpilih.item_code }}
+            <button v-if="txnMaterial" type="button" class="chip chip-filter" @click="bersihkanBahan">
+              Bahan: {{ bahanLabel }}
               <X :size="13" :stroke-width="2.2" aria-hidden="true" />
             </button>
             <span class="txn-count">{{ fmtId(txnTerfilter.length) }} transaksi</span>

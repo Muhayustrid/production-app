@@ -42,7 +42,8 @@ function submit() {
     // FU39: kosong → '' (server melewatkan), 0 eksplisit tetap tercatat 0.0
     suhuAdonan: form.suhuAdonan === '' || form.suhuAdonan == null ? '' : Number(form.suhuAdonan),
     namaPenimbang: String(form.namaPenimbang).trim(),
-    jumlahKru: Number(form.jumlahKru),
+    // FU38/F08: kosong → '' (server melewatkan field), 0 eksplisit tetap 0
+    jumlahKru: form.jumlahKru === '' || form.jumlahKru == null ? '' : Number(form.jumlahKru),
     leaderProduksi: String(form.leaderProduksi).trim()
   })
 }

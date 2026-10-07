@@ -102,7 +102,7 @@ function onFilters(value) {
   applied.value = next
   if (next.rentang?.dari && next.rentang?.sampai) preset.value = 'kustom'
   else if (preset.value === 'kustom') preset.value = 'hari_ini'
-  if (!same) reload()
+  if (!same) scheduleReload()
 }
 // FU108/FU111: "Hapus semua" = bersih TOTAL filter MILIK PANEL — baris kustom
 // dikomit kosong oleh FilterRows (onFilters mengembalikan preset ke hari_ini
@@ -111,7 +111,7 @@ function onFilters(value) {
 // lain yang kontrol company-nya sudah dilepas. Panel tetap terbuka.
 function onClearDash() {
   preset.value = 'hari_ini'
-  reload()
+  scheduleReload()
 }
 
 const dateLabel = computed(() =>
@@ -333,6 +333,14 @@ function reload() {
   // grafik mengikuti company (rentang halaman tidak mempengaruhinya — filter
   // lokal minggu/bulan), dimuat ringan terpisah (pola wo_list FU77)
   loadDashboardDaily(chartMode.value)
+}
+// F14: "Hapus semua" meng-commit {} (→ onFilters) DAN meng-emit clear (→
+// onClearDash) — dua pemicu reload dalam satu klik; debounce 180ms (pola
+// MaterialUsagePage) melebur keduanya jadi SATU pasang request.
+let reloadTimer
+function scheduleReload() {
+  clearTimeout(reloadTimer)
+  reloadTimer = setTimeout(reload, 180)
 }
 // FU102: preset token = tombol cepat DI ATAS baris (perilaku FU76: langsung
 // terapkan); memilih preset mengosongkan baris rentang kustom. Token 'Kustom'
