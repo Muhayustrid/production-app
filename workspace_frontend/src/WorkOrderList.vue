@@ -1,7 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { call, companyFilterState, HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveCompanyFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
-import { companySelectOptions, showCompanyPicker } from './company-filter.js'
+import { call, HANDOVER_LABELS, listPreferencesState, loadList, listPrefs, listState, normalizePageSize, PAGE_SIZE_OPTIONS, pendingStageFilter, saveListPreferences, savedListPreferences, STAGE_LABELS, workOrders } from './store.js'
 import { fmtDate, qtyStack } from './format.js'
 import { buildWorkOrderPreferences, normalizeWorkOrderPreferences } from './work-order-preferences.js'
 import { countFilters, normalizeFilters } from './filter-rows.js'
@@ -12,14 +11,13 @@ import FilterRows from './FilterRows.vue'
 
 const q = ref('')
 // FU100: filter halaman = objek baris ala ERPNext (key = field, nilai array
-// multi-value / objek rentang) — company TETAP global (companyFilterState).
+// multi-value / objek rentang). FU109: company BUKAN filter halaman ini —
+// kontrolnya hanya di Dashboard; loader store tetap menerapkan scope global
+// (companyFilterState) dan "Hapus semua" di sini tidak menyentuhnya.
 // Draft ada di dalam FilterRows; `applied` baru berubah saat Terapkan/panel
 // ditutup → satu fetch lewat watcher di bawah.
 const applied = ref({})
 const frowsRef = ref(null) // FilterRows — commit draft saat panel ditutup (FU100)
-const companies = computed(() => companyFilterState.companies)
-const showCompany = computed(() => showCompanyPicker(companies.value))
-const companyOptions = computed(() => companySelectOptions(companies.value))
 const pageSize = computed(() => listState.pageSize)
 const filterOpen = ref(false)
 const restoring = ref(true)
@@ -73,16 +71,6 @@ const WO_FILTER_SHAPE = [
   { key: 'jadwal', type: 'range' }
 ]
 const filterFields = computed(() => [
-  // FU107: Company = baris TUNGGAL (immediate) yang selalu tampil; nilainya
-  // tetap filter GLOBAL FU95 (tersimpan per-user di server, diterapkan
-  // segera saat diganti) — hanya presentasinya yang pindah ke daftar baris
-  ...(showCompany.value
-    ? [{
-        key: 'company', label: 'Company', type: 'select', immediate: true,
-        ariaLabel: 'Filter company',
-        options: companyOptions.value
-      }]
-    : []),
   {
     key: 'produk', label: 'Produk', type: 'multi', filter: true,
     placeholder: 'Pilih satu atau lebih produk',
@@ -117,26 +105,8 @@ const todayLabel = new Date().toLocaleDateString('id-ID', {
 })
 const totalPages = computed(() => Math.max(1, Math.ceil(listState.total / pageSize.value)))
 const currentPage = computed(() => listState.page)
-const activeFilters = computed(() =>
-  countFilters(applied.value) +
-  (showCompany.value && companyFilterState.company ? 1 : 0)
-)
-
-// FU95: ganti company = preferensi GLOBAL — simpan ke server dulu, baru
-// muat ulang daftar (scope dibaca dari state di store.loadList).
-async function applyCompany(value) {
-  const v = value || ''
-  if (v === companyFilterState.company) return
-  companyFilterState.company = v
-  await saveCompanyFilter(v)
-  reload()
-}
-// FU107: baris Company = kontrol immediate (bukan draft) — perubahan langsung
-// diteruskan ke applyCompany; nilai ditampilkan dari state global FU95
-const immediateValues = computed(() => ({ company: companyFilterState.company }))
-function onImmediate(key, value) {
-  if (key === 'company') applyCompany(value)
-}
+// FU109: badge = baris panel saja (company tidak lagi kontrol halaman ini)
+const activeFilters = computed(() => countFilters(applied.value))
 
 function filterPayload() {
   const f = applied.value
@@ -199,14 +169,12 @@ function scheduleReload() {
   clearTimeout(reloadTimer)
   reloadTimer = setTimeout(reload, 180)
 }
-// FU108: "Hapus semua" panel = bersih TOTAL halaman (konvensi FU75) —
-// baris draft sudah dikosongkan commit FilterRows; di sini kotak cari dan
-// company GLOBAL dilepas. Panel TETAP terbuka (pengguna bisa melihat badge
-// kosong lalu menyusun filter baru). Watcher q/applied + applyCompany yang
-// menjadwalkan muat ulang — tak ada reload eksplisit yang dobel.
+// FU108/FU109: "Hapus semua" panel = bersih TOTAL filter MILIK halaman ini —
+// baris draft sudah dikosongkan commit FilterRows; di sini kotak cari.
+// Company TIDAK disentuh (kontrolnya hanya di Dashboard; scope tetap
+// berlaku). Watcher q/applied yang menjadwalkan muat ulang.
 function clearFilters() {
   q.value = ''
-  if (companyFilterState.company) applyCompany('')
 }
 function goPage(page) { listState.page = page; loadList({ ...filterPayload(), start: (page - 1) * pageSize.value, pageLen: pageSize.value }) }
 const filtered = computed(() => {
@@ -305,17 +273,13 @@ function removeStageChip() {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-        <!-- FU107: Company kini BARIS di dalam daftar filter (kontrol tunggal
-             yang diterapkan segera, nilai tetap filter GLOBAL FU95 tersimpan
-             per-user); sebelumnya select terpisah di atas baris -->
         <!-- FU100: baris filter ERPNext-style (multi-value, tambah/hapus
-             baris, Terapkan/Hapus semua) — pilot halaman Work Order -->
+             baris, Terapkan/Hapus semua) — pilot halaman Work Order;
+             FU109: Company tidak lagi dikontrol di sini (hanya Dashboard) -->
         <FilterRows
           ref="frowsRef"
           :fields="filterFields"
-          :immediate="immediateValues"
           v-model="applied"
-          @immediate-change="onImmediate"
           @clear="clearFilters"
         />
         </div>
@@ -345,7 +309,8 @@ function removeStageChip() {
   </div>
 
   <!-- FU72: chip filter tahap aktif (satu-shot dari Dashboard atau satu
-       tahap terpilih); FU95: chip company dihapus — company kini tampil di panel -->
+       tahap terpilih); FU109: company bukan chip/filter halaman ini (kontrolnya
+       hanya di Dashboard) -->
   <div v-if="stageChipKey" class="filterchips">
     <button type="button" class="chip chip-filter" @click="removeStageChip">
       Tahap: {{ stageChipLabel }}

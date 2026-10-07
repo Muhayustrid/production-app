@@ -26,7 +26,6 @@ import {
   Gauge, HelpCircle, Search, SearchX, TrendingUp, X
 } from 'lucide-vue-next'
 import { companyFilterState, materialUsageState, loadMaterialUsage, saveCompanyFilter, whenCompanyReady } from './store.js'
-import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtId } from './format.js'
 import {
   materialUsageXlsxFilename, barPct, chartTrend, comparisonRows, efficiencyPct, harusKeLogin,
@@ -58,28 +57,11 @@ const MU_FILTER_SHAPE = [
   { key: 'produk', type: 'multi' },
   { key: 'rentang', type: 'range' }
 ]
-// FU95: company = filter GLOBAL (companyFilterState, tersimpan per-user di
-// server). Param lama ?company= (tautan era FU74) tetap dihormati: diadopsi
+// FU95/FU109: company = filter GLOBAL (companyFilterState, tersimpan per-user
+// di server) — KONTROLNYA kini hanya di Dashboard; loader halaman ini tinggal
+// mengikuti. Param lama ?company= (tautan era FU74) tetap dihormati: diadopsi
 // ke GLOBAL setelah preferensi tersimpan termuat — tunggu whenCompanyReady
 // supaya nilai tersimpan tidak dilawan balapan waktu load (lihat onMounted).
-const companies = computed(() => companyFilterState.companies)
-const showCompany = computed(() => showCompanyPicker(companies.value))
-// FU107: setter tunggal company (baris immediate di panel; head Select lama
-// sudah tidak ada) — '' = Semua company; label 'Semua company' utk baris
-async function setCompany(v) {
-  const val = v || ''
-  if (val === companyFilterState.company) return
-  companyFilterState.company = val
-  await saveCompanyFilter(val)
-  reload()
-}
-// FU107: nilai baris immediate (bukan draft) — dari state global FU95;
-// label memakai sentinel '' = "Semua company" (pola companySelectOptions)
-const companyRowOptions = computed(() => companySelectOptions(companies.value))
-const immediateValues = computed(() => ({ company: companyFilterState.company }))
-function onImmediate(key, value) {
-  if (key === 'company') setCompany(value)
-}
 const overOnly = ref(false)
 // FU79b: filter panel gaya WorkOrderList — popover dari tombol Filter;
 // tanggal BAHAN tidak bisa kosong (server default hari ini), jadi "bersih"
@@ -111,15 +93,6 @@ const muProductOptions = computed(() => {
   return [...stale, ...base]
 })
 const muFilterFields = computed(() => [
-  // FU107: Company = baris TUNGGAL (immediate) — nilai tetap filter GLOBAL
-  // FU95 tersimpan per-user; pindah dari select page-head ke daftar baris
-  ...(showCompany.value
-    ? [{
-        key: 'company', label: 'Company', type: 'select', immediate: true,
-        ariaLabel: 'Filter company',
-        options: companyRowOptions.value
-      }]
-    : []),
   { key: 'produk', label: 'Produk', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih produk', options: muProductOptions.value },
   {
     key: 'rentang', label: 'Rentang', type: 'range', firstTo: 'same',
@@ -149,12 +122,12 @@ function onFilters(value) {
   // menjadwalkan sendiri, debounce melebur duplikat jadi SATU request
   if (!same) scheduleReload()
 }
-// FU108: "Hapus semua" = bersih TOTAL — baris (produk/rentang) dikomit
-// kosong oleh FilterRows (onFilters mengembalikan rentang ke basis dan
-// melepas Cakupan); di sini kotak cari dan company GLOBAL dilepas.
+// FU108/FU109: "Hapus semua" = bersih TOTAL filter MILIK HALAMAN — baris
+// (produk/rentang) dikomit kosong oleh FilterRows (onFilters mengembalikan
+// rentang ke basis dan melepas Cakupan); di sini kotak cari. Company tidak
+// disentuh (kontrolnya hanya di Dashboard).
 function onClearMu() {
   q.value = ''
-  if (companyFilterState.company) setCompany('')
 }
 watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
@@ -330,15 +303,14 @@ function woHref(wo) { return '#/wo/' + encodeURIComponent(wo) }
 function noPlan(w) { return !Number(w?.planned) }
 
 // badge tombol Filter (pola WorkOrderList): produk/over-only/rentang
-// menyimpang dari dasar masing-masing dihitung 1 BARIS; FU95: company GLOBAL
-// ikut dihitung (select-nya di head, di luar panel — tetap jujur di badge).
+// menyimpang dari dasar masing-masing dihitung 1 BARIS (FU109: company tidak
+// lagi dihitung — kontrolnya hanya di Dashboard).
 // FU106: baris rentang == rentang dasar TIDAK dihitung (default tersemai).
 const activeFilters = computed(
   () =>
     (applied.value.produk?.length ? 1 : 0) +
     (overOnly.value ? 1 : 0) +
-    (dari.value !== basis.value.dari || sampai.value !== basis.value.sampai ? 1 : 0) +
-    (showCompany.value && companyFilterState.company ? 1 : 0)
+    (dari.value !== basis.value.dari || sampai.value !== basis.value.sampai ? 1 : 0)
 )
 
 // FU80c: unduh .xlsx = laporan tampilan aktif (rentang + semua filter) yang
@@ -399,10 +371,6 @@ async function exportXlsx() {
       <h1>Penggunaan bahan baku</h1>
       <p class="sub">Konsumsi nyata dibanding rencana BOM, diskalakan ke hasil produksi.</p>
     </div>
-    <div class="ph-right">
-      <!-- FU107: select company page-head dipindah ke baris 'Company' di
-           panel filter (immediate — perilaku FU95 tidak berubah) -->
-    </div>
   </div>
 
   <div class="toolbar mu-toolbar">
@@ -425,9 +393,10 @@ async function exportXlsx() {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <!-- FU106/FU107: baris filter ala ERPNext — Company immediate +
-               Produk multi-nilai + Rentang; draft dikomit saat Terapkan atau
-               panel ditutup. Cakupan (over-only) tetap kontrol tunggal. -->
+          <!-- FU106: baris filter ala ERPNext — Produk multi-nilai + Rentang;
+               draft dikomit saat Terapkan atau panel ditutup. Cakupan
+               (over-only) tetap kontrol tunggal; FU109: Company tidak lagi
+               dikontrol di sini (hanya Dashboard). -->
           <div class="ffield">
             <label>Cakupan</label>
             <label class="mu-check" for="bahan-over">
@@ -438,10 +407,8 @@ async function exportXlsx() {
           <FilterRows
             ref="frowsRef"
             :fields="muFilterFields"
-            :immediate="immediateValues"
             :model-value="applied"
             @update:model-value="onFilters"
-            @immediate-change="onImmediate"
             @clear="onClearMu"
           />
         </div>

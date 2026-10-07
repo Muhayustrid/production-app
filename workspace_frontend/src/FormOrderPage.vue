@@ -5,8 +5,7 @@
 // formOrderState.justSaved dan dibaca di sini saat mount.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ArrowDown, Filter, Inbox, Plus } from 'lucide-vue-next'
-import { PAGE_SIZE_OPTIONS, cancelFormOrder, companyFilterState, formOrders, formOrderState, loadFormOrders, normalizePageSize, retryFormOrderAttachment, saveCompanyFilter, uiTopLoading } from './store.js'
-import { companySelectOptions, showCompanyPicker } from './company-filter.js'
+import { PAGE_SIZE_OPTIONS, cancelFormOrder, formOrders, formOrderState, loadFormOrders, normalizePageSize, retryFormOrderAttachment, uiTopLoading } from './store.js'
 import { foItemsText, foStatusMeta } from './form-order.js'
 import { countFilters, normalizeFilters } from './filter-rows.js'
 import FilterRows from './FilterRows.vue'
@@ -15,8 +14,8 @@ import { nextSortDir, sortRows } from './table-sort.js'
 const savedMsg = ref('')
 
 // FU105: filter riwayat ala ERPNext — Status & Item multi-nilai + rentang
-// Dibutuhkan; sepenuhnya KLIEN (riwayat dimuat penuh). Company tetap filter
-// global FU95 di luar baris.
+// Dibutuhkan; sepenuhnya KLIEN (riwayat dimuat penuh). FU109: company bukan
+// filter halaman ini — scope global dari Dashboard diterapkan loader store.
 const applied = ref({})
 const frowsRef = ref(null)
 const FO_FILTER_SHAPE = [
@@ -43,42 +42,15 @@ const foItemOptions = computed(() => {
     .map(([name, code]) => ({ value: name, label: code && code !== name ? `${code} · ${name}` : name }))
 })
 const foFilterFields = computed(() => [
-  // FU107: Company = baris TUNGGAL (immediate) — nilai tetap filter GLOBAL
-  // FU95 tersimpan per-user, diterapkan segera saat diganti
-  ...(showCompany.value
-    ? [{
-        key: 'company', label: 'Company', type: 'select', immediate: true,
-        ariaLabel: 'Filter company',
-        options: companyOptions.value
-      }]
-    : []),
   { key: 'status', label: 'Status', type: 'multi', options: FO_STATUS_OPTIONS },
   { key: 'item', label: 'Item', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih item', options: foItemOptions.value },
   { key: 'dibutuhkan', label: 'Dibutuhkan', type: 'range', placeholder: 'Semua tanggal' }
 ])
-// FU95: filter company GLOBAL — panel filter gaya WorkOrderList (satu tombol
-// Filter ber-badge + popover); pilihan tersimpan per-user di server sehingga
-// riwayat tetap tersaring setelah refresh / pindah halaman / tutup browser
+// FU95: panel filter gaya WorkOrderList (satu tombol Filter ber-badge +
+// popover); FU109: company bukan kontrol halaman ini (hanya Dashboard) —
+// riwayat tetap ter-scope karena loadFormOrders membaca state global.
 const filterOpen = ref(false)
-const companies = computed(() => companyFilterState.companies)
-const showCompany = computed(() => showCompanyPicker(companies.value))
-const companyOptions = computed(() => companySelectOptions(companies.value))
-const activeFilters = computed(() =>
-  countFilters(applied.value) + (showCompany.value && companyFilterState.company ? 1 : 0)
-)
-// FU107: nilai baris immediate (bukan draft) — dari state global FU95
-const immediateValues = computed(() => ({ company: companyFilterState.company }))
-function onImmediate(key, value) {
-  if (key === 'company') applyCompany(value)
-}
-async function applyCompany(value) {
-  const v = value || ''
-  if (v === companyFilterState.company) return
-  companyFilterState.company = v
-  foPage.value = 1 // FU98: daftar berganti → kembali halaman pertama
-  await saveCompanyFilter(v)
-  await loadFormOrders()
-}
+const activeFilters = computed(() => countFilters(applied.value))
 // FU105: commit baris saat Terapkan atau panel ditutup (pola FU100 —
 // komponen hidup di v-if panel, parent yang memicu sebelum unmount)
 function onFilters(value) {
@@ -86,12 +58,9 @@ function onFilters(value) {
   if (JSON.stringify(next) === JSON.stringify(applied.value)) return
   applied.value = next
 }
-// FU108: "Hapus semua" = bersih TOTAL — baris draft dikomit kosong oleh
-// FilterRows (riwayat klien langsung ikut); di sini company GLOBAL dilepas.
-// Halaman ini tidak punya kotak cari. Panel tetap terbuka.
-function onClearFo() {
-  if (companyFilterState.company) applyCompany('')
-}
+// FU108/FU109: "Hapus semua" = baris draft dikomit kosong oleh FilterRows
+// (riwayat klien langsung ikut); halaman ini tidak punya kontrol tunggal
+// lain — company bukan milik halaman ini (kontrolnya hanya di Dashboard).
 watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
 })
@@ -248,7 +217,8 @@ onMounted(async () => {
   </div>
 
   <!-- FU52: tombol menavigasi ke halaman buat (bukan panel toggle);
-       FU95: + filter company global gaya WorkOrderList/Stock Entry -->
+       FU95/FU109: + panel filter gaya WorkOrderList/Stock Entry — company
+       kini hanya dikontrol dari Dashboard -->
   <div class="toolbar fo-actions">
     <transition name="pop" mode="out-in">
       <span v-if="savedMsg" class="why fo-saved" role="status">{{ savedMsg }}</span>
@@ -262,17 +232,14 @@ onMounted(async () => {
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <!-- FU105/FU107: baris filter ala ERPNext — Company immediate +
-               Status & Item multi-nilai + rentang Dibutuhkan; draft dikomit
-               saat Terapkan atau panel ditutup -->
+          <!-- FU105: baris filter ala ERPNext — Status & Item multi-nilai +
+               rentang Dibutuhkan; draft dikomit saat Terapkan atau panel
+               ditutup; FU109: Company tidak lagi dikontrol di sini -->
           <FilterRows
             ref="frowsRef"
             :fields="foFilterFields"
-            :immediate="immediateValues"
             :model-value="applied"
             @update:model-value="onFilters"
-            @immediate-change="onImmediate"
-            @clear="onClearFo"
           />
         </div>
       </Transition>

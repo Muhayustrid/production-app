@@ -21,10 +21,9 @@ import {
   Boxes, CheckCircle2, ChevronRight, FileSpreadsheet, Filter, PackageX, Search, SearchX, TriangleAlert
 } from 'lucide-vue-next'
 import {
-  companyFilterState, loadStockAvailability, loadStockMovements, saveCompanyFilter,
+  loadStockAvailability, loadStockMovements,
   stockAvailabilityState, stockMovementsState
 } from './store.js'
-import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtId, fmtStampShort } from './format.js'
 import { harusKeLogin, loginRedirectUrl, stockXlsxFilename, tanggalPendek, woQtyText } from './dashboard.js'
 import { countFilters, normalizeFilters } from './filter-rows.js'
@@ -65,20 +64,9 @@ const amanPct = computed(() =>
   summary.value.total ? Math.round((summary.value.aman / summary.value.total) * 100) : 0
 )
 
-// FU95: filter company GLOBAL — pilihan tersimpan per-user di server; daftar
-// gudang & kapasitas resep ikut tersaring (server-side). Ganti company =
-// gudang di-reset (default DALAM scope company) lalu fetch ulang.
-const companies = computed(() => companyFilterState.companies)
-const showCompany = computed(() => showCompanyPicker(companies.value))
-const companyOptions = computed(() => companySelectOptions(companies.value))
-async function applyCompany(value) {
-  const v = value || ''
-  if (v === companyFilterState.company) return
-  companyFilterState.company = v
-  await saveCompanyFilter(v)
-  gudang.value = '' // gudang lama mungkin di luar company baru → default server
-  await reload()
-}
+// FU95/FU109: company = filter global tersimpan per-user, tapi KONTROLNYA kini
+// hanya di Dashboard — halaman ini tinggal mengikuti (daftar gudang &
+// kapasitas resep ikut tersaring server-side via loadStockAvailability).
 
 // filter klien FU104: kode ATAU nama (cari), baris grup + status (multi:
 // IN dalam field, AND antar baris — pola FU100); item per gudang kecil
@@ -113,43 +101,27 @@ function onFilters(value) {
   if (JSON.stringify(next) === JSON.stringify(applied.value)) return
   applied.value = next
 }
-// FU108: "Hapus semua" = bersih TOTAL — baris draft sudah dikomit kosong
-// oleh FilterRows; di sini kotak cari, gudang (dikembalikan ke default
-// server — watcher gudang tidak memuat untuk nilai kosong, jadi reload
-// eksplisit), dan company GLOBAL dilepas. Panel tetap terbuka.
+// FU108/FU109: "Hapus semua" = bersih TOTAL filter MILIK HALAMAN — baris
+// draft sudah dikomit kosong oleh FilterRows; di sini kotak cari dan gudang
+// (kembali ke default server — watcher gudang tidak memuat untuk nilai
+// kosong, jadi reload eksplisit). Company tidak disentuh (hanya Dashboard).
 function onClearFilters() {
   q.value = ''
   gudang.value = ''
-  if (companyFilterState.company) applyCompany('')
-  else reload()
+  reload()
 }
 watch(filterOpen, (open, sebelum) => {
   if (!open && sebelum) frowsRef.value?.commitIfChanged()
 })
 const avFilterFields = computed(() => [
-  // FU107: Company = baris TUNGGAL (immediate) — nilai tetap filter GLOBAL
-  // FU95 tersimpan per-user, diterapkan segera; Gudang tetap kontrol tunggal
-  // server-side di bawahnya (ganti = fetch ulang)
-  ...(showCompany.value
-    ? [{
-        key: 'company', label: 'Company', type: 'select', immediate: true,
-        ariaLabel: 'Filter company',
-        options: companyOptions.value
-      }]
-    : []),
   { key: 'grup', label: 'Item Group', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih grup', options: grupOptions.value.map((g) => ({ value: g, label: g })) },
   { key: 'status', label: 'Stock Status', type: 'multi', options: AVAIL_STATUS_OPTIONS }
 ])
-// FU107: nilai baris immediate (bukan draft) — dari state global FU95
-const immediateValues = computed(() => ({ company: companyFilterState.company }))
-function onImmediate(key, value) {
-  if (key === 'company') applyCompany(value)
-}
-// badge = baris + gudang (bila bukan default server) + company global FU95
+// badge = baris + gudang (bila bukan default server); FU109: company tidak
+// dihitung (kontrolnya hanya di Dashboard)
 const activeFilters = computed(() =>
   countFilters(applied.value) +
-  (gudang.value !== basis.value.gudang ? 1 : 0) +
-  (showCompany.value && companyFilterState.company ? 1 : 0)
+  (gudang.value !== basis.value.gudang ? 1 : 0)
 )
 
 // FU87: unduh .xlsx = laporan tampilan aktif — seluruh baris TERFILTER (bukan
@@ -292,16 +264,14 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
       <div v-if="filterOpen" class="popoverlay" @click="filterOpen = false"></div>
       <Transition name="pop">
         <div v-if="filterOpen" class="filterpanel">
-          <!-- FU107: Company kini baris pertama di dalam daftar filter
-               (immediate — nilai tetap global FU95); Gudang menyusul sebagai
-               kontrol tunggal server-side (ganti = fetch ulang) -->
+          <!-- FU104/FU109: Gudang tetap kontrol tunggal server-side di bawah
+               baris (ganti = fetch ulang); Company tidak lagi dikontrol di
+               sini (hanya Dashboard) -->
           <FilterRows
             ref="frowsRef"
             :fields="avFilterFields"
-            :immediate="immediateValues"
             :model-value="applied"
             @update:model-value="onFilters"
-            @immediate-change="onImmediate"
             @clear="onClearFilters"
           />
           <div class="ffield" style="margin-top: 10px">

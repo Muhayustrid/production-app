@@ -9,17 +9,16 @@
 // native); baris Terkirim → detail baca-saja. Default view Tabel.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
-  companyFilterState, handoverBoard, handoverLots, handoverRequests, handoverState,
+  handoverBoard, handoverLots, handoverRequests, handoverState,
   listPreferencesState, loadBoard, lotAvailablePcs, lotForWo, lotRemainingPcs, lotReservedPcs,
-  normalizePageSize, PAGE_SIZE_OPTIONS, saveCompanyFilter, saveListPreferences, savedListPreferences, sendHandover
+  normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, sendHandover
 } from './store.js'
-import { companySelectOptions, showCompanyPicker } from './company-filter.js'
 import { fmtInt, qtyMain, qtyStack } from './format.js'
 import { handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
 import { distinctItems, filterSerahRows, serahFilterCount } from './handover-filter.js'
 import { rowClickAction, seRouteLabel } from './handover-se.js'
-import { normalizeFilters, countFilters } from './filter-rows.js'
+import { normalizeFilters } from './filter-rows.js'
 import { laneStatusMeta } from './form-order.js'
 import FilterRows from './FilterRows.vue'
 import RangeField from './RangeField.vue'
@@ -207,21 +206,18 @@ watch(lotFilterOpen, (open, sebelum) => {
   saveHandoverPreferences()
 })
 // (watch viewMode dipasang di bawah deklarasi viewMode — hindari TDZ setup)
-// FU108: "Hapus semua" = bersih TOTAL halaman (bukan hanya panel yang
-// tampak) — draft tabel sudah dikomit kosong; tabel juga melepas lot masuk
-// (mode kanban), kanban juga melepas baris tabel; kotak cari ikut bersih
-// dan company GLOBAL dilepas (applyCompany sendiri yang memuat ulang papan)
+// FU108/FU109: "Hapus semua" = bersih TOTAL filter MILIK HALAMAN (bukan
+// hanya panel yang tampak) — draft tabel sudah dikomit kosong; tabel juga
+// melepas lot masuk (mode kanban), kanban juga melepas baris tabel; kotak
+// cari ikut bersih. Company TIDAK disentuh (kontrolnya hanya di Dashboard).
 function onClearSe() {
   searchQ.value = ''
   lotFrom.value = ''; lotTo.value = ''
-  if (companyFilterState.company) applyCompany('')
 }
 function lotReset() {
   lotFrom.value = ''; lotTo.value = ''; lotFilterOpen.value = false
   seApplied.value = {}
-  searchQ.value = '' // FU108: bersih total — kotak cari ikut
-  // FU95: bersih total termasuk company global (konvensi FU75)
-  if (companyFilterState.company) applyCompany('')
+  searchQ.value = '' // FU108: bersih total — kotak cari ikut (company: Dashboard)
 }
 
 // FU103: payload baris filter tabel — array mengikuti kontrak filterSerahRows
@@ -231,18 +227,8 @@ const seFilter = () => ({
   from: seApplied.value.dibuat?.dari || '',
   to: seApplied.value.dibuat?.sampai || ''
 })
-// FU95: filter company GLOBAL — satu pilihan utk papan Stock Entry (server),
-// tersimpan per-user di server; ganti company = fetch ulang papan
-const companies = computed(() => companyFilterState.companies)
-const showCompany = computed(() => showCompanyPicker(companies.value))
-const companyOptions = computed(() => companySelectOptions(companies.value))
-async function applyCompany(value) {
-  const v = value || ''
-  if (v === companyFilterState.company) return
-  companyFilterState.company = v
-  await saveCompanyFilter(v)
-  loadBoard()
-}
+// FU109: kontrol Company dilepas dari halaman ini (hanya Dashboard) — papan
+// tetap ter-scope karena loadBoard membaca companyFilterState global.
 const itemOptions = computed(() => distinctItems(handoverRequests))
 // opsi item tersimpan bisa basi (item tak lagi ada di papan) — tetap
 // ditampilkan agar pilihan lama terbaca (pola fProduct halaman WO)
@@ -253,36 +239,20 @@ const itemFilterOptions = computed(() => {
   return [...stale, ...base]
 })
 const seFilterFields = computed(() => [
-  // FU107: Company = baris TUNGGAL (immediate) yang selalu tampil di kedua
-  // mode panel; nilainya tetap filter GLOBAL FU95 (tersimpan per-user,
-  // diterapkan segera) — presentasi pindah ke daftar baris
-  ...(showCompany.value
-    ? [{
-        key: 'company', label: 'Company', type: 'select', immediate: true,
-        ariaLabel: 'Filter company',
-        options: companyOptions.value
-      }]
-    : []),
   { key: 'status', label: 'Status', type: 'multi', options: SE_STATUS_OPTIONS },
   { key: 'item', label: 'Item', type: 'multi', filter: true, placeholder: 'Pilih satu atau lebih item', options: itemFilterOptions.value },
   { key: 'dibuat', label: 'Dibuat', type: 'range', placeholder: 'Semua tanggal' }
 ])
-// FU107: nilai baris immediate (bukan draft) — dari state global FU95
-const immediateValues = computed(() => ({ company: companyFilterState.company }))
-function onImmediate(key, value) {
-  if (key === 'company') applyCompany(value)
-}
 // commit baris (Terapkan atau panel ditutup) — normalisasi kontrak baris
 function onSeFilters(value) {
   const next = normalizeFilters(value, SE_FILTER_SHAPE)
   if (JSON.stringify(next) === JSON.stringify(seApplied.value)) return
   seApplied.value = next
 }
-// badge tombol Filter mengikuti mode yang sedang aktif; FU95: company global
-// dihitung di kedua mode (papan/server mengikuti company)
-const companyActive = computed(() => (showCompany.value && companyFilterState.company ? 1 : 0))
+// badge tombol Filter mengikuti mode yang sedang aktif (FU109: company tidak
+// lagi dihitung — kontrolnya hanya di Dashboard)
 const activeFilterCount = computed(() =>
-  (viewMode.value === 'tabel' ? serahFilterCount(seFilter()) : lotFilterCount.value) + companyActive.value)
+  viewMode.value === 'tabel' ? serahFilterCount(seFilter()) : lotFilterCount.value)
 
 const byLane = computed(() => ({
   cold: pagedColdLots.value,
@@ -505,27 +475,18 @@ onMounted(() => {
       <Transition name="pop">
         <div v-if="lotFilterOpen" class="filterpanel">
           <template v-if="viewMode === 'tabel'">
-            <!-- FU103/FU107: baris filter ala ERPNext (Company immediate +
-               status/item multi-nilai + rentang dibuat) — draft dikomit saat
-               Terapkan atau panel ditutup -->
+            <!-- FU103: baris filter ala ERPNext (status/item multi-nilai +
+               rentang dibuat) — draft dikomit saat Terapkan atau panel
+               ditutup; FU109: Company tidak lagi dikontrol di sini -->
             <FilterRows
               ref="seFrowsRef"
               :fields="seFilterFields"
-              :immediate="immediateValues"
               :model-value="seApplied"
               @update:model-value="onSeFilters"
-              @immediate-change="onImmediate"
               @clear="onClearSe"
             />
           </template>
           <template v-else>
-            <!-- FU107: panel kanban punya baris Company sendiri (immediate) -->
-            <FilterRows
-              :fields="seFilterFields.filter((f) => f.immediate)"
-              :immediate="immediateValues"
-              :model-value="{}"
-              @immediate-change="onImmediate"
-            />
             <div class="ffield">
               <label>Lot masuk</label>
               <RangeField v-model:dari="lotFrom" v-model:sampai="lotTo" placeholder="Semua tanggal" />
