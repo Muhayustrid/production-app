@@ -2201,6 +2201,13 @@ textarea.input { height: auto; padding: 8px 10px; }
 .fo-c-item { width: 46%; }
 .fo-c-qty { width: 130px; }
 .fo-c-uom { width: 90px; }
+/* FU98b: tabel detail dialog TIDAK mewarisi min-width 640px grid halaman
+   Buat (rule di atas) — lebar penuh dialog, kolom item menyerap sisa
+   (tanpa geser kanan-kiri); WAJIB setelah blok .fo-grid agar menang order */
+.fo-detail-items { width: 100%; min-width: 0; table-layout: fixed; }
+.fo-detail-items .fo-c-item { width: auto; }
+.fo-detail-items .fo-c-qty { width: 90px; }
+.fo-detail-items .fo-c-uom { width: 90px; }
 .fo-c-act { width: 44px; }
 .fo-qty-input { min-width: 96px; }
 .fo-uom { color: var(--muted); }
