@@ -953,3 +953,13 @@ Result: **DONE (2026-10-07).** Node **100/100**; build js `8e420cd0…`/css `d31
 **GOTCHA:** screenshot bench yang diambil segera setelah klik pembuka overlay menangkap animasi enter (`p-anchored-overlay-*`) sehingga panel tampak samar/tembus — mirip gotcha IAB "Popover SAMAR" tetapi versi transisi; buktikan sehat lewat computed style (backgroundColor rgb(255,255,255), opacity 1, z-index 1001, elementFromPoint = `.p-select-list`) + tangkapan ulang setelah jeda ~600 ms, jangan langsung curiga CSS.
 
 Revisi FU99b (umpan balik user: "udh oke sih, cuma better lebih dijelasin warnanya alias mencolok, biar user langsung ngeh") — affordance garis putus dinilai samar. `.dcap-uom` diganti gaya PIL: background var(--brand-soft) + radius 6px (bahasa visual tab aktif `.dseg-btn.on` yang sudah dikenal user), teks & chevron brand-strong, hover `color-mix(in srgb, var(--brand-soft) 80%, var(--brand-strong))`. Verifikasi: node 100/100; css `666e9b7e…` (js tak berubah `8e420cd0…`) HTTP md5 = host 8081 & 8082; E2E 8082 diulang **10/10 PASS**; computed style trigger bg rgb(227,238,245) / color rgb(42,85,133) / radius 6px / tinggi 20px; screenshot `/tmp/fu99b_pil.png`.
+
+## Z27. FU100a — pemilih UOM caption tetap tampil di mode Minggu (permintaan user)
+
+Status: DONE (2026-10-07) — user: "yang minggu ini juga perlu ada fiternya jangan bulan doang".
+
+Akar: caption+pill hanya render di dalam `v-else-if="seri"` dan `seri` null saat series kosong (pekan tanpa WO planned/SE posting). Perubahan: server `dashboard_daily` menambah key `uoms` (series kosong + mode minggu → kandidat UOM dari bulan berjalan, satu query ekstra hanya pada kasus itu); frontend `chartUomOptions` fallback ke `daily.uoms`, `seri` menyintesis `{uom, nyata:false, rows:[]}`, template menyembunyikan chart (`v-if="seri.nyata"`) dan menampilkan pesan kosong + caption ber-pil.
+
+Result: **DONE (2026-10-07).** Node 100/100; E2E fu100a **11/11 di 8082 & 8081**; fallback murni dibuktikan bench execute 8082 (`week_series:0, fallback_uoms:[Pack,Pcs]`); test python daily 3/3 lulus; A/B modul penuh dgn HEAD membuktikan 4 kegagalan pre-existing (test_27/29/36/59 — fixture SE/data demo, bukan daily). js `a3a31d04…` css `666e9b7e…` md5=host 2 stack; dashboard.py docker cp 2 backend + restart.
+
+**GOTCHA:** (a) pref company per-user (FU95) mengikuti sesi browser — E2E Administrator di 8082 mewarisi pref company tanpa data Okt sehingga series+fallback sah kosong; E2E wajib menyetel "Semua company" dulu. (b) series pekan terisi dari SE posting JUGA (bukan hanya WO planned) — cari kasus "pekan kosong" untuk uji fallback harus cek keduanya.

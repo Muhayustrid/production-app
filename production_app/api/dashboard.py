@@ -571,12 +571,23 @@ def dashboard_daily(company=None, mode=None):
 	else:
 		frappe.throw("Mode grafik tidak dikenal.", exc=frappe.ValidationError)
 	series = _daily_series(str(tgl_dari), str(tgl_sampai), company)
+	uoms = [s["uom"] for s in series]
+	if not uoms and mode == DAILY_MODE_MINGGU:
+		# FU100a: pekan kosong tetap mengirim kandidat UOM dari bulan berjalan
+		# agar pemilih UOM di caption tetap tampil di KEDUA mode (permintaan
+		# user) — chart-nya tetap kosong; mode bulan tak butuh fallback karena
+		# window-nya sudah bulan berjalan sendiri.
+		uoms = [
+			s["uom"]
+			for s in _daily_series(str(hari.replace(day=1)), str(get_last_day(hari)), company)
+		]
 	return {
 		"mode": mode,
 		"dari": str(tgl_dari),
 		"sampai": str(tgl_sampai),
 		"granularity": "harian",
 		"dominant_uom": series[0]["uom"] if series else None,
+		"uoms": uoms,
 		"series": series,
 	}
 

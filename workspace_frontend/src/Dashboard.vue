@@ -113,22 +113,34 @@ const chartMode = ref('minggu')
 const chartUom = ref('')
 const daily = computed(() => dashboardState.daily)
 const chartSeriesList = computed(() => daily.value?.series || [])
-const chartUomOptions = computed(() =>
-  chartSeriesList.value.map((s) => ({ label: s.uom, value: s.uom }))
-)
+// FU100a: opsi UOM = UOM window; pekan kosong jatuh ke kandidat fallback
+// server (`uoms` — UOM bulan berjalan) agar pemilih tetap tampil di KEDUA
+// mode, bukan cuma bulan
+const chartUomOptions = computed(() => {
+  const list = chartSeriesList.value.map((s) => ({ label: s.uom, value: s.uom }))
+  if (list.length || !daily.value) return list
+  return (daily.value.uoms || []).map((u) => ({ label: u, value: u }))
+})
 const seri = computed(() => {
   const list = chartSeriesList.value
-  if (!list.length) return null
-  return (
+  if (!list.length) {
+    // window tanpa kejadian: seri sintetis nol — caption + pemilih UOM tetap
+    // tampil; chart disembunyikan (nyata=false → pesan kosong di tempatnya)
+    const uom = chartUom.value || daily.value?.uoms?.[0] || ''
+    return uom ? { uom, nyata: false, rows: [] } : null
+  }
+  const found =
     list.find((s) => s.uom === chartUom.value) ||
     list.find((s) => s.uom === daily.value?.dominant_uom) ||
     list[0]
-  )
+  return { ...found, nyata: true }
 })
-// pilihan UOM ganti tidak valid (hasil fetch baru / ganti mode) → dominan
+// pilihan UOM ganti tidak valid (hasil fetch baru / ganti mode) → dominan /
+// kandidat fallback pertama
 watch(chartSeriesList, (list) => {
   if (!list.some((s) => s.uom === chartUom.value)) {
-    chartUom.value = daily.value?.dominant_uom || list[0]?.uom || ''
+    chartUom.value =
+      daily.value?.dominant_uom || list[0]?.uom || daily.value?.uoms?.[0] || ''
   }
 })
 const barData = computed(() => {
@@ -496,9 +508,12 @@ onMounted(reload)
             <Button label="Coba lagi" size="small" severity="secondary" variant="outlined" @click="retryDaily" />
           </div>
           <template v-else-if="seri">
-            <div class="dchart-box">
+            <div v-if="seri.nyata" class="dchart-box">
               <Chart type="bar" :data="barData" :options="barOptions" aria-label="Grafik rencana vs hasil per periode" />
             </div>
+            <!-- FU100a: window kosong tetap menampilkan caption + pemilih UOM
+               di bawah pesan kosong — filter konsisten di kedua mode -->
+            <p v-else class="dash-none">Belum ada rencana maupun hasil dalam periode ini</p>
             <p class="dcap">
               Dalam
               <!-- UOM campuran (krim kopi Pcs vs dough Pack): satu chart satu
