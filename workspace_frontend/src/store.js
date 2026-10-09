@@ -86,18 +86,15 @@ function errorDetails(raw) {
   if (shortage) {
     return {
       title: 'Transfer Material Gagal',
-      message: 'Stok tidak cukup untuk menyelesaikan transfer material.',
-      details: [
-        `Kebutuhan: ${shortage[1]}`,
-        `Material: ${shortage[2]}`,
-        `Gudang: ${shortage[3]}`
-      ],
-      hint: 'Tambahkan stok atau gunakan gudang sumber lain, lalu coba lagi.'
+      // FU115: satu kalimat apa + kenapa
+      message: `Stok ${shortage[2]} kurang ${shortage[1]} di ${shortage[3]}.`,
+      details: [],
+      hint: 'Tambah stok atau ganti gudang sumber.'
     }
   }
   return {
-    title: 'Aksi Tidak Berhasil',
-    message: text || 'ERPNext menolak aksi ini. Periksa data Work Order lalu coba lagi.',
+    title: 'Gagal',
+    message: text || 'Ditolak server. Periksa data lalu coba lagi.',
     details: [],
     hint: ''
   }
@@ -105,7 +102,7 @@ function errorDetails(raw) {
 
 export function setActionError(error, method = '') {
   const info = errorDetails(error?.message || error)
-  if (method && ACTION_LABELS[method] && info.title === 'Aksi Tidak Berhasil') {
+  if (method && ACTION_LABELS[method] && info.title === 'Gagal') {
     info.title = `${ACTION_LABELS[method]} Gagal`
   }
   state.actionError = info

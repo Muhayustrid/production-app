@@ -340,7 +340,7 @@ function removeStageChip() {
         No. WO<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
       </button>
       <button type="button" class="th-sort" :class="{ on: sortKey === 'adonan', asc: sortDir === 'asc' }" @click="setSort('adonan')">
-        Adonan ke<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
+        Adonan<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
       </button>
       <button type="button" class="th-sort" :class="{ on: sortKey === 'produk', asc: sortDir === 'asc' }" @click="setSort('produk')" title="Urut kode produk">
         Produk<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
@@ -351,8 +351,7 @@ function removeStageChip() {
       <button type="button" class="th-sort" :class="{ on: sortKey === 'status', asc: sortDir === 'asc' }" @click="setSort('status')">
         Status<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
       </button>
-      <span>Tahap Aktif</span>
-      <span>Gudang</span>
+      <span class="th-plain">Tahap</span>
       <button type="button" class="th-sort kanan" :class="{ on: sortKey === 'rencana', asc: sortDir === 'asc' }" @click="setSort('rencana')">
         Rencana<ArrowDown :size="11" :stroke-width="2.4" class="sort-ico" aria-hidden="true" />
       </button>
@@ -366,15 +365,15 @@ function removeStageChip() {
       @click="open(w.id)"
     >
       <span class="wo-id c-id">{{ w.id }}</span>
-      <span class="c-adonan"><span class="mlabel">Adonan ke</span> {{ w.persiapan.adonanKe ?? '-' }}</span>
+      <span class="c-adonan"><span class="mlabel">Adonan</span> {{ w.persiapan.adonanKe ?? '-' }}</span>
       <span class="wo-prod c-prod">
         {{ w.product }}
         <small class="mono">{{ w.itemCode }}</small>
       </span>
       <span class="c-date">{{ fmtDate(w.plannedDate) }}</span>
       <span class="c-status"><span class="badge" :class="statusClass(w.status)">{{ w.status }}</span></span>
-      <span class="c-stage"><span class="chip">{{ stageLabel(w) }}</span></span>
-      <span class="c-gudang">
+      <span class="c-stage">
+        <span class="chip">{{ stageLabel(w) }}</span>
         <span v-if="w.handover" class="chip-gudang" :class="w.handover">{{ HANDOVER_LABELS[w.handover] }}</span>
       </span>
       <span class="wo-qty c-qty">

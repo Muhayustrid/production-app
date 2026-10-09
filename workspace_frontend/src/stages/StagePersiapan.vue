@@ -27,7 +27,7 @@ const tried = ref(false)
 const reedit = computed(() => !props.review && props.wo.stage !== 'persiapan')
 
 function validate() {
-  errors.adonanKe = !(Number(form.adonanKe) >= 1) ? 'Isi nomor adonan (min. 1).' : ''
+  errors.adonanKe = !(Number(form.adonanKe) >= 1) ? 'Wajib diisi, minimal 1.' : ''
   // FU38: penimbang/jumlah kru/leader opsional — kosong = tidak dicatat
   // FU39: suhu adonan opsional juga — kosong dikirim '' agar server melewatkan nilainya
   return Object.values(errors).every((e) => !e)
@@ -69,12 +69,12 @@ function submit() {
           </div>
 
           <div class="field">
-            <label for="f-jamadonan">Jam Adonan</label>
+            <label for="f-jamadonan">Jam</label>
             <input id="f-jamadonan" v-model="form.jamAdonan" class="input" type="time" :disabled="review" />
           </div>
 
           <div class="field">
-            <label for="f-suhu">Suhu Adonan</label>
+            <label for="f-suhu">Suhu</label>
             <div class="inputwrap">
               <input id="f-suhu" v-model="form.suhuAdonan" class="input" type="number" step="0.1" min="0" :disabled="review" />
               <span class="unitmark">°C</span>
@@ -87,17 +87,17 @@ function submit() {
         <div class="grouptitle">Tim Produksi</div>
         <div class="form-grid cols3">
           <div class="field">
-            <label for="f-penimbang">Nama Penimbang</label>
+            <label for="f-penimbang">Penimbang</label>
             <input id="f-penimbang" v-model="form.namaPenimbang" class="input" type="text" :disabled="review" />
           </div>
 
           <div class="field">
-            <label for="f-kru">Jumlah Kru</label>
+            <label for="f-kru">Kru</label>
             <input id="f-kru" v-model="form.jumlahKru" class="input" type="number" min="1" step="1" :disabled="review" />
           </div>
 
           <div class="field">
-            <label for="f-leader">Leader Produksi</label>
+            <label for="f-leader">Leader</label>
             <input id="f-leader" v-model="form.leaderProduksi" class="input" type="text" :disabled="review" />
           </div>
         </div>
@@ -105,7 +105,7 @@ function submit() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" @click="submit">{{ reedit ? 'Simpan Perbaikan' : 'Mulai Produksi' }}</button>
+      <button class="btn btn-primary" @click="submit">{{ reedit ? 'Simpan' : 'Mulai' }}</button>
     </div>
   </section>
 </template>

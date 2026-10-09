@@ -613,8 +613,10 @@ textarea.input { height: auto; padding: 8px 10px; }
      (bolong Gudang↔Rencana & Produk↔Jadwal) — kolom tengah diberi porsi fr
      kecil agar pertumbahan lebar tersebar; gap dilesukan 12→20 supaya
      ruang sisa terbaca sebagai napas antar kolom, bukan lubang */
-  grid-template-columns: 132px 76px minmax(170px, 1.5fr) minmax(84px, 0.55fr) minmax(110px, 0.5fr) minmax(118px, 0.5fr) minmax(118px, 0.55fr) minmax(130px, 0.8fr) 16px;
-  gap: 20px;
+  /* FU115: kolom Gudang digabung ke Tahap (chip bertumpuk) — 8 kolom,
+     Produk ambil porsi terbesar, No. WO tidak dipatah */
+  grid-template-columns: 176px 64px minmax(200px, 2fr) minmax(92px, 0.5fr) minmax(110px, 0.5fr) minmax(130px, 0.6fr) minmax(110px, 0.6fr) 16px;
+  gap: 16px;
   align-items: center;
   padding: 9px 16px;
 }
@@ -632,6 +634,8 @@ textarea.input { height: auto; padding: 8px 10px; }
    menghadap atas saat asc */
 .wo-thead .th-sort {
   font: inherit;
+  text-transform: inherit; /* FU115: tombol UA reset uppercase — samakan dengan sel span */
+  letter-spacing: inherit;
   color: inherit;
   background: none;
   border: 0;
@@ -653,7 +657,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 /* FU22: varian kompak untuk layar menengah (layout kartu baru di <=820px) */
 @media (max-width: 1180px) {
   .wo-thead, .wo-row {
-    grid-template-columns: 122px 64px minmax(150px, 1.2fr) 70px 100px 104px 104px minmax(118px, 1fr) 14px;
+    grid-template-columns: 162px 56px minmax(150px, 1.4fr) 84px 100px 120px minmax(100px, 0.8fr) 14px;
     gap: 9px;
     padding: 9px 12px;
   }
@@ -689,7 +693,7 @@ textarea.input { height: auto; padding: 8px 10px; }
 /* tekan langsung terasa saat pointer-down */
 .wo-row:active { background: var(--brand-soft); }
 .wo-row:focus-visible { outline-offset: -2px; }
-.wo-id { font-weight: 600; letter-spacing: 0.01em; }
+.wo-id { font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
 .wo-prod { font-weight: 600; font-size: 13.5px; letter-spacing: -0.005em; }
 .wo-prod small { display: block; color: var(--faint); font-weight: 400; }
 .wo-qty {
@@ -1458,7 +1462,6 @@ textarea.input { height: auto; padding: 8px 10px; }
 
 /* kolom Tahap Aktif daftar WO: chip tahap + chip serah terima (WO completed) */
 .c-stage { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
-.c-gudang { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
 
 /* sub-baris banner Work Order selesai */
 .banner-sub {
@@ -1972,7 +1975,7 @@ textarea.input { height: auto; padding: 8px 10px; }
       "id status"
       "prod prod"
       "adonan date"
-      "stage gudang"
+      "stage stage"
       "qty qty";
     row-gap: 7px;
   }
@@ -1982,8 +1985,7 @@ textarea.input { height: auto; padding: 8px 10px; }
   .wo-row .c-adonan { grid-area: adonan; }
   .wo-row .c-date { grid-area: date; text-align: right; }
   .wo-row .c-stage { grid-area: stage; }
-  .wo-row .c-gudang { grid-area: gudang; justify-content: flex-end; align-items: flex-end; }
-  .wo-row .c-qty { grid-area: qty; text-align: right; }
+    .wo-row .c-qty { grid-area: qty; text-align: right; }
   .wo-row .c-arrow { display: none; }
   .wo-row .mlabel { display: block; font-size: 10.5px; color: var(--faint); }
 

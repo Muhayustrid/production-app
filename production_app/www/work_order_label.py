@@ -18,7 +18,7 @@ MAX_LABELS = 10000
 def get_context(context):
     name = frappe.form_dict.get("name")
     if not name:
-        frappe.throw(_("Work Order wajib dipilih untuk mencetak label."))
+        frappe.throw(_("Pilih Work Order dulu."))
 
     wo = frappe.get_doc("Work Order", name)
     wo.check_permission("read")
@@ -26,27 +26,27 @@ def get_context(context):
     stage = "postpacking" if skips_prepacking(wo.production_item) else "prepacking"
     stage_label = "Post-Packing" if stage == "postpacking" else "Pre-Packing"
     if not wo.get(f"custom_{stage}_confirmed"):
-        frappe.throw(_("Simpan {0} sebelum mencetak label Work Order {1}.").format(stage_label, name))
+        frappe.throw(_("Label belum bisa dicetak: simpan {0} {1} dulu.").format(stage_label, name))
 
     good_qty = flt(wo.get(f"custom_good_qty_{stage}"))
     if not math.isfinite(good_qty) or good_qty <= 0:
-        frappe.throw(_("Good Qty {0} harus lebih besar dari nol untuk mencetak label.").format(stage_label))
+        frappe.throw(_("Label belum bisa dicetak: Good {0} masih 0.").format(stage_label))
 
     units = frappe._dict(production_item=wo.production_item, custom_uom=wo.get("custom_uom"))
     _enrich_units([units])
     factor = units.display_conversion_factor
     if factor is None:
-        frappe.throw(units.uom_warning or _("Konversi satuan Item belum valid untuk mencetak label."))
+        frappe.throw(units.uom_warning or _("Label belum bisa dicetak: konversi satuan Item belum diatur."))
     qty_per_label = good_qty / factor
     if not math.isfinite(qty_per_label):
-        frappe.throw(_("Good Qty {0} tidak valid untuk mencetak label.").format(stage_label))
+        frappe.throw(_("Label belum bisa dicetak: Good {0} tidak valid.").format(stage_label))
     extra_labels = str(frappe.form_dict.get("extra") or "0")
     if len(extra_labels) > 5 or not re.fullmatch(r"[0-9]+", extra_labels):
-        frappe.throw(_("Jumlah label tambahan harus berupa bilangan bulat 0 atau lebih, maksimal {0}.").format(MAX_LABELS))
+        frappe.throw(_("Label tambahan harus angka bulat 0–{0}.").format(MAX_LABELS))
     extra_labels = int(extra_labels)
     label_count = max(1, math.ceil(qty_per_label - 1e-8)) + extra_labels
     if label_count > MAX_LABELS:
-        frappe.throw(_("Jumlah label melebihi batas {0} dalam satu cetakan.").format(MAX_LABELS))
+        frappe.throw(_("Maksimal {0} label per cetak.").format(MAX_LABELS))
 
     item = frappe.db.get_value(
         "Item", wo.production_item,

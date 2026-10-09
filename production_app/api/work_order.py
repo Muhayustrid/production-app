@@ -62,6 +62,13 @@ STAGE_FINISH = "finish"
 STAGE_SELESAI = "selesai"
 STAGE_CANCELLED = "cancelled"
 STAGE_REVIEW = "review"
+# FU115: nama tahap yang dibaca operator di pesan error
+STAGE_NAMES = {
+	STAGE_PERSIAPAN: "Persiapan", STAGE_MATERIAL: "Material", STAGE_OPERASI: "Operasi",
+	STAGE_PREPACKING: "Pre-Packing", STAGE_POST_PACKING: "Post-Packing", STAGE_FINISH: "Finish",
+	STAGE_SELESAI: "Selesai", STAGE_CANCELLED: "Dibatalkan",
+}
+QTY_NAMES = {"reject": "Reject", "trial": "Trial", "sisa": "Sisa"}
 
 # FU113: kosakata lama frontend (mockup) — normalisasi sekali di pintu masuk;
 # klien lain yang mengirim nama kanonik tidak berubah.
@@ -475,7 +482,7 @@ def _enrich_units(rows):
 def wo_detail(name):
 	"""Full workspace detail for one Work Order; independent permission check."""
 	if not frappe.has_permission(DOCTYPE, "read", doc=name):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+		frappe.throw(_("Tidak punya akses ke Work Order {0}.").format(name), frappe.PermissionError)
 
 	wo = frappe.get_doc(DOCTYPE, name)
 	data = wo.as_dict()
@@ -651,7 +658,7 @@ def _validate_prep_values(values):
 	cleaned = {}
 	for key, value in values.items():
 		if key not in PREP_FIELD_MAP:
-			frappe.throw(_("Unknown preparation field: {0}").format(key))
+			frappe.throw(_("Field Persiapan tidak dikenal: {0}.").format(key))
 		if value in (None, ""):
 			continue
 		fieldname = PREP_FIELD_MAP[key]
@@ -665,11 +672,11 @@ def _validate_prep_values(values):
 			# cint agar sampah non-angka jatuh ke 0 lalu ditolak di bawah
 			cleaned[fieldname] = cint(value)
 			if cleaned[fieldname] < 1:
-				frappe.throw(_("Adonan ke minimal 1."))
+				frappe.throw(_("Adonan ke harus minimal 1."))
 		elif key in ("adonan", "jumlah_kru"):
 			cleaned[fieldname] = int(value)
 			if cleaned[fieldname] < 0:
-				frappe.throw(_("{0} tidak boleh negatif").format(key))
+				frappe.throw(_("{0} tidak boleh negatif.").format("Kru" if key == "jumlah_kru" else "Adonan"))
 		elif key == "suhu_adonan":
 			cleaned[fieldname] = float(value)
 		elif key == "jam_adonan":
@@ -1138,12 +1145,12 @@ def prepare(name, values, submit=0):
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
 	wo = frappe.get_doc(DOCTYPE, name)
 	if wo.docstatus == 2 or wo.status in ("Stopped", "Closed"):
-		frappe.throw(_("Work Order {0} tidak bisa disiapkan").format(name))
+		frappe.throw(_("{0} sudah dibatalkan/dihentikan, tidak bisa diubah.").format(name))
 	# FU46: WO yang sudah selesai hanya boleh dikoreksi Data Adonannya oleh
 	# Manufacturing Manager — ditolak sebelum ada tulisan apa pun
 	if derive_stage(wo) == STAGE_SELESAI and PREP_FINISHED_ROLE not in frappe.get_roles():
 		frappe.throw(
-			_("Hanya {0} yang bisa mengubah Data Adonan Work Order yang sudah selesai").format(
+			_("WO sudah selesai; hanya {0} yang boleh mengubah Persiapan.").format(
 				PREP_FINISHED_ROLE
 			),
 			frappe.PermissionError,
@@ -1187,7 +1194,7 @@ def transfer_materials(name):
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
 	wo = frappe.get_doc(DOCTYPE, name)
 	if wo.docstatus != 1 or wo.status in ("Stopped", "Closed"):
-		frappe.throw(_("Material transfer tidak tersedia untuk Work Order {0}").format(name))
+		frappe.throw(_("Transfer ditolak: {0} belum submit atau sudah dihentikan.").format(name))
 
 	transferred_before = flt(wo.material_transferred_for_manufacturing)
 	remaining = max(flt(wo.qty) - transferred_before, 0)
@@ -1199,7 +1206,7 @@ def transfer_materials(name):
 	)
 	if draft:
 		frappe.throw(
-			_("Selesaikan atau batalkan draft transfer {0} terlebih dahulu").format(
+			_("Masih ada draft transfer {0}; submit atau batalkan dulu.").format(
 				frappe.utils.get_link_to_form("Stock Entry", draft)
 			)
 		)
@@ -1230,12 +1237,12 @@ def _locked_job_card(name, job_card):
 	frappe.has_permission(DOCTYPE, "write", doc=name, throw=True)
 	wo = frappe.get_doc(DOCTYPE, name)
 	if wo.docstatus != 1 or wo.status in ("Stopped", "Closed"):
-		frappe.throw(_("Job Card actions tidak tersedia untuk Work Order {0}").format(name))
+		frappe.throw(_("Operasi ditolak: {0} belum submit atau sudah dihentikan.").format(name))
 
 	card = frappe.get_doc("Job Card", job_card)  # raises DoesNotExistError on wrong id
 	if card.work_order != name:
 		frappe.throw(
-			_("Job Card {0} bukan milik Work Order {1}").format(job_card, name),
+			_("Job Card {0} bukan milik {1}.").format(job_card, name),
 			frappe.PermissionError,
 		)
 	return card
@@ -1252,7 +1259,7 @@ def _resolve_employees(employees):
 		)
 		if self_employee:
 			return [{"employee": self_employee}]
-	frappe.throw(_("Data karyawan (Employee) diperlukan untuk mulai Job Card"))
+	frappe.throw(_("Pilih Karyawan dulu untuk memulai operasi."))
 
 
 @frappe.whitelist()
@@ -1260,7 +1267,7 @@ def jobcard_start(name, job_card, start_time=None, employees=None):
 	"""Start the native timer on exactly this Job Card."""
 	card = _locked_job_card(name, job_card)
 	if any(not t.to_time for t in (card.time_logs or [])):
-		frappe.throw(_("Job Card {0} sudah berjalan (time log masih terbuka)").format(job_card))
+		frappe.throw(_("Operasi {0} sudah berjalan.").format(job_card))
 	card.start_timer(start_time=start_time or frappe.utils.now(), employees=_resolve_employees(employees))
 	card.reload()
 	return {
@@ -1282,18 +1289,18 @@ def jobcard_complete(name, job_card, qty=None, end_time=None, auto_submit=1, pro
 	card = _locked_job_card(name, job_card)
 	if card.docstatus == 0 and flt(card.total_completed_qty) > 0:
 		frappe.throw(
-			_("Job Card {0} sudah memiliki penyelesaian sebelumnya; selesaikan lewat dokumennya").format(job_card)
+			_("Job Card {0} sudah punya hasil tercatat; selesaikan di dokumen Job Card.").format(job_card)
 		)
 	qty = flt(qty) if qty is not None else 0
 	loss = flt(process_loss_qty) if process_loss_qty is not None else 0
 	remaining = flt(card.for_quantity) - flt(card.total_completed_qty)
 	if qty > remaining:
 		frappe.throw(
-			_("Qty selesai ({0}) melebihi sisa qty Job Card ({1})").format(qty, remaining)
+			_("Selesai {0} melebihi sisa {1}.").format(qty, remaining)
 		)
 	if qty + loss < remaining:
 		frappe.throw(
-			_("Qty selesai ({0}) + susut ({1}) belum menutup sisa qty Job Card ({2}); isi sisanya sebagai susut agar operasi selesai").format(
+			_("Selesai {0} + susut {1} kurang dari sisa {2}; tambahkan susut.").format(
 				qty, loss, remaining
 			)
 		)
@@ -1336,19 +1343,19 @@ def _validate_prepacking(values):
 	cleaned = {}
 	for key, value in values.items():
 		if key not in PREPACKING_FIELD_MAP:
-			frappe.throw(_("Field pre-packing tidak dikenal: {0}").format(key))
+			frappe.throw(_("Field Pre-Packing tidak dikenal: {0}.").format(key))
 		if value in (None, ""):
 			continue
 		fieldname = PREPACKING_FIELD_MAP[key]
 		if key == "good":
 			good = float(value)
 			if good != good or good in (float("inf"), float("-inf")) or good <= 0:
-				frappe.throw(_("Good Qty pre-packing harus angka lebih besar dari 0"))
+				frappe.throw(_("Good harus lebih dari 0."))
 			cleaned[fieldname] = good
 		elif key in ("reject", "trial", "sisa"):
 			amount = float(value)
 			if amount != amount or amount in (float("inf"), float("-inf")) or amount < 0:
-				frappe.throw(_("{0} harus angka desimal >= 0").format(key))
+				frappe.throw(_("{0} harus angka ≥ 0.").format(QTY_NAMES[key]))
 			cleaned[fieldname] = amount
 		elif key in ("qc_produksi", "jam_pembekuan"):
 			if key == "qc_produksi":
@@ -1377,17 +1384,17 @@ def confirm_prepacking(name, values):
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
 	wo = frappe.get_doc(DOCTYPE, name)
 	if wo.docstatus != 1 or wo.status in ("Stopped", "Closed"):
-		frappe.throw(_("Pre-packing tidak tersedia untuk Work Order {0}").format(name))
+		frappe.throw(_("Pre-Packing ditolak: {0} belum submit atau sudah dihentikan.").format(name))
 
 	stage = derive_stage(wo)
 	if stage not in (STAGE_PREPACKING, STAGE_POST_PACKING, STAGE_FINISH):
 		frappe.throw(
-			_("Pre-packing belum tersedia: tahap sekarang {0} (selesaikan material/operasi dulu)").format(stage)
+			_("Pre-Packing belum bisa: WO sedang di tahap {0}.").format(STAGE_NAMES.get(stage, stage))
 		)
 
 	cleaned = _validate_prepacking(frappe.parse_json(values) or {})
 	if PREPACKING_FIELD_MAP["good"] not in cleaned:
-		frappe.throw(_("Good Qty pre-packing wajib diisi (> 0)"))
+		frappe.throw(_("Good wajib diisi."))
 
 	if wo.custom_postpacking_confirmed:
 		post_total = (
@@ -1398,7 +1405,7 @@ def confirm_prepacking(name, values):
 		new_good = cleaned[PREPACKING_FIELD_MAP["good"]]
 		if post_total > new_good:
 			frappe.throw(
-				_("Total hasil Post-Packing terkonfirmasi ({0}) melebihi Good Pre-Packing baru ({1}); perbaiki lewat Post-Packing").format(post_total, new_good)
+				_("Total Post-Packing ({0}) melebihi Good Pre-Packing baru ({1}); ubah Post-Packing dulu.").format(post_total, new_good)
 			)
 
 	for fieldname, value in cleaned.items():
@@ -1434,7 +1441,7 @@ def _validate_postpacking(values, pre_good):
 	oleh Good Qty pre-packing — batas akhirnya tetap berupa overproduksi
 	native ERPNext yang divalidasi `finish()`."""
 	if pre_good is not None and pre_good <= 0:
-		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
+		frappe.throw(_("Simpan Pre-Packing dulu."))
 	cleaned = {}
 	for key, value in values.items():
 		if key not in POSTPACKING_FIELD_MAP:
@@ -1445,12 +1452,12 @@ def _validate_postpacking(values, pre_good):
 		if key == "good":
 			good = float(value)
 			if good != good or good in (float("inf"), float("-inf")) or good <= 0:
-				frappe.throw(_("Good Qty post-packing harus angka lebih besar dari 0"))
+				frappe.throw(_("Good harus lebih dari 0."))
 			cleaned[fieldname] = good
 		elif key in ("reject", "trial", "sisa"):
 			amount = float(value)
 			if amount != amount or amount in (float("inf"), float("-inf")) or amount < 0:
-				frappe.throw(_("{0} harus angka desimal >= 0").format(key))
+				frappe.throw(_("{0} harus angka ≥ 0.").format(QTY_NAMES[key]))
 			cleaned[fieldname] = amount
 		elif key == "qc_packing":
 			name = str(value).strip()
@@ -1461,7 +1468,7 @@ def _validate_postpacking(values, pre_good):
 			cleaned[fieldname] = value
 
 	if POSTPACKING_FIELD_MAP["good"] not in cleaned:
-		frappe.throw(_("Good Qty post-packing wajib diisi (> 0)"))
+		frappe.throw(_("Good wajib diisi."))
 	# FU11: jam kosong -> jam saat penyimpanan
 	if POSTPACKING_FIELD_MAP["jam_packing"] not in cleaned:
 		cleaned[POSTPACKING_FIELD_MAP["jam_packing"]] = frappe.utils.nowtime()
@@ -1480,17 +1487,17 @@ def confirm_postpacking(name, values):
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
 	wo = frappe.get_doc(DOCTYPE, name)
 	if wo.docstatus != 1 or wo.status in ("Stopped", "Closed"):
-		frappe.throw(_("Post-Packing tidak tersedia untuk Work Order {0}").format(name))
+		frappe.throw(_("Post-Packing ditolak: {0} belum submit atau sudah dihentikan.").format(name))
 
 	stage = derive_stage(wo)
 	if stage not in (STAGE_POST_PACKING, STAGE_FINISH):
 		frappe.throw(
-			_("Post-Packing belum tersedia: tahap sekarang {0}").format(stage)
+			_("Post-Packing belum bisa: WO sedang di tahap {0}.").format(STAGE_NAMES.get(stage, stage))
 		)
 	# FU114: item tanpa Pre-Packing (pre_good None) tidak butuh marker prepacking
 	skip = skips_prepacking(wo.production_item)
 	if not skip and not wo.custom_prepacking_confirmed:
-		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
+		frappe.throw(_("Simpan Pre-Packing dulu."))
 
 	pre_good = None if skip else flt(wo.custom_good_qty_prepacking)
 	cleaned = _validate_postpacking(frappe.parse_json(values) or {}, pre_good)
@@ -1527,11 +1534,11 @@ def finish(name):
 	frappe.db.get_value(DOCTYPE, name, "name", for_update=True)
 	wo = frappe.get_doc(DOCTYPE, name)
 	if wo.docstatus != 1 or wo.status in ("Stopped", "Closed"):
-		frappe.throw(_("Finish tidak tersedia untuk Work Order {0}").format(name))
+		frappe.throw(_("Finish ditolak: {0} belum submit atau sudah dihentikan.").format(name))
 
 	good = flt(wo.custom_good_qty_postpacking)
 	if not wo.custom_postpacking_confirmed or good <= 0:
-		frappe.throw(_("Post-Packing harus dikonfirmasi dengan Good Qty > 0 sebelum finish"))
+		frappe.throw(_("Simpan Post-Packing (Good > 0) dulu."))
 
 	# native guards re-checked here for clear errors before building the entry
 	allowance = flt(
@@ -1539,13 +1546,13 @@ def finish(name):
 	)
 	if flt(wo.produced_qty) + good > flt(wo.qty) * (1 + allowance / 100):
 		frappe.throw(
-			_("Good Qty {0} melebihi batas overproduksi ({1})").format(
+			_("Good {0} melebihi batas produksi {1}.").format(
 				good, flt(wo.qty) * (1 + allowance / 100)
 			)
 		)
 
 	if derive_stage(wo) != STAGE_FINISH:
-		frappe.throw(_("Finish belum tersedia; selesaikan tahap sebelumnya."))
+		frappe.throw(_("Finish belum bisa: tahap sebelumnya belum selesai."))
 
 	# native guards (operations complete, duplicate entry, overproduction) throw
 	# from the builder itself — surfaced to the operator as-is.
@@ -1587,7 +1594,7 @@ def finish(name):
 	for row in se.items:
 		if row.is_finished_item:
 			if row.item_code != fg_item:
-				frappe.throw(_("Baris barang jadi tidak valid: {0}").format(row.item_code))
+				frappe.throw(_("Barang jadi {0} tidak sesuai item Work Order.").format(row.item_code))
 			row.qty = good / flt(row.conversion_factor or 1)
 			row.transfer_qty = good
 

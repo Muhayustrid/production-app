@@ -31,10 +31,10 @@ const form = reactive({
 const ok = reactive({ goodQty: false, rejectQty: false, trialQty: false, sisaQty: false })
 
 const qtyFields = computed(() => [
-  { key: 'goodQty', label: 'Good Qty', required: true },
-  { key: 'rejectQty', label: 'Reject Qty', required: false },
-  { key: 'trialQty', label: 'Trial Qty', required: false },
-  { key: 'sisaQty', label: 'Sisa Qty', required: false }
+  { key: 'goodQty', label: 'Good', required: true },
+  { key: 'rejectQty', label: 'Reject', required: false },
+  { key: 'trialQty', label: 'Trial', required: false },
+  { key: 'sisaQty', label: 'Sisa', required: false }
 ])
 
 const qtyValid = computed(() => ok.goodQty)
@@ -70,16 +70,11 @@ async function save() {
     <div class="panel-head">
       <span class="p-ico"><PackageCheck :size="15" :stroke-width="1.9" /></span>
       <h2>Pre-Packing</h2>
-      <span class="lead">Hasil awal packing.</span>
       <span v-if="review" class="chip chip-info" style="margin-left: auto">Tinjauan</span>
       <span v-else-if="reedit" class="chip chip-info" style="margin-left: auto">Perbaikan</span>
     </div>
 
     <div class="panel-body">
-      <div class="callout ok" style="margin-bottom: 14px">
-        Hasil akhir dicatat di Post-Packing dan menjadi jumlah Barang Jadi.
-      </div>
-
       <!-- kuantitas 1 baris di desktop, bertumpuk di mobile -->
       <div class="form-grid cols4">
         <QtyInput
@@ -115,7 +110,7 @@ async function save() {
 
       <div style="margin-top: 14px">
         <div v-if="total != null" class="sum-row">
-          <span class="k">Total hasil (Good + Reject + Trial + Sisa)</span>
+          <span class="k">Total</span>
           <span class="v" :class="{ neg: over }">{{ qtyMain(total, qip) }}</span>
         </div>
         <div class="sum-row">
@@ -132,7 +127,7 @@ async function save() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" :disabled="!canSave" @click="save">{{ reedit ? 'Simpan Perbaikan' : 'Simpan &amp; Lanjut ke Post-Packing' }}</button>
+      <button class="btn btn-primary" :disabled="!canSave" @click="save">{{ reedit ? 'Simpan' : 'Simpan &amp; Lanjut' }}</button>
     </div>
   </section>
 </template>

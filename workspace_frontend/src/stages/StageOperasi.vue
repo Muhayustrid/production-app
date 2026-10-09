@@ -17,7 +17,7 @@ const qip = props.wo
 function statusMeta(s) {
   if (s === 'done') return { cls: 'chip-ok', label: 'Selesai' }
   if (s === 'in_progress') return { cls: 'chip-warn', label: 'Berjalan' }
-  return { cls: 'chip-off', label: 'Belum Mulai' }
+  return { cls: 'chip-off', label: 'Belum' }
 }
 
 const employee = ref('')
@@ -75,7 +75,7 @@ async function confirmFinish() {
 
     <div class="panel-body">
       <div v-if="!review" class="field">
-        <label for="operation-employee">Karyawan untuk memulai operasi</label>
+        <label for="operation-employee">Karyawan</label>
         <LinkInput id="operation-employee" v-model="employee" doctype="Employee" />
       </div>
       <div class="op-thead">
@@ -122,20 +122,18 @@ async function confirmFinish() {
 
     <div v-if="!review" class="panel-foot">
       <button class="btn btn-primary" :disabled="!opsAllDone(wo)" @click="confirmOperations(wo)">
-        {{ wo.skipPrepacking ? 'Lanjut ke Post-Packing' : 'Lanjut ke Pre-Packing' }}
+        Lanjut
       </button>
     </div>
 
     <dialog ref="dlg" class="dialog" @click.self="closeDlg">
       <h3 v-if="dlgOp">Selesaikan {{ dlgOp.name }}?</h3>
       <p v-if="dlgOp">
-        Catat jumlah yang diselesaikan operator. Rencana:
-        {{ qtyMain(dlgOp.plannedPcs, qip) }}. Selisih rencana yang tidak
-        diproduksi dicatat sebagai susut agar operasi selesai.
+        Rencana {{ qtyMain(dlgOp.plannedPcs, qip) }}. Kekurangan dari rencana dicatat sebagai susut.
       </p>
       <div v-if="dlgOp" style="margin-top: 12px; max-width: 240px">
         <QtyInput
-          label="Jumlah Selesai"
+          label="Selesai"
           unit-key="opSelesai"
           required
           :units="wo"
@@ -145,7 +143,7 @@ async function confirmFinish() {
       </div>
       <div v-if="dlgOp" style="margin-top: 12px; max-width: 240px">
         <QtyInput
-          label="Susut / Rusak"
+          label="Susut"
           unit-key="opSusut"
           :units="wo"
           v-model="lossPcs"

@@ -26,7 +26,7 @@ const qtyText = (v) => (v != null ? qtyMain(v, qip) : '-')
 
 const diff = computed(() => fg.value - props.wo.plannedStockQty)
 const diffText = computed(() => {
-  if (diff.value === 0) return `Sesuai rencana (0 ${props.wo.stockUom})`
+  if (diff.value === 0) return 'Sesuai'
   const sign = diff.value > 0 ? '+' : '-'
   const a = Math.abs(diff.value)
   return `${sign}${qtyMain(a, qip)}`
@@ -61,11 +61,11 @@ async function confirmComplete() {
           <span class="v">{{ qtyMain(wo.plannedStockQty, qip) }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Hasil aktual</span>
+          <span class="k">Hasil</span>
           <span class="v">{{ qtyMain(fg, qip) }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Selisih dari rencana</span>
+          <span class="k">Selisih</span>
           <span class="v" :class="diffCls">{{ diffText }}</span>
         </div>
       </div>
@@ -89,11 +89,11 @@ async function confirmComplete() {
           <span class="v">{{ qtyText(pre.sisaQty) }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Total hasil</span>
+          <span class="k">Total</span>
           <span class="v">{{ preTotal != null ? qtyMain(preTotal, qip) : '-' }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Jam Pembekuan · QC Produksi</span>
+          <span class="k">Jam · QC</span>
           <span class="v"><span class="dim">{{ pre.jam || '-' }} · {{ pre.qc || '-' }}</span></span>
         </div>
       </div>
@@ -117,7 +117,7 @@ async function confirmComplete() {
           <span class="v">{{ qtyText(post.sisaQty) }}</span>
         </div>
         <div class="sum-row">
-          <span class="k">Total hasil</span>
+          <span class="k">Total</span>
           <span class="v">{{ postTotal != null ? qtyMain(postTotal, qip) : '-' }}</span>
         </div>
       </div>
@@ -128,7 +128,7 @@ async function confirmComplete() {
           <span>{{ qtyMain(fg, qip) }}</span>
         </div>
         <div class="sum-row" style="margin-top: 8px">
-          <span class="k">Gudang Tujuan</span>
+          <span class="k">Gudang</span>
           <span class="v">{{ wo.warehouse }}</span>
         </div>
       </div>
@@ -138,7 +138,7 @@ async function confirmComplete() {
     <div v-if="!review" class="panel-foot">
       <!-- F09: hardening — server tetap menolak good ≤ 0; tombol dimatikan di
            klien agar tidak ada jalur klik yang sia-sia -->
-      <button class="btn btn-primary" :disabled="!(fg > 0)" @click="ask">Selesaikan Produksi</button>
+      <button class="btn btn-primary" :disabled="!(fg > 0)" @click="ask">Selesaikan</button>
     </div>
 
     <dialog ref="dlg" class="dialog" @click.self="closeDlg">
@@ -150,7 +150,7 @@ async function confirmComplete() {
       </p>
       <div class="dlg-actions">
         <button class="btn" @click="closeDlg">Batal</button>
-        <button class="btn btn-primary" :disabled="!!state.pending || !(fg > 0)" @click="confirmComplete">Ya, Selesaikan</button>
+        <button class="btn btn-primary" :disabled="!!state.pending || !(fg > 0)" @click="confirmComplete">Selesaikan</button>
       </div>
     </dialog>
   </section>

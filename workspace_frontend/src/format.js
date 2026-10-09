@@ -35,13 +35,13 @@ export function parseQtyText(text, unit, units) {
   const fail = error => ({ value: null, error, warn: null })
   if (String(text ?? '').trim() === '') return fail(null)
   const value = Number(String(text).replace(',', '.'))
-  if (!Number.isFinite(value) || value < 0) return fail('Angka tidak valid.')
-  if (unit === 'pack' && !hasAlternate(units)) return fail('Konversi satuan belum tersedia; gunakan satuan stok.')
+  if (!Number.isFinite(value) || value < 0) return fail('Harus angka ≥ 0.')
+  if (unit === 'pack' && !hasAlternate(units)) return fail('Konversi satuan belum ada; pakai satuan stok.')
   let qty = unit === 'pack' ? value * units.qtyInPack : value
-  if (!Number.isFinite(qty)) return fail('Angka tidak valid.')
+  if (!Number.isFinite(qty)) return fail('Harus angka ≥ 0.')
   if (units.wholeNumber) {
     const rounded = Math.round(qty)
-    if (Math.abs(qty - rounded) > 1e-8) return fail(`${units.stockUom} harus bilangan bulat.`)
+    if (Math.abs(qty - rounded) > 1e-8) return fail(`Harus bulat (${units.stockUom}).`)
     qty = rounded
   }
   const fraction = qty / units.qtyInPack

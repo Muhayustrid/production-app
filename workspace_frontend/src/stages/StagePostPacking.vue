@@ -75,14 +75,13 @@ async function save() {
 
     <div class="panel-body">
       <p v-if="legacyReview" class="hint">
-        Work Order ini selesai sebelum tahap Post-Packing diperkenalkan — angka ditampilkan dari
-        data Pre-Packing (data lama, tanpa backfill).
+        Data lama: angka diambil dari Pre-Packing.
       </p>
 
       <!-- kuantitas 1 baris di desktop, bertumpuk di mobile; Sisa input manual -->
       <div class="form-grid cols4" style="margin-top: 14px">
         <QtyInput
-          label="Good Qty"
+          label="Good"
           unit-key="postGoodQty"
           :units="wo"
           required
@@ -91,7 +90,7 @@ async function save() {
           @update:valid="ok.goodQty = $event"
         />
         <QtyInput
-          label="Reject Qty"
+          label="Reject"
           unit-key="postRejectQty"
           :units="wo"
           :disabled="review"
@@ -99,7 +98,7 @@ async function save() {
           @update:valid="ok.rejectQty = $event"
         />
         <QtyInput
-          label="Trial Qty"
+          label="Trial"
           unit-key="postTrialQty"
           :units="wo"
           :disabled="review"
@@ -107,7 +106,7 @@ async function save() {
           @update:valid="ok.trialQty = $event"
         />
         <QtyInput
-          label="Sisa Qty"
+          label="Sisa"
           unit-key="postSisaQty"
           :units="wo"
           :disabled="review"
@@ -136,7 +135,7 @@ async function save() {
 
       <div style="margin-top: 14px">
         <div class="sum-row">
-          <span class="k">Total hasil</span>
+          <span class="k">Total</span>
           <span class="v">{{ total != null ? qtyMain(total, qip) : '-' }}</span>
         </div>
 
@@ -148,7 +147,7 @@ async function save() {
     </div>
 
     <div v-if="!review" class="panel-foot">
-      <button class="btn btn-primary" :disabled="!canSave" @click="save">{{ reedit ? 'Simpan Perbaikan' : 'Simpan &amp; Lanjut ke Finish' }}</button>
+      <button class="btn btn-primary" :disabled="!canSave" @click="save">{{ reedit ? 'Simpan' : 'Simpan &amp; Lanjut' }}</button>
     </div>
   </section>
 </template>

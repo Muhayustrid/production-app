@@ -31,12 +31,11 @@ function itemStatus(i) {
 
     <div class="panel-body">
       <div v-if="shortages.length" class="callout material-status material-status-warn" role="status">
-        <strong>Kekurangan {{ shortages.length }} bahan</strong>
+        <strong>Kurang {{ shortages.length }} bahan</strong>
         <span>{{ shortages.map((i) => i.name).join(', ') }}.</span>
       </div>
       <div v-else class="callout ok material-status" role="status">
-        <strong>Material lengkap</strong>
-        <span>Semua material telah ditransfer.</span>
+        <strong>Lengkap</strong>
       </div>
 
       <div class="mat-list" role="table" aria-label="Rincian material Work Order">
@@ -70,14 +69,14 @@ function itemStatus(i) {
         class="btn"
         @click="transferAll(wo)"
       >
-        Transfer Semua Material
+        Transfer Semua
       </button>
       <button
         class="btn btn-primary"
         :disabled="!materialComplete(wo)"
         @click="confirmMaterial(wo)"
       >
-        {{ wo.hasOperations ? 'Lanjut ke Operasi' : wo.skipPrepacking ? 'Lanjut ke Post-Packing' : 'Lanjut ke Pre-Packing' }}
+        Lanjut
       </button>
     </div>
   </section>

@@ -1194,3 +1194,7 @@ Commit:
 ## Z42. FU114 — skip Pre-Packing per Item (permintaan user)
 
 Status: DONE (2026-10-09) — Item Check `custom_skip_prepacking` ("Tanpa Pre-Packing"); WO item ber-flag lompat Material/Operasi → Post-Packing, Finish dari good Post-Packing (tak berubah), label dari good Post-Packing; daftar item dikelola di Pengaturan (blok "Tanpa Pre-Packing", endpoint `skip_prepacking_items`/`skip_prepacking_set`), field Item di tab Manufacturing. Bukti lengkap di PROJECT_STATE Work log FU114. Production: `bench migrate` wajib (field baru).
+
+## Z43. FU115 — rapikan tabel Work Order, ringkas teks tahap, perjelas pesan error (permintaan user)
+
+Status: DONE (2026-10-09; bukti di PROJECT_STATE FU115) — kolom daftar WO proporsional (Gudang digabung ke Tahap, No. WO tidak terpotong, header seragam); label/tombol tahap diringkas; pesan error WO singkat: apa yang gagal + kenapa.
