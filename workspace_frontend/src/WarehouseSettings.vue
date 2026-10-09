@@ -1,25 +1,25 @@
 <script setup>
 import { onMounted, reactive, ref, watch } from 'vue'
-import { Warehouse } from 'lucide-vue-next'
+import { SlidersHorizontal, Warehouse, X } from 'lucide-vue-next'
 import { call, loadSuggestionPreferences, saveSuggestionPreferences, suggestionPreferences, uiState, uiTopLoading, saveUiPreferences } from './store.js'
 import LinkInput from './LinkInput.vue'
 
 // FU40: label konsisten Indonesia (istilah ERPNext dipertahankan di keterangan),
 // grid dipecah dua blok: default Work Order vs default serah terima.
 const woFields = [
-  { key: 'source_warehouse', label: 'Gudang Sumber', desc: 'Source Warehouse — lokasi bahan baku tersedia.' },
-  { key: 'wip_warehouse', label: 'Gudang Work in Progress', desc: 'WIP Warehouse — lokasi operasi produksi dijalankan.' },
-  { key: 'fg_warehouse', label: 'Gudang Target', desc: 'Target Warehouse — lokasi barang jadi disimpan.' },
-  { key: 'scrap_warehouse', label: 'Gudang Scrap', desc: 'Scrap Warehouse — lokasi material scrap disimpan.' }
+  { key: 'source_warehouse', label: 'Gudang Sumber' },
+  { key: 'wip_warehouse', label: 'Gudang Work in Progress' },
+  { key: 'fg_warehouse', label: 'Gudang Target' },
+  { key: 'scrap_warehouse', label: 'Gudang Scrap' }
 ]
 const handoverFields = [
-  { key: 'handover_warehouse', label: 'Gudang Tujuan Stock Entry', desc: 'Tujuan pengiriman barang jadi (halaman Stock Entry).' },
-  { key: 'handover_source_warehouse', label: 'Gudang Asal Stock Entry', desc: 'Asal pengiriman — biasanya Cold Storage (halaman Stock Entry).' }
+  { key: 'handover_warehouse', label: 'Gudang Tujuan' },
+  { key: 'handover_source_warehouse', label: 'Gudang Asal' }
 ]
 // FO 2026-09-18: rute default Form Order (produksi minta barang dari gudang).
 const formOrderFields = [
-  { key: 'form_order_source_warehouse', label: 'Gudang Asal Form Order', desc: 'Gudang yang diminta produksi (mis. Gudang Bahan Baku).' },
-  { key: 'form_order_target_warehouse', label: 'Gudang Tujuan Form Order', desc: 'Tujuan pemindahan stok saat gudang memproses (mis. WIP).' }
+  { key: 'form_order_source_warehouse', label: 'Gudang Asal' },
+  { key: 'form_order_target_warehouse', label: 'Gudang Tujuan' }
 ]
 
 // FU61: 8 kunci flat kontrak API — payload simpan dikirim eksplisit dari
@@ -51,17 +51,44 @@ const form = reactive({
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
+const prefError = ref('') // galat preferensi pribadi (tersimpan otomatis) — terpisah dari galat tombol Simpan
 const savedAt = ref('')
 const savedInfo = ref('')
 const saveFailed = ref([])
 const suggestionSaving = ref(false)
+
+// FU114: item Tanpa Pre-Packing — tersimpan langsung per item (bukan lewat
+// tombol Simpan yang ikut mempropagasi gudang ke WO berjalan).
+const skipItems = ref([])
+const skipPick = ref('')
+const skipSaving = ref(false)
+const skipError = ref('')
+const skipPickKey = ref(0) // remount LinkInput agar teks pencarian bersih setelah item ditambah
+async function setSkip(item, enabled) {
+  skipSaving.value = true
+  skipError.value = ''
+  try {
+    skipItems.value = await call('production_app.api.work_order.skip_prepacking_set', { item, enabled: enabled ? 1 : 0 })
+  } catch (e) {
+    skipError.value = e.message
+  } finally {
+    skipSaving.value = false
+  }
+}
+watch(skipPick, (item) => {
+  if (!item) return
+  setSkip(item, true)
+  skipPick.value = ''
+  skipPickKey.value++
+})
 
 onMounted(async () => {
   uiTopLoading.active = true
   try {
     await Promise.all([
       call('production_app.api.work_order.warehouse_defaults').then(values => Object.assign(form, values)),
-      loadSuggestionPreferences()
+      loadSuggestionPreferences(),
+      call('production_app.api.work_order.skip_prepacking_items').then(rows => { skipItems.value = rows })
     ])
   } catch (e) {
     error.value = e.message
@@ -73,12 +100,12 @@ onMounted(async () => {
 
 async function toggleSuggestions() {
   suggestionSaving.value = true
-  error.value = ''
+  prefError.value = ''
   try {
     await saveSuggestionPreferences(suggestionPreferences.enabled)
   } catch (e) {
     suggestionPreferences.enabled = !suggestionPreferences.enabled
-    error.value = e.message
+    prefError.value = e.message
   } finally {
     suggestionSaving.value = false
   }
@@ -95,11 +122,11 @@ const fontSaving = ref(false)
 watch(() => uiState.fontScale, (v) => { if (!fontSaving.value) fontScale.value = v })
 async function onFontScaleChange() {
   fontSaving.value = true
-  error.value = ''
+  prefError.value = ''
   try {
     fontScale.value = await saveUiPreferences(fontScale.value)
   } catch (e) {
-    error.value = e.message
+    prefError.value = e.message
     fontScale.value = uiState.fontScale // kembalikan ke nilai tersimpan
   } finally {
     fontSaving.value = false
@@ -137,130 +164,165 @@ async function save() {
 </script>
 
 <template>
-  <section class="panel">
-    <div class="panel-head">
-      <span class="p-ico"><Warehouse :size="15" :stroke-width="1.9" /></span>
-      <h2>Pengaturan Gudang</h2>
-      <span class="lead">Gudang default untuk Work Order dan Stock Entry di workspace ini. Perubahan nilai default otomatis diterapkan ke Work Order yang sedang berjalan selama nilainya belum diubah manual.</span>
+  <div class="page-head">
+    <div class="ph-left">
+      <h1>Pengaturan</h1>
     </div>
+  </div>
 
-    <div class="panel-body">
-      <!-- FU20: loading ditandai spinner global di tepi atas (App.vue) -->
-      <div v-if="loading" aria-hidden="true"></div>
-      <template v-else>
+  <!-- FU20: loading ditandai spinner global di tepi atas (App.vue) -->
+  <div v-if="loading" aria-hidden="true"></div>
+  <template v-else>
+    <section class="panel settings-panel">
+      <div class="panel-head">
+        <span class="p-ico"><SlidersHorizontal :size="15" :stroke-width="1.9" /></span>
+        <h2>Preferensi Saya</h2>
+        <span class="lead">Khusus akun ini, tersimpan otomatis.</span>
+      </div>
+      <div class="panel-body">
         <div class="settings-block">
           <div class="settings-block-head">
-            <div>
-              <h3>Tampilan</h3>
-              <p class="hint">Ukuran font untuk akun ini saja — tersimpan per pengguna, tidak memengaruhi pengguna lain.</p>
-            </div>
+            <h3>Tampilan</h3>
           </div>
-          <div class="field" style="max-width: 380px; margin-top: 4px">
-            <label for="ui-font-scale">Ukuran font: <strong>{{ fontScale }}%</strong></label>
-            <input id="ui-font-scale" v-model.number="fontScale" type="range" min="90" max="125" step="5" :disabled="fontSaving" @change="onFontScaleChange" />
-            <div class="hint">Rentang dibatasi 90–125% agar layout tetap rapi.</div>
+          <div class="settings-control">
+            <div class="field settings-range">
+              <label for="ui-font-scale">Ukuran font: <strong>{{ fontScale }}%</strong></label>
+              <input id="ui-font-scale" v-model.number="fontScale" type="range" min="90" max="125" step="5" :disabled="fontSaving" @change="onFontScaleChange" />
+              <div class="hint">Rentang 90–125%.</div>
+            </div>
           </div>
         </div>
 
         <div class="settings-block">
           <div class="settings-block-head">
-            <div>
-              <h3>Saran isian berulang</h3>
-              <p class="hint">Gunakan nilai dari Work Order sebelumnya dengan produk yang sama untuk nama tim, jumlah kru, dan QC.</p>
-            </div>
-            <label class="toggle-control">
-              <input v-model="suggestionPreferences.enabled" type="checkbox" :disabled="suggestionSaving" @change="toggleSuggestions" />
+            <h3>Saran isian berulang</h3>
+            <p class="hint">Isi tim, jumlah kru, dan QC dari Work Order sebelumnya untuk produk yang sama.</p>
+          </div>
+          <div class="settings-control">
+            <label class="switch">
+              <input v-model="suggestionPreferences.enabled" type="checkbox" role="switch" :disabled="suggestionSaving" @change="toggleSuggestions" />
               <span>{{ suggestionPreferences.enabled ? 'Aktif' : 'Nonaktif' }}</span>
             </label>
           </div>
         </div>
 
+        <p v-if="prefError" class="err" role="alert">{{ prefError }}</p>
+      </div>
+    </section>
+
+    <section class="panel settings-panel">
+      <div class="panel-head">
+        <span class="p-ico"><Warehouse :size="15" :stroke-width="1.9" /></span>
+        <h2>Default Workspace</h2>
+        <span class="lead">Berlaku untuk semua pengguna.</span>
+      </div>
+
+      <div class="panel-body">
         <div class="settings-block">
           <div class="settings-block-head">
-            <div>
-              <h3>Default Work Order</h3>
-            </div>
+            <h3>Default Work Order</h3>
+            <p class="hint">Dipakai saat gudang di Work Order masih kosong.</p>
           </div>
-          <div class="callout ok" style="margin-bottom: 14px">
-            Dipakai Work Order yang kolom gudangnya masih kosong saat Persiapan disimpan.
-            Ubah nilai langsung ke nilai baru (jangan kosongkan dulu lalu isi belakangan):
-            perubahan langsung otomatis diterapkan ke Work Order yang sedang berjalan —
-            header dan baris bahan — selama nilainya masih sama dengan nilai lama.
-            Nilai yang sudah diubah manual di Work Order tidak ditimpa; kasus lain
-            (termasuk WO yang gagal diperbarui) perlu sinkronisasi oleh admin.
-          </div>
-          <div class="form-grid cols2">
-            <div v-for="f in woFields" :key="f.key" class="field">
-              <label :for="`wh-${f.key}`">{{ f.label }}</label>
-              <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
-              <div class="hint">{{ f.desc }}</div>
+          <div class="settings-control">
+            <p class="settings-note">
+              Ubah langsung ke nilai baru, jangan dikosongkan dulu. Work Order yang sedang
+              berjalan ikut diperbarui selama nilainya belum diubah manual. Yang gagal
+              diperbarui perlu disinkronkan admin.
+            </p>
+            <div class="form-grid cols2">
+              <div v-for="f in woFields" :key="f.key" class="field">
+                <label :for="`wh-${f.key}`">{{ f.label }}</label>
+                <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
+              </div>
             </div>
           </div>
         </div>
 
         <div class="settings-block">
           <div class="settings-block-head">
-            <div>
-              <h3>Stock Entry (Kirim ke Gudang)</h3>
-              <p class="hint">Asal dan tujuan default pengiriman di papan Stock Entry.</p>
-            </div>
+            <h3>Stock Entry</h3>
+            <p class="hint">Asal dan tujuan default pengiriman.</p>
           </div>
-          <div class="form-grid cols2" style="margin-top: 12px">
-            <div v-for="f in handoverFields" :key="f.key" class="field">
-              <label :for="`wh-${f.key}`">{{ f.label }}</label>
-              <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
-              <div class="hint">{{ f.desc }}</div>
+          <div class="settings-control">
+            <div class="form-grid cols2">
+              <div v-for="f in handoverFields" :key="f.key" class="field">
+                <label :for="`wh-${f.key}`">{{ f.label }}</label>
+                <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
+              </div>
             </div>
           </div>
         </div>
 
         <div class="settings-block">
           <div class="settings-block-head">
-            <div>
-              <h3>Form Order</h3>
-              <p class="hint">Rute default permintaan produksi ke gudang — wajib diisi sebelum Form Order bisa dibuat.</p>
+            <h3>Form Order</h3>
+            <p class="hint">Wajib diisi sebelum Form Order bisa dibuat.</p>
+          </div>
+          <div class="settings-control">
+            <div class="form-grid cols2">
+              <div v-for="f in formOrderFields" :key="f.key" class="field">
+                <label :for="`wh-${f.key}`">{{ f.label }}</label>
+                <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
+              </div>
             </div>
           </div>
-          <div class="form-grid cols2" style="margin-top: 12px">
-            <div v-for="f in formOrderFields" :key="f.key" class="field">
-              <label :for="`wh-${f.key}`">{{ f.label }}</label>
-              <LinkInput :id="`wh-${f.key}`" v-model="form[f.key]" doctype="Warehouse" />
-              <div class="hint">{{ f.desc }}</div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-head">
+            <h3>Tanpa Pre-Packing</h3>
+            <p class="hint">Produk yang langsung ke Post-Packing. Tersimpan otomatis.</p>
+          </div>
+          <div class="settings-control">
+            <ul v-if="skipItems.length" class="skip-list">
+              <li v-for="it in skipItems" :key="it.name">
+                <span>{{ it.item_name || it.name }} <small class="mono">{{ it.name }}</small></span>
+                <button type="button" class="btn btn-sm" :disabled="skipSaving" :aria-label="`Hapus ${it.item_name || it.name}`" @click="setSkip(it.name, false)">
+                  <X :size="14" :stroke-width="2" />
+                </button>
+              </li>
+            </ul>
+            <div class="field settings-range">
+              <label for="skip-prepacking-item">Tambah item</label>
+              <LinkInput id="skip-prepacking-item" :key="skipPickKey" v-model="skipPick" doctype="Item" :disabled="skipSaving" />
             </div>
+            <p v-if="skipError" class="err" role="alert">{{ skipError }}</p>
           </div>
         </div>
 
         <!-- FU93: filter Item Group wizard Tambah Plan (bukan gudang — LinkInput Item Group) -->
         <div class="settings-block">
           <div class="settings-block-head">
-            <div>
-              <h3>Production Plan</h3>
-              <p class="hint">Filter daftar item pada wizard Tambah Plan (form Production Plan di ERPNext).</p>
-            </div>
+            <h3>Production Plan</h3>
+            <p class="hint">Filter item di wizard Tambah Plan.</p>
           </div>
-          <div class="form-grid cols2" style="margin-top: 12px">
-            <div class="field">
-              <label for="wh-production_item_group">Item Group Produk</label>
-              <LinkInput id="wh-production_item_group" v-model="form.production_item_group" doctype="Item Group" />
-              <div class="hint">Item Group — hanya item dalam grup ini yang bisa dipilih di wizard. Kosong = tanpa filter.</div>
+          <div class="settings-control">
+            <div class="form-grid cols2">
+              <div class="field">
+                <label for="wh-production_item_group">Item Group Produk</label>
+                <LinkInput id="wh-production_item_group" v-model="form.production_item_group" doctype="Item Group" />
+                <div class="hint">Kosong = tanpa filter.</div>
+              </div>
             </div>
           </div>
         </div>
+      </div>
 
+      <div v-if="error || saveFailed.length" class="settings-alerts">
         <p v-if="error" class="err" role="alert">{{ error }}</p>
         <!-- FU58 §9.4: kegagalan per-WO saat propagasi — pengaturan tetap tersimpan. -->
         <div v-if="saveFailed.length" class="err" role="alert">
           <div>Pengaturan tersimpan, tetapi Work Order berikut gagal diperbarui:</div>
           <div v-for="item in saveFailed" :key="item">{{ item }}</div>
         </div>
+      </div>
 
-        <div class="panel-foot" style="padding-left: 0">
-          <button class="btn btn-primary" :disabled="saving" @click="save">
-            {{ saving ? 'Menyimpan…' : 'Simpan Pengaturan' }}
-          </button>
-          <span v-if="savedAt" class="why">Tersimpan pada {{ savedAt }}<template v-if="savedInfo"> — {{ savedInfo }}</template>.</span>
-        </div>
-      </template>
-    </div>
-  </section>
+      <div class="panel-foot">
+        <button class="btn btn-primary" :disabled="saving" @click="save">
+          {{ saving ? 'Menyimpan…' : 'Simpan Pengaturan' }}
+        </button>
+        <span v-if="savedAt" class="why">Tersimpan pada {{ savedAt }}<template v-if="savedInfo"> — {{ savedInfo }}</template>.</span>
+      </div>
+    </section>
+  </template>
 </template>

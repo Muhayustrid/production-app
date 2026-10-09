@@ -122,7 +122,7 @@ async function confirmFinish() {
 
     <div v-if="!review" class="panel-foot">
       <button class="btn btn-primary" :disabled="!opsAllDone(wo)" @click="confirmOperations(wo)">
-        Lanjut ke Pre-Packing
+        {{ wo.skipPrepacking ? 'Lanjut ke Post-Packing' : 'Lanjut ke Pre-Packing' }}
       </button>
     </div>
 

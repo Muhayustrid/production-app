@@ -83,6 +83,8 @@ ITEM_FIELDS = [
 	_field("custom_default_source_warehouse", "Default Source Warehouse", "Link", "custom_default_uom_warehouse", options="Warehouse"),
 	_field("custom_default_wip_warehouse", "Default WIP Warehouse", "Link", "custom_default_source_warehouse", options="Warehouse"),
 	_field("custom_default_fg_warehouse", "Default FG Warehouse", "Link", "custom_default_wip_warehouse", options="Warehouse"),
+	# FU114: produk langsung jadi (mis. krim kopi) — WO melewati Pre-Packing.
+	_field("custom_skip_prepacking", "Tanpa Pre-Packing", "Check", "include_item_in_manufacturing", description="Work Order item ini langsung ke Post-Packing (tanpa tahap Pre-Packing)."),
 ]
 
 # FU62: nama tampilan BOM untuk wizard "Tambah Item" Production Plan

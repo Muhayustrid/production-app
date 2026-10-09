@@ -4,7 +4,7 @@
 - The current request is planning only. Do not create fields, remove scripts, or implement the plan until the user requests implementation. Later explicit user instructions take precedence.
 - Scope is Work Order through Manufacture using good prepacking with planned raw materials. The custom Stock Entry/handover workflow is a separate task.
 - Reuse the supplied mockup and native ERPNext documents/methods. Verify installed source before relying on behavior. Do not edit ERPNext/Frappe core or duplicate the `bakery_manufacturing` batch override.
-- Box 1 and Box 2 are Float weights in kg. Leader Produksi is a person's name (Data). Use current native overproduction settings. Do not save prepacking or finish when good prepacking is zero; zero reject/trial/sisa remain valid.
+- Box 1 and Box 2 are Float weights in kg. Leader Produksi is a person's name (Data). Use current native overproduction settings. Do not save prepacking or finish when good prepacking is zero; zero reject/trial/sisa remain valid. Exception (FU114): Items flagged `custom_skip_prepacking` ("Tanpa Pre-Packing") skip the prepacking stage entirely; postpacking good > 0 is still required to finish.
 - Preserve existing data and unrelated scripts. Retire an identified script only after its replacement is proven and its original definition is backed up.
 - Follow the phase gates and acceptance criteria in the plan. Do not add speculative architecture or expand into excluded features.
 - Where a `.codegraph/` index exists, use CodeGraph before text searches to locate or understand code. Do not create an index without a request.

@@ -172,7 +172,7 @@ function closeLabelPrint() {
   extraLabelCount.value = 0
   labelPrintPrompt.workOrder = ''
   labelPrintPrompt.labelCount = 0
-  labelPrintPrompt.afterSave = false
+  labelPrintPrompt.afterSave = ''
 }
 
 function confirmLabelPrint() {
@@ -482,7 +482,7 @@ function muatUlangHalaman() {
     </div>
 
     <dialog ref="labelPrintDialog" class="dialog" aria-labelledby="label-print-title" @cancel.prevent="closeLabelPrint" @click.self="closeLabelPrint">
-      <h3 id="label-print-title">{{ labelPrintPrompt.afterSave ? 'Pre-Packing tersimpan' : 'Cetak label?' }}</h3>
+      <h3 id="label-print-title">{{ labelPrintPrompt.afterSave ? `${labelPrintPrompt.afterSave} tersimpan` : 'Cetak label?' }}</h3>
       <p>Cetak label untuk Work Order <strong>{{ labelPrintPrompt.workOrder }}</strong>?</p>
       <p>Label sesuai Good Qty: {{ labelPrintPrompt.labelCount }}</p>
       <label for="extra-label-count">Label tambahan</label>

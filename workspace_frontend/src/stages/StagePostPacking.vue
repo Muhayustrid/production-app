@@ -2,6 +2,7 @@
 import { computed, reactive } from 'vue'
 import { PackageCheck } from 'lucide-vue-next'
 import { confirmPostPacking, suggestionPreferences } from '../store.js'
+import { labelCountForWorkOrder, offerLabelPrint } from '../label-print-prompt.js'
 import { qtyMain } from '../format.js'
 import QtyInput from '../QtyInput.vue'
 
@@ -48,9 +49,9 @@ const canSave = computed(() =>
 // FU12: panel dibuka ulang dari bar tahap saat sudah di finish — mode perbaikan
 const reedit = computed(() => !props.review && props.wo.stage === 'finish')
 
-function save() {
+async function save() {
   if (!canSave.value) return
-  confirmPostPacking(props.wo, {
+  const saved = await confirmPostPacking(props.wo, {
     goodQty: form.goodQty,
     rejectQty: form.rejectQty ?? 0,
     trialQty: form.trialQty ?? 0,
@@ -58,6 +59,8 @@ function save() {
     jam: form.jam,
     qc: String(form.qc).trim()
   })
+  // FU114: item Tanpa Pre-Packing — label dicetak setelah Post-Packing
+  if (saved?.skipPrepacking) offerLabelPrint(saved.id, labelCountForWorkOrder(saved), 'Post-Packing')
 }
 </script>
 

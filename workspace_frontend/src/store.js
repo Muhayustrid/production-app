@@ -135,6 +135,7 @@ export function mapDetail(d) {
     canEditPersiapan: !!d.can_edit_persiapan,
     handover: d.handover || null,
     hasOperations: (d.operations || []).length > 0,
+    skipPrepacking: !!d.skip_prepacking, // FU114: flag Item "Tanpa Pre-Packing"
     qtyInPack: d.display_conversion_factor ?? null,
     displayUom: d.display_uom || d.stock_uom,
     wholeNumber: !!d.stock_uom_whole_number,

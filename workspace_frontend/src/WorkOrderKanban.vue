@@ -26,11 +26,12 @@ const visibleLanes = computed(() =>
 
 // lane berikutnya untuk satu WO — urutan sama dengan Workspace; Operasi hanya
 // untuk WO dengan operations. null = sudah Selesai (tidak bisa maju).
+const afterOps = (w) => (w.skipPrepacking ? 'postpacking' : 'prepacking') // FU114
 function nextStage(w) {
   switch (w.stage) {
     case 'persiapan': return 'material'
-    case 'material': return w.hasOperations ? 'operasi' : 'prepacking'
-    case 'operasi': return 'prepacking'
+    case 'material': return w.hasOperations ? 'operasi' : afterOps(w)
+    case 'operasi': return afterOps(w)
     case 'prepacking': return 'postpacking'
     case 'postpacking': return 'finish'
     case 'finish': return 'completed'

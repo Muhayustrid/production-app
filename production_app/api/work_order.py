@@ -114,6 +114,10 @@ def _has_operations(name):
 	)
 
 
+def skips_prepacking(item_code):
+	"""FU114: flag per Item — WO item ini melompati tahap Pre-Packing."""
+	return bool(item_code and frappe.get_cached_value("Item", item_code, "custom_skip_prepacking"))
+
 def derive_stage(wo, operations=None):
 	"""Derive the workspace stage from server truth. `wo` is a dict/doc of the
 	Work Order; `operations` (optional) avoids refetching child rows."""
@@ -141,7 +145,7 @@ def derive_stage(wo, operations=None):
 	if operations and not _operations_complete(operations):
 		return STAGE_OPERASI
 
-	if not wo.get("custom_prepacking_confirmed"):
+	if not wo.get("custom_prepacking_confirmed") and not skips_prepacking(wo.get("production_item")):
 		return STAGE_PREPACKING
 	if not wo.get("custom_postpacking_confirmed"):
 		return STAGE_POST_PACKING
@@ -198,13 +202,13 @@ def _stage_filters(stage):
 	elif stage in (STAGE_OPERASI, STAGE_PREPACKING, STAGE_POST_PACKING, STAGE_FINISH):
 		filters.append([DOCTYPE, "docstatus", "=", 1])
 		filters.append([DOCTYPE, "status", "not in", ["Completed", "Stopped", "Closed"]])
+		# FU114: marker prepacking tidak disaring di SQL untuk post_packing/finish —
+		# item tanpa Pre-Packing tetap 0; derive_stage yang memutuskan persis.
 		if stage == STAGE_FINISH:
-			filters.append([DOCTYPE, "custom_prepacking_confirmed", "=", 1])
 			filters.append([DOCTYPE, "custom_postpacking_confirmed", "=", 1])
 		elif stage == STAGE_PREPACKING:
 			filters.append([DOCTYPE, "custom_prepacking_confirmed", "=", 0])
 		elif stage == STAGE_POST_PACKING:
-			filters.append([DOCTYPE, "custom_prepacking_confirmed", "=", 1])
 			filters.append([DOCTYPE, "custom_postpacking_confirmed", "=", 0])
 	elif stage == STAGE_SELESAI:
 		filters.append([DOCTYPE, "docstatus", "=", 1])
@@ -299,6 +303,7 @@ def wo_list(search=None, production_item=None, status=None, start_date=None, end
 	_handover_enrich(rows)
 	for row in rows:
 		row["stage"] = derive_stage(row, ops_map.get(row.name, []))
+		row["skip_prepacking"] = skips_prepacking(row.production_item)
 	if int(meta):
 		return {"rows": rows, "total": total, "start": start, "page_len": page_len}
 	return rows
@@ -555,6 +560,7 @@ def wo_detail(name):
 	data["job_cards"] = job_cards
 	data["stock_entries"] = stock_entries
 	data["stage"] = derive_stage(data, operations)
+	data["skip_prepacking"] = skips_prepacking(wo.production_item)
 	# FU46: frontend membuka kunci panel Persiapan hanya bila server mengizinkan
 	# (WO selesai hanya untuk Manufacturing Manager; stage lain sudah terkunci UI)
 	data["can_edit_persiapan"] = data["stage"] != STAGE_SELESAI or (
@@ -756,6 +762,22 @@ def warehouse_defaults():
 	logged-in workspace user; writing is the permission gate."""
 	return _warehouse_defaults()
 
+
+@frappe.whitelist()
+def skip_prepacking_items():
+	"""FU114: daftar Item ber-flag Tanpa Pre-Packing (halaman Pengaturan)."""
+	return frappe.get_all(
+		"Item", filters={"custom_skip_prepacking": 1}, fields=["name", "item_name"], order_by="item_name"
+	)
+
+@frappe.whitelist()
+def skip_prepacking_set(item, enabled):
+	"""FU114: nyalakan/matikan flag satu Item; gerbang sama dengan simpan pengaturan."""
+	frappe.has_permission("Manufacturing Settings", "write", throw=True)
+	if not frappe.db.exists("Item", item):
+		frappe.throw(_("Item tidak ditemukan: {0}").format(item))
+	frappe.db.set_value("Item", item, "custom_skip_prepacking", 1 if int(enabled) else 0)
+	return skip_prepacking_items()
 
 @frappe.whitelist()
 def warehouse_defaults_save(
@@ -1411,7 +1433,7 @@ def _validate_postpacking(values, pre_good):
 	FU41: total Good+Reject+Trial+Sisa (dan Good sendiri) TIDAK lagi dibatasi
 	oleh Good Qty pre-packing — batas akhirnya tetap berupa overproduksi
 	native ERPNext yang divalidasi `finish()`."""
-	if pre_good <= 0:
+	if pre_good is not None and pre_good <= 0:
 		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
 	cleaned = {}
 	for key, value in values.items():
@@ -1465,10 +1487,13 @@ def confirm_postpacking(name, values):
 		frappe.throw(
 			_("Post-Packing belum tersedia: tahap sekarang {0}").format(stage)
 		)
-	if not wo.custom_prepacking_confirmed:
+	# FU114: item tanpa Pre-Packing (pre_good None) tidak butuh marker prepacking
+	skip = skips_prepacking(wo.production_item)
+	if not skip and not wo.custom_prepacking_confirmed:
 		frappe.throw(_("Pre-packing harus dikonfirmasi dulu"))
 
-	cleaned = _validate_postpacking(frappe.parse_json(values) or {}, flt(wo.custom_good_qty_prepacking))
+	pre_good = None if skip else flt(wo.custom_good_qty_prepacking)
+	cleaned = _validate_postpacking(frappe.parse_json(values) or {}, pre_good)
 
 	for fieldname, value in cleaned.items():
 		wo.set(fieldname, value)

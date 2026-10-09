@@ -61,7 +61,7 @@ async function save() {
     jam: form.jam,
     qc: String(form.qc).trim()
   })
-  if (saved) offerLabelPrint(saved.id, labelCountForWorkOrder(saved), true)
+  if (saved) offerLabelPrint(saved.id, labelCountForWorkOrder(saved), 'Pre-Packing')
 }
 </script>
 

@@ -136,6 +136,7 @@ WO_ROW_FIELDS = (
 	"process_loss_qty",
 	"material_transferred_for_manufacturing",
 	"skip_transfer",
+	"production_item",  # FU114: derive_stage membaca flag Tanpa Pre-Packing per item
 	"custom_prepacking_confirmed",
 	"custom_postpacking_confirmed",
 )

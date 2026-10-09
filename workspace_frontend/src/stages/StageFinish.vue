@@ -70,7 +70,7 @@ async function confirmComplete() {
         </div>
       </div>
 
-      <div class="sum-sec">
+      <div v-if="!wo.skipPrepacking" class="sum-sec">
         <div class="sect">Pre-Packing</div>
         <div class="sum-row">
           <span class="k">Good</span>

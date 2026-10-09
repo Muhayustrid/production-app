@@ -77,7 +77,7 @@ function itemStatus(i) {
         :disabled="!materialComplete(wo)"
         @click="confirmMaterial(wo)"
       >
-        {{ wo.hasOperations ? 'Lanjut ke Operasi' : 'Lanjut ke Pre-Packing' }}
+        {{ wo.hasOperations ? 'Lanjut ke Operasi' : wo.skipPrepacking ? 'Lanjut ke Post-Packing' : 'Lanjut ke Pre-Packing' }}
       </button>
     </div>
   </section>

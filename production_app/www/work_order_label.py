@@ -10,7 +10,7 @@ from frappe import _
 from frappe.utils import add_days, flt, getdate
 from pyqrcode import create as create_qr
 
-from production_app.api.work_order import _enrich_units
+from production_app.api.work_order import _enrich_units, skips_prepacking
 
 MAX_LABELS = 10000
 
@@ -22,12 +22,15 @@ def get_context(context):
 
     wo = frappe.get_doc("Work Order", name)
     wo.check_permission("read")
-    if not wo.get("custom_prepacking_confirmed"):
-        frappe.throw(_("Simpan Pre-Packing sebelum mencetak label Work Order {0}.").format(name))
+    # FU114: item tanpa Pre-Packing mencetak label dari hasil Post-Packing
+    stage = "postpacking" if skips_prepacking(wo.production_item) else "prepacking"
+    stage_label = "Post-Packing" if stage == "postpacking" else "Pre-Packing"
+    if not wo.get(f"custom_{stage}_confirmed"):
+        frappe.throw(_("Simpan {0} sebelum mencetak label Work Order {1}.").format(stage_label, name))
 
-    good_qty = flt(wo.get("custom_good_qty_prepacking"))
+    good_qty = flt(wo.get(f"custom_good_qty_{stage}"))
     if not math.isfinite(good_qty) or good_qty <= 0:
-        frappe.throw(_("Good Qty Pre-Packing harus lebih besar dari nol untuk mencetak label."))
+        frappe.throw(_("Good Qty {0} harus lebih besar dari nol untuk mencetak label.").format(stage_label))
 
     units = frappe._dict(production_item=wo.production_item, custom_uom=wo.get("custom_uom"))
     _enrich_units([units])
@@ -36,7 +39,7 @@ def get_context(context):
         frappe.throw(units.uom_warning or _("Konversi satuan Item belum valid untuk mencetak label."))
     qty_per_label = good_qty / factor
     if not math.isfinite(qty_per_label):
-        frappe.throw(_("Good Qty Pre-Packing tidak valid untuk mencetak label."))
+        frappe.throw(_("Good Qty {0} tidak valid untuk mencetak label.").format(stage_label))
     extra_labels = str(frappe.form_dict.get("extra") or "0")
     if len(extra_labels) > 5 or not re.fullmatch(r"[0-9]+", extra_labels):
         frappe.throw(_("Jumlah label tambahan harus berupa bilangan bulat 0 atau lebih, maksimal {0}.").format(MAX_LABELS))
