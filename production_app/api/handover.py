@@ -1110,19 +1110,19 @@ def _expected_unit_count(wo, lot, amount):
     return int(expected)
 
 
-def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_plan=None):
-    """Shared per-WO tail of create_request / create_group_request: insert +
-    submit the native Material Transfer MR (full produced qty, pool source,
-    target setting, row custom_work_order) and write the Work Order summary
-    atomically in the SAME transaction (read_only field: the controlled
-    db_set gate), then sync the status. FU96: no box values anymore — group
-    requests carry the shared plan on the MR header only. Returns the
-    submitted MR."""
+def _insert_submitted_handover_mr(rows, source, target, company, box_plan=None):
+    """Shared tail of create_request / create_group_request: insert + submit
+    ONE native Material Transfer MR with one row per Work Order (`rows` =
+    [(wo, amount, stock_uom), ...]; full produced qty, pool source, target
+    setting, row custom_work_order), then write every Work Order summary in
+    the SAME transaction (read_only field: the controlled db_set gate) and
+    sync the status. `box_plan` only for legacy plan-group fixtures. Returns
+    the submitted MR."""
     mr = frappe.get_doc(
         {
             "doctype": "Material Request",
             "material_request_type": "Material Transfer",
-            "company": wo.company,
+            "company": company,
             "transaction_date": now(),
             "schedule_date": add_days(now(), 1),
             "set_from_warehouse": source,
@@ -1139,18 +1139,18 @@ def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_pla
                     "schedule_date": add_days(now(), 1),
                     "custom_work_order": wo.name,
                 }
+                for wo, amount, stock_uom in rows
             ],
         }
     )
     mr.insert()  # session user; submit below — one transaction, native perms
     mr.submit()
-    frappe.db.set_value(
-        "Work Order",
-        wo.name,
-        {"custom_handover_material_request": mr.name},
-        update_modified=False,
-    )
-    _sync_handover_summary([wo.name])  # fail-honest: status Diminta Gudang
+    wo_names = [wo.name for wo, _amount, _uom in rows]
+    for name in wo_names:
+        frappe.db.set_value(
+            "Work Order", name, {"custom_handover_material_request": mr.name}, update_modified=False
+        )
+    _sync_handover_summary(wo_names)  # fail-honest: status Diminta Gudang
     return mr
 
 
@@ -1231,7 +1231,7 @@ def create_request(work_order, company=None):
         )
 
     source = _pool_warehouse(lot)  # setting override, else SE-derived (R2)
-    mr = _insert_submitted_handover_mr(wo, amount, stock_uom, source, target)
+    mr = _insert_submitted_handover_mr([(wo, amount, stock_uom)], source, target, wo.company)
     return {
         "ok": True,
         "material_request": mr.name,
@@ -1323,18 +1323,14 @@ def _json_list(value, label):
 @frappe.whitelist()
 @_retry_on_deadlock
 def create_group_request(work_orders, company=None):
-    """Gudang side: request a GROUP of Work Orders of the SAME item. The grain
-    stays 1 MR per Work Order (full produced qty each, R3); the group is
-    expressed by one Handover Box Plan that every member MR links
-    (custom_handover_box_plan), because the group pill and the cancel-group
-    mechanism ride that Link. FU96: boxes are RETIRED — the plan carries ONE
-    zero-kg row with the whole expected count purely as the group marker (no
-    weighing data anywhere). Legacy callers that still send box args are
+    """Gudang side: request a GROUP of Work Orders of the SAME item as ONE
+    Material Request with one row per Work Order (full produced qty each, R3;
+    2026-10-10). No Handover Box Plan anymore — older plan groups stay
+    readable/cancellable. Legacy callers that still send box args are
     accepted: frappe's get_newargs filters unknown kwargs before invocation.
 
     Contract: role gate + every validation under the member-WO locks BEFORE
-    any write; then ONE transaction inserts the plan and one submitted MR per
-    WO."""
+    any write; then ONE transaction inserts the submitted MR."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
@@ -1406,26 +1402,17 @@ def create_group_request(work_orders, company=None):
         members.append((wo, amount, stock_uom, lot))
         expected_total += expected
 
-    # FU96: ONE zero-kg row carrying the whole expected count keeps the plan
-    # (and the group pill / cancel-group riding its Link) alive — a group
-    # MARKER, not weighing data (boxes retired).
-    plan = frappe.get_doc(
-        {
-            "doctype": "Handover Box Plan",
-            "item_code": item_code,
-            "boxes": [{"kg": 0, "qty": expected_total}],
-        }
-    ).insert()  # session user (in-doctype gudang create perm)
-    mr_names = []
-    for wo, amount, stock_uom, lot in members:
-        mr = _insert_submitted_handover_mr(
-            wo, amount, stock_uom, _pool_warehouse(lot), target, box_plan=plan.name
-        )
-        mr_names.append(mr.name)
+    mr = _insert_submitted_handover_mr(
+        [(wo, amount, stock_uom) for wo, amount, stock_uom, _lot in members],
+        _pool_warehouse(members[0][3]),
+        target,
+        wos[0].company,
+    )
     return {
         "ok": True,
-        "box_plan": plan.name,
-        "material_requests": mr_names,
+        "material_request": mr.name,
+        "material_requests": [mr.name],  # compat: pre-2026-10-10 clients
+        "box_plan": None,
         "expected_unit_count": expected_total,
         "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }

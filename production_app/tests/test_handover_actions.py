@@ -49,8 +49,11 @@ from erpnext.manufacturing.doctype.work_order.work_order import (
 from erpnext.stock.doctype.batch.batch import get_batch_qty
 
 from production_app.api.handover import (
+    _checked_lot,
+    _insert_submitted_handover_mr,
     _item_stock,
     _pool_reserved_now,
+    _pool_warehouse,
     cancel_group_request,
     cancel_request,
     create_group_request,
@@ -1598,12 +1601,28 @@ class TestHandoverActions(IntegrationTestCase):
 		finally:
 			frappe.set_user("Administrator")
 
-	def test_fu96_group_request_plan_members_and_board(self):
-		"""FU96: dua WO satu item → SATU Handover Box Plan (1 baris kg=0, qty =
-		total expected — penanda grup) + dua MR anggota submitted (qty penuh,
-		Link plan di header); ringkasan WO = Link + status; baris papan
-		mengekspos box_plan/group_size (tanpa data box apa pun). Produksi tidak
-		bisa memanggil endpoint."""
+	def _legacy_group(self, wos):
+		"""Pre-2026-10-10 group shape (still live in data): one Handover Box
+		Plan + one single-row MR per WO linking it."""
+		fg = wos[0].production_item
+		plan = frappe.get_doc(
+			{"doctype": "Handover Box Plan", "item_code": fg, "boxes": [{"kg": 0, "qty": 1}]}
+		).insert()
+		mr_names = []
+		for wo in wos:
+			wo.reload()
+			lot = _checked_lot(wo.name)
+			mr = _insert_submitted_handover_mr(
+				[(wo, flt(wo.produced_qty), self.uom)],
+				_pool_warehouse(lot), self.target_wh, wo.company, box_plan=plan.name,
+			)
+			mr_names.append(mr.name)
+		return {"box_plan": plan.name, "material_requests": mr_names}
+
+	def test_bulk_group_request_one_mr_rows_per_wo(self):
+		"""2026-10-10: dua WO satu item → SATU MR submitted, satu baris per WO
+		(qty penuh, custom_work_order), tanpa Handover Box Plan; kedua WO Link
+		ke MR yang sama. Produksi tidak bisa memanggil endpoint."""
 		fg, (wo1, wo2) = self._group_ready(60, 40)
 
 		frappe.set_user(self.prod)
@@ -1614,44 +1633,36 @@ class TestHandoverActions(IntegrationTestCase):
 			frappe.set_user("Administrator")
 		self.assertEqual(self._bound_mr_count(wo1.name), 0)  # denied before writes
 
+		plans_before = frappe.db.count("Handover Box Plan")
 		result = self._group_request((wo1, wo2))
 		self.assertTrue(result["ok"])
-		self.assertTrue(result["box_plan"].startswith("HBP-"))
+		self.assertIsNone(result["box_plan"])
 		self.assertEqual(result["expected_unit_count"], 20)
-		plan = frappe.get_doc("Handover Box Plan", result["box_plan"])
-		self.assertEqual(plan.item_code, fg)
-		# penanda grup: satu baris kg=0 qty=total (bukan data timbangan)
-		self.assertEqual([(flt(b.kg), b.qty) for b in plan.boxes], [(0, 20)])
+		self.assertEqual(result["material_requests"], [result["material_request"]])
+		self.assertEqual(frappe.db.count("Handover Box Plan"), plans_before)
 
-		self.assertEqual(len(result["material_requests"]), 2)
-		wo_by_mr = {
-			frappe.db.get_value("Material Request Item", {"parent": n}, "custom_work_order"): n
-			for n in result["material_requests"]
-		}
-		self.assertEqual(set(wo_by_mr), {wo1.name, wo2.name})
-		for wo, mr_name in ((wo1, wo_by_mr[wo1.name]), (wo2, wo_by_mr[wo2.name])):
-			mr = frappe.get_doc("Material Request", mr_name)
-			produced = flt(frappe.db.get_value("Work Order", wo.name, "produced_qty"))
-			self.assertEqual(mr.docstatus, 1)
-			self.assertEqual(mr.material_request_type, "Material Transfer")
-			self.assertEqual(mr.custom_handover_box_plan, plan.name)
-			self.assertEqual(mr.items[0].custom_work_order, wo.name)
-			self.assertEqual(flt(mr.items[0].qty), produced)  # R3: full qty
-			self.assertEqual(mr.set_warehouse, self.target_wh)
+		mr = frappe.get_doc("Material Request", result["material_request"])
+		self.assertEqual(mr.docstatus, 1)
+		self.assertEqual(mr.material_request_type, "Material Transfer")
+		self.assertFalse(mr.custom_handover_box_plan)
+		self.assertEqual(mr.set_warehouse, self.target_wh)
+		self.assertEqual({i.custom_work_order: flt(i.qty) for i in mr.items}, {wo1.name: 60, wo2.name: 40})
+		for wo in (wo1, wo2):
 			summary = self._summary(wo.name)
-			self.assertEqual(summary.custom_handover_material_request, mr_name)
+			self.assertEqual(summary.custom_handover_material_request, mr.name)
 			self.assertEqual(summary.custom_handover_status, "Diminta Gudang")
 
-		board = handover_board()
-		for mr_name in result["material_requests"]:
-			row = self._req(board, mr_name)
-			self.assertEqual(row["lane"], "request")
-			self.assertEqual(row["box_plan"], plan.name)
-			self.assertEqual(row["group_size"], 2)
-			# FU96: TIDAK ada data box di baris mana pun
-			self.assertNotIn("box_1", row)
-			self.assertNotIn("boxes", row)
-			self.assertNotIn("group_boxes", row)
+	def test_bulk_group_request_rejects_wo_with_active_request(self):
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		self._request(wo1)
+		frappe.set_user(self.gudang)
+		try:
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				create_group_request([wo1.name, wo2.name])
+		finally:
+			frappe.set_user("Administrator")
+		self.assertIn("sudah punya permintaan aktif", str(ctx.exception))
+		self.assertEqual(self._bound_mr_count(wo2.name), 0)
 
 	def test_fu96_group_request_rejections_are_zero_write(self):
 		"""FU96: minimal 2 WO dan item campur tetap ditolak dgn pesan Indonesia
@@ -1703,7 +1714,7 @@ class TestHandoverActions(IntegrationTestCase):
 		and leaves the plan doc as the audit record; once no sibling is live a
 		plain cancel_request falls through to the normal docstatus guard."""
 		fg, (wo1, wo2) = self._group_ready(60, 40)
-		result = self._group_request((wo1, wo2))
+		result = self._legacy_group((wo1, wo2))
 		mr1, mr2 = sorted(result["material_requests"])
 
 		frappe.set_user(self.gudang)
@@ -1747,7 +1758,7 @@ class TestHandoverActions(IntegrationTestCase):
 		cancel (barangnya sudah keluar) — only the still-active siblings are
 		cancelled; the shipped MR stays submitted."""
 		fg, (wo1, wo2) = self._group_ready(60, 40)
-		result = self._group_request((wo1, wo2))
+		result = self._legacy_group((wo1, wo2))
 		wo_by_mr = {
 			frappe.db.get_value("Material Request Item", {"parent": n}, "custom_work_order"): n
 			for n in result["material_requests"]
@@ -1867,49 +1878,16 @@ class TestHandoverActions(IntegrationTestCase):
 
 		self._assert_zero_write_rejection(wo, {}, "tersedia")
 
-	def test_fu96_group_request_plan_cancel(self):
-		"""FU96 group: create_group_request qty-only — Handover Box Plan tetap
-		ada dengan SATU baris kg=0 (penanda grup; pill + cancel-grup menunggangi
-		Link-nya), tiap MR anggota = transfer full-qty submitted ter-link, dan
-		cancel grup tetap bekerja. Kwarg boxes lama dari pemanggil di-filter
-		get_newargs (bukan divalidasi)."""
-		fg, (wo1, wo2) = self._group_ready(60, 40)  # 12 + 8 = 20 Pack
-
-		frappe.set_user(self.gudang)
-		try:
-			result = create_group_request([wo1.name, wo2.name])
-		finally:
-			frappe.set_user("Administrator")
-
-		self.assertTrue(result["ok"])
-		self.assertTrue(result["box_plan"].startswith("HBP-"))
-		self.assertEqual(result["expected_unit_count"], 20)
-		plan = frappe.get_doc("Handover Box Plan", result["box_plan"])
-		self.assertEqual(plan.item_code, fg)
-		self.assertEqual([(flt(b.kg), b.qty) for b in plan.boxes], [(0, 20)])
-
-		self.assertEqual(len(result["material_requests"]), 2)
-		wo_by_mr = {
-			frappe.db.get_value("Material Request Item", {"parent": n}, "custom_work_order"): n
-			for n in result["material_requests"]
-		}
-		self.assertEqual(set(wo_by_mr), {wo1.name, wo2.name})
-		for wo, mr_name in ((wo1, wo_by_mr[wo1.name]), (wo2, wo_by_mr[wo2.name])):
-			mr = frappe.get_doc("Material Request", mr_name)
-			produced = flt(frappe.db.get_value("Work Order", wo.name, "produced_qty"))
-			self.assertEqual(mr.docstatus, 1)
-			self.assertEqual(mr.material_request_type, "Material Transfer")
-			self.assertEqual(mr.custom_handover_box_plan, plan.name)
-			self.assertEqual(flt(mr.items[0].qty), produced)  # R3: full qty
-			summary = self._summary(wo.name)
-			self.assertEqual(summary.custom_handover_material_request, mr_name)
-			self.assertEqual(summary.custom_handover_status, "Diminta Gudang")
-
+	def test_fu96_legacy_group_plan_board_and_cancel(self):
+		"""Legacy plan groups (data before 2026-10-10) keep their board marker
+		(box_plan + live member count) and cancel_group_request."""
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		result = self._legacy_group((wo1, wo2))
 		board = handover_board()
 		for mr_name in result["material_requests"]:
 			row = self._req(board, mr_name)
 			self.assertEqual(row["lane"], "request")
-			self.assertEqual(row["box_plan"], plan.name)
+			self.assertEqual(row["box_plan"], result["box_plan"])
 			self.assertEqual(row["group_size"], 2)
 			self.assertNotIn("box_1", row)
 			self.assertNotIn("group_boxes", row)
