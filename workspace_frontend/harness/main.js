@@ -87,6 +87,49 @@ const WO_HEAD = ['No. WO', 'Adonan', 'Produk', 'Jadwal', 'Status', 'Tahap', 'Ren
 const SE_HEAD = ['Dokumen', 'Item', 'Qty', 'Work Order', 'Batch', 'Dibuat oleh', 'Status', '']
 const FO_HEAD = ['Dokumen', 'Item', 'Dibutuhkan', 'Dibuat oleh', 'Status', 'Catatan', '']
 
+// StageFinish summary markup (exact classes from stages/StageFinish.vue) so the
+// label/value layout can be screenshotted at real panel width.
+const Q = (s) => h('span', { class: 'k' }, s)
+const V = (s, cls) => h('span', { class: ['v', cls || ''] }, s)
+function sumRow(label, value, cls) {
+  return h('div', { class: 'sum-row' }, [Q(label), V(value, cls)])
+}
+function finishPanel() {
+  return h('section', { class: 'panel' }, [
+    h('div', { class: 'panel-head' }, [
+      h('h2', 'Finish')
+    ]),
+    h('div', { class: 'panel-body' }, [
+      h('div', { class: 'sum-sec' }, [
+        sumRow('Rencana', '25 Pcs'),
+        sumRow('Hasil', '26 Pcs'),
+        sumRow('Selisih', '+1 Pcs', 'pos')
+      ]),
+      h('div', { class: 'sum-sec' }, [
+        h('div', { class: 'sect' }, 'Pre-Packing'),
+        sumRow('Good', '26 Pcs'),
+        sumRow('Reject', '0 Pcs'),
+        sumRow('Trial', '0 Pcs'),
+        sumRow('Sisa', '0 Pcs'),
+        sumRow('Total', '26 Pcs'),
+        h('div', { class: 'sum-row' }, [Q('Jam · QC'), h('span', { class: 'v' }, [h('span', { class: 'dim' }, '15:00 · Tita')])])
+      ]),
+      h('div', { class: 'sum-sec' }, [
+        h('div', { class: 'sect' }, 'Post-Packing'),
+        sumRow('Good', '26 Pcs'),
+        sumRow('Reject', '0 Pcs'),
+        sumRow('Trial', '0 Pcs'),
+        sumRow('Sisa', '0 Pcs'),
+        sumRow('Total', '26 Pcs')
+      ]),
+      h('div', { class: 'sum-sec' }, [
+        h('div', { class: 'fgbox' }, [h('span', 'Barang Jadi'), h('span', '26 Pcs')]),
+        h('div', { class: 'sum-row', style: 'margin-top: 8px' }, [Q('Gudang'), V('Cold Storage Produksi - JURI')])
+      ])
+    ])
+  ])
+}
+
 const Harness = {
   setup() {
     return () => h('div', { class: 'content' }, [
@@ -104,7 +147,9 @@ const Harness = {
       h('div', { class: 'wo-body fo-history' }, [
         h('div', { class: 'wo-thead' }, FO_HEAD.map((l, i) => l ? th(l) : h('span', { key: i }))),
         ...FO_ROWS.map(foRow)
-      ])
+      ]),
+      h('div', { class: 'page-head', style: 'margin-top:34px' }, [h('div', { class: 'ph-left' }, [h('h1', 'Finish'), h('p', { class: 'sub' }, 'harness layout — panel Finish (contoh data)')])]),
+      finishPanel()
     ])
   }
 }
