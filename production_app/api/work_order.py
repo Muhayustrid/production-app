@@ -1001,10 +1001,7 @@ def sync_warehouse_defaults_to_running_work_orders(dry_run=0):
 	Settings — satu sumber gate dengan simpan pengaturan."""
 	if not frappe.has_permission("Manufacturing Settings", "write"):
 		frappe.throw(
-			_(
-				"Hanya pemegang izin tulis Manufacturing Settings "
-				"(Manufacturing Manager) yang dapat menjalankan sinkronisasi gudang Work Order."
-			),
+			_("Hanya Manufacturing Manager yang dapat menyinkronkan gudang Work Order."),
 			frappe.PermissionError,
 		)
 	dry = bool(cint(dry_run))

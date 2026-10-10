@@ -52,7 +52,7 @@ def item_plan_info(item_code):
 	"""Langkah 1 wizard: nama item, UOM default (rantai W21), faktornya, dan
 	BOM default aktif — semuanya satu round-trip."""
 	if not frappe.has_permission("Item", "read", doc=item_code):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+		frappe.throw(_("Tidak punya izin membaca Item."), frappe.PermissionError)
 
 	item = frappe.get_cached_doc("Item", item_code)
 	default_uom = _default_uom(item)
@@ -85,7 +85,7 @@ def get_uom_conversion_factor(item_code, uom):
 	"""Faktor konversi untuk UOM mana pun; bentuk balasan sama dengan Server
 	Script lama supaya jadi pengganti langsung di site mana pun."""
 	if not frappe.has_permission("Item", "read", doc=item_code):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+		frappe.throw(_("Tidak punya izin membaca Item."), frappe.PermissionError)
 
 	item = frappe.get_cached_doc("Item", item_code)
 	factor = _conversion_factor(item, uom)
@@ -101,7 +101,7 @@ def bom_info(bom_no):
 	"""Nama & quantity BOM untuk ganti BOM manual di Langkah 1 (db.get_value
 	klien lama diganti supaya kolom custom pre-migrate tidak pernah dibaca)."""
 	if not frappe.has_permission("BOM", "read", doc=bom_no):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+		frappe.throw(_("Tidak punya izin membaca BOM."), frappe.PermissionError)
 
 	bom = frappe.get_cached_doc("BOM", bom_no)
 	return {

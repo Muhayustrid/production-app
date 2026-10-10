@@ -132,7 +132,7 @@ test('attentionText: rumus judul/detail per kind sesuai kontrak FU73', () => {
   )
   assert.deepEqual(
     attentionText({ kind: 'stopped', wo: 'WO-5', item_name: 'Donat' }),
-    { title: 'WO-5 berstatus Stopped', detail: 'Donat' }
+    { title: 'WO-5 sedang dihentikan', detail: 'Donat' }
   )
   // kind tak dikenal → fallback judul = kind
   assert.deepEqual(attentionText({ kind: 'misteri' }), { title: 'misteri', detail: '' })

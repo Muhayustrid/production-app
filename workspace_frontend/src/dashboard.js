@@ -120,7 +120,7 @@ export function attentionText(item) {
         detail: `${item.item_name} · batas ${fmtId(item.threshold)}°C`
       }
     case 'stopped':
-      return { title: `${item.wo} berstatus Stopped`, detail: item.item_name || '' }
+      return { title: `${item.wo} sedang dihentikan`, detail: item.item_name || '' }
     default:
       return { title: item?.kind ? String(item.kind) : '', detail: '' }
   }
