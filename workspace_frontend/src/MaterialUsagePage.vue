@@ -683,10 +683,9 @@ async function exportXlsx() {
           <aside class="trace-info">
             <h3><HelpCircle :size="15" :stroke-width="2" aria-hidden="true" /> Cara ini dihitung</h3>
             <p>
-              Jumlah teoritis memakai BOM yang ditetapkan di tiap Work Order dan diskalakan ke
-              hasil produksi nyata. Material Transfer for Manufacture tidak dihitung konsumsi agar
-              tidak terhitung ganda — konsumsi dibaca langsung dari Stock Entry
-              Manufacture/Konsumsi ke WIP. Retur bahan membalik transfer, bukan konsumsi.
+              Jumlah teoritis memakai BOM tiap Work Order, diskalakan ke hasil produksi nyata.
+              Konsumsi dibaca dari Stock Entry Manufacture/Konsumsi; transfer dan retur tidak
+              dihitung konsumsi.
             </p>
             <a class="trace-link" href="/app/stock-entry" target="_blank" rel="noopener">
               Lihat Stock Entry di ERPNext

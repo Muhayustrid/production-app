@@ -213,7 +213,7 @@ def _rentang_preset(preset, dari, sampai):
 		frappe.throw("Preset rentang tidak dikenal.", exc=frappe.ValidationError)
 	if tgl_dari > tgl_sampai:
 		frappe.throw(
-			"Tanggal awal (dari) tidak boleh setelah tanggal akhir (sampai).",
+			"Tanggal awal tidak boleh setelah tanggal akhir.",
 			exc=frappe.ValidationError,
 		)
 	if (tgl_sampai - tgl_dari).days > DASHBOARD_MAX_DAYS:

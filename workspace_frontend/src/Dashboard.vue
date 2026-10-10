@@ -451,7 +451,7 @@ onMounted(reload)
   </div>
 
   <div v-if="dashboardState.error" class="callout bad dash-error" role="alert">
-    <p>Gagal memuat, coba lagi</p>
+    <p>Gagal memuat dashboard.</p>
     <Button label="Coba lagi" size="small" severity="secondary" variant="outlined" @click="reload" />
   </div>
 
@@ -763,7 +763,7 @@ onMounted(reload)
               </li>
             </ul>
           </template>
-          <p class="dash-foot">Hanya WO dengan post-packing terkonfirmasi dalam rentang terpilih. Yield bisa di atas 100% (overproduksi ERPNext).</p>
+          <p class="dash-foot">Hanya WO dengan post-packing terkonfirmasi. Yield bisa di atas 100% (overproduksi).</p>
         </div>
       </section>
 

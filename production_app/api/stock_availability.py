@@ -387,7 +387,7 @@ def stock_movements(item_code=None, warehouse=None):
 	Entry (server sumber kebenaran — pola gate eksplisit dashboard.py).
 	is_cancelled ada di SLE v16 terpasang → ledger batal tidak ditampilkan."""
 	if not frappe.has_permission("Stock Ledger Entry", "read"):
-		frappe.throw(_("Tidak punya izin membaca Stock Ledger Entry"), frappe.PermissionError)
+		frappe.throw(_("Tidak punya izin melihat pergerakan stok"), frappe.PermissionError)
 	if not item_code:
 		frappe.throw(_("Pilih item dulu untuk melihat pergerakan stok"))
 	warehouses = _warehouses_ber_bin()

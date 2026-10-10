@@ -433,12 +433,8 @@ const qtyText = (it, key) => woQtyText(it[key], unitsOf(it))
     </section>
 
     <p class="srcnote">
-      Sumber data: Bin ERPNext (stok dan reserved; tersedia = stok − reserved), Item Reorder
-      (stok minimum), BOM aktif (kapasitas batch per resep), dan Stock Ledger Entry untuk
-      movement di drawer detail item. Status: habis bila tersedia ≤ 0, menipis di bawah stok
-      minimum, sisanya aman. Stok, reserved, tersedia, dan minimum tampil dalam Default
-      Inventory UOM item (FU78 — fallback stock UOM bila DIU kosong; angka kecil = stock UOM);
-      tabel movement memakai stock UOM (ledger SLE).
+      Sumber: Bin (stok &amp; reserved), Item Reorder (minimum), BOM, dan Stock Ledger Entry.
+      Status: habis bila tersedia ≤ 0, menipis di bawah minimum.
     </p>
   </template>
 

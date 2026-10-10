@@ -190,9 +190,8 @@ function onLabelFrameLoad() {
   if (!frameWindow?.workOrderLabelReady) {
     state.actionError = {
       title: 'Cetak Label Gagal',
-      message: 'Halaman label tidak dapat dimuat. Buka kembali Work Order lalu coba cetak lagi.',
-      details: [],
-      hint: ''
+      message: 'Halaman label gagal dimuat. Coba cetak lagi.',
+      details: []
     }
     printJob.value = null
     return
@@ -203,9 +202,8 @@ function onLabelFrameLoad() {
   } catch (_) {
     state.actionError = {
       title: 'Cetak Label Gagal',
-      message: 'Browser tidak dapat membuka dialog printer. Periksa izin cetak pada browser.',
-      details: [],
-      hint: ''
+      message: 'Dialog printer tidak bisa dibuka. Periksa izin cetak browser.',
+      details: []
     }
     printJob.value = null
   }
@@ -514,7 +512,6 @@ function muatUlangHalaman() {
       <ul v-if="state.actionError?.details?.length" class="error-dialog-details">
         <li v-for="detail in state.actionError.details" :key="detail">{{ detail }}</li>
       </ul>
-      <p v-if="state.actionError?.hint" class="error-dialog-hint">{{ state.actionError.hint }}</p>
       <div class="dlg-actions">
         <button ref="errorClose" class="btn btn-primary" @click="closeError">Tutup</button>
       </div>

@@ -86,18 +86,16 @@ function errorDetails(raw) {
   const shortage = text.match(/^(.+?)\s+units? of (.+?) needed in (.+?) to complete this transaction\.?$/i)
   if (shortage) {
     return {
-      title: 'Transfer Material Gagal',
-      // FU115: satu kalimat apa + kenapa
+      title: 'Stok kurang',
+      // FU117: satu kalimat, tanpa hint terpisah
       message: `Stok ${shortage[2]} kurang ${shortage[1]} di ${shortage[3]}.`,
-      details: [],
-      hint: 'Tambah stok atau ganti gudang sumber.'
+      details: []
     }
   }
   return {
     title: 'Gagal',
-    message: text || 'Ditolak server. Periksa data lalu coba lagi.',
-    details: [],
-    hint: ''
+    message: text || 'Terjadi kesalahan. Coba lagi.',
+    details: []
   }
 }
 

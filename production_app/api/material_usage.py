@@ -136,7 +136,7 @@ def _validasi_rentang(dari, sampai, max_days=None):
 		)
 	if tgl_dari > tgl_sampai:
 		frappe.throw(
-			"Tanggal awal (dari) tidak boleh setelah tanggal akhir (sampai).",
+			"Tanggal awal tidak boleh setelah tanggal akhir.",
 			exc=frappe.ValidationError,
 		)
 	if (tgl_sampai - tgl_dari).days > batas:

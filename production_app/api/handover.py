@@ -1265,7 +1265,7 @@ def _cancel_unsent_request(material_request):
     mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
     frappe.has_permission("Material Request", "cancel", doc=mr, throw=True)
     if mr.docstatus != 1:
-        frappe.throw(_("Permintaan {0} tidak bisa dibatalkan (docstatus {1}).").format(material_request, mr.docstatus))
+        frappe.throw(_("Permintaan {0} belum terkirim, jadi tidak bisa dibatalkan.").format(material_request))
     sent = _sent_se_by_mr([material_request])
     if sent:
         frappe.throw(
@@ -1349,7 +1349,7 @@ def create_group_request(work_orders, company=None):
         frappe.db.get_value("Work Order", name, "name", for_update=True)  # row lock
         wo = frappe.get_doc("Work Order", name)
         if wo.docstatus != 1:
-            frappe.throw(_("Work Order {0} tidak aktif (docstatus {1}).").format(name, wo.docstatus))
+            frappe.throw(_("Work Order {0} belum aktif.").format(name))
         if flt(wo.produced_qty) <= 0:
             frappe.throw(
                 _("Work Order {0} belum punya hasil barang jadi (produced qty 0).").format(name)
@@ -1480,7 +1480,7 @@ def _handover_mr(material_request):
     mr = frappe.get_doc("Material Request", material_request)
     frappe.has_permission("Material Request", "read", doc=mr, throw=True)
     if mr.docstatus != 1:
-        frappe.throw(_("Material Request {0} tidak aktif (docstatus {1}).").format(material_request, mr.docstatus))
+        frappe.throw(_("Material Request {0} belum aktif.").format(material_request))
     if not mr.items or not all(i.get("custom_work_order") for i in mr.items):
         frappe.throw(_("Material Request {0} bukan permintaan serah terima (tanpa Work Order).").format(material_request))
     return mr
@@ -1532,7 +1532,7 @@ def send_handover(material_request, company=None):
     mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
     lots = {w: _checked_lot(w) for w in wo_names}  # §4.9 unsupported error BEFORE any mutation
     if mr.status == "Stopped":
-        frappe.throw(_("Permintaan {0} berstatus Stopped; aktifkan kembali lewat Desk.").format(material_request))
+        frappe.throw(_("Permintaan {0} sedang dihentikan; aktifkan dulu lewat ERPNext Desk.").format(material_request))
     sent = _sent_se_by_mr([material_request])
     if sent:
         frappe.throw(

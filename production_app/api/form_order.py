@@ -377,11 +377,7 @@ def cancel_form_order(material_request, company=None):
 	frappe.db.get_value(DOCTYPE, material_request, "name", for_update=True)  # row lock
 	mr = frappe.get_doc(DOCTYPE, material_request)  # re-read under the lock
 	if mr.docstatus != 1:
-		frappe.throw(
-			_("Form Order {0} tidak bisa dibatalkan (docstatus {1}).").format(
-				material_request, mr.docstatus
-			)
-		)
+		frappe.throw(_("Form Order {0} belum aktif, jadi tidak bisa dibatalkan.").format(material_request))
 	_se_or_throw(material_request)
 	mr.cancel()
 	return {"ok": True, "material_request": material_request, "orders": _orders(company)}
@@ -425,12 +421,10 @@ def fulfill_form_order(material_request, company=None):
 	if not mr.custom_is_form_order:
 		frappe.throw(_("{0} bukan Form Order.").format(material_request))
 	if mr.docstatus != 1:
-		frappe.throw(
-			_("Form Order {0} tidak aktif (docstatus {1}).").format(material_request, mr.docstatus)
-		)
+		frappe.throw(_("Form Order {0} belum aktif.").format(material_request))
 	if mr.status == "Stopped":
 		frappe.throw(
-			_("Form Order {0} berstatus Stopped; aktifkan kembali lewat Desk.").format(
+			_("Form Order {0} sedang dihentikan; aktifkan dulu lewat ERPNext Desk.").format(
 				material_request
 			)
 		)

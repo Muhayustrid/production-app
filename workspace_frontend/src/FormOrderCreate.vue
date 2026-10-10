@@ -325,13 +325,13 @@ async function retryAttachment() {
             >Hapus</button>
           </li>
         </ul>
-        <p class="hint">Pilih beberapa file sekaligus atau tambahkan foto dari kamera. Semua lampiran akan tersimpan pada Material Request setelah Form Order dikirim.</p>
+        <p class="hint">Pilih beberapa file sekaligus atau tambahkan foto dari kamera.</p>
       </div>
 
       <div v-if="createdRequest && attachmentError" class="callout bad fo-attachment-warning" role="alert">
         <div>
           <strong>{{ createdRequest }} sudah dibuat, tetapi {{ formOrderState.attachmentIssue?.files.length }} lampiran masih menunggu unggah.</strong>
-          <p>{{ attachmentError }} Anda dapat menambah atau menghapus lampiran yang belum terunggah, lalu mengulang unggahan. Form Order tidak akan dibuat ulang.</p>
+          <p>{{ attachmentError }} Form Order tidak akan dibuat ulang — cukup ulangi unggah lampiran.</p>
           <a :href="'/app/material-request/' + encodeURIComponent(createdRequest)" target="_blank" rel="noopener noreferrer">Buka Material Request di ERPNext</a>
         </div>
         <button class="btn btn-sm" :disabled="!!formOrderState.pending" @click="retryAttachment">Ulangi Unggah Lampiran</button>
