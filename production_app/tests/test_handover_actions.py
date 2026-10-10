@@ -50,6 +50,7 @@ from erpnext.stock.doctype.batch.batch import get_batch_qty
 
 from production_app.api.handover import (
     _item_stock,
+    _pool_reserved_now,
     cancel_group_request,
     cancel_request,
     create_group_request,
@@ -508,6 +509,37 @@ class TestHandoverActions(IntegrationTestCase):
 			self.assertEqual(self._bound_mr_count(wo2.name), 0)
 		finally:
 			cls.bom_nb2 = original_bom
+
+	def test_pool_reserved_ignores_transferred_mr_without_se(self):
+		"""Migrated MRs are 'Transferred' with no linked SE — they are done and
+		must not reserve the pool (else available goes negative)."""
+		def mr(status):
+			doc = frappe.get_doc(
+				{
+					"doctype": "Material Request",
+					"material_request_type": "Material Transfer",
+					"company": self.company,
+					"schedule_date": today(),
+					"items": [
+						{
+							"item_code": self.fg_nb,
+							"qty": 7,
+							"uom": self.uom,
+							"from_warehouse": self.cold_wh,
+							"warehouse": self.target_wh,
+						}
+					],
+				}
+			).insert()
+			doc.submit()
+			doc.db_set("status", status)
+
+		before = _pool_reserved_now(self.fg_nb)
+		mr("Transferred")
+		mr("Issued")
+		self.assertEqual(_pool_reserved_now(self.fg_nb), before)
+		mr("Pending")
+		self.assertEqual(_pool_reserved_now(self.fg_nb), before + 7)
 
 	def test_t31_pool_short_blocked_zero_writes(self):
 		"""R3: the availability guard still holds at the WO's full qty — a

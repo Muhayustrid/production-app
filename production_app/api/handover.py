@@ -992,7 +992,9 @@ def _active_mr_now(mr_name):
 
 def _pool_reserved_now(item_code):
     """T36 race guard: CURRENT total of ACTIVE pool reservations for the item
-    (submitted, not stopped, SE-less Material Transfers). Locking reads see
+    (submitted, not stopped, SE-less Material Transfers). Transferred/Issued
+    MRs are done even without a linked SE (migrated MRs) — they reserve
+    nothing. Locking reads see
     siblings that committed while this request waited on the pool lock — the
     REPEATABLE-READ snapshot cannot. Item-wide by design: the pool IS the
     item's stock (one source setting in practice); counting a request from
@@ -1006,7 +1008,7 @@ def _pool_reserved_now(item_code):
                    join `tabMaterial Request` mr on mr.name = mri.parent
                   where mri.item_code = %s
                     and mr.docstatus = 1
-                    and mr.status != 'Stopped'
+                    and mr.status not in ('Stopped', 'Transferred', 'Issued')
                     and mr.material_request_type = 'Material Transfer'
                     and not exists (
                         select 1 from `tabStock Entry Detail` sed
