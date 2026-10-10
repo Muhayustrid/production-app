@@ -1110,14 +1110,16 @@ def _expected_unit_count(wo, lot, amount):
     return int(expected)
 
 
-def _insert_submitted_handover_mr(rows, source, target, company, box_plan=None):
+def _insert_submitted_handover_mr(rows, target, company, box_plan=None):
     """Shared tail of create_request / create_group_request: insert + submit
     ONE native Material Transfer MR with one row per Work Order (`rows` =
-    [(wo, amount, stock_uom), ...]; full produced qty, pool source, target
+    [(wo, amount, stock_uom, source), ...]; full produced qty, the WO's own
+    pool source (header source only when every row shares it), target
     setting, row custom_work_order), then write every Work Order summary in
     the SAME transaction (read_only field: the controlled db_set gate) and
     sync the status. `box_plan` only for legacy plan-group fixtures. Returns
     the submitted MR."""
+    sources = {source for _wo, _amount, _uom, source in rows}
     mr = frappe.get_doc(
         {
             "doctype": "Material Request",
@@ -1125,7 +1127,7 @@ def _insert_submitted_handover_mr(rows, source, target, company, box_plan=None):
             "company": company,
             "transaction_date": now(),
             "schedule_date": add_days(now(), 1),
-            "set_from_warehouse": source,
+            "set_from_warehouse": next(iter(sources)) if len(sources) == 1 else None,
             "set_warehouse": target,
             **({"custom_handover_box_plan": box_plan} if box_plan else {}),
             "items": [
@@ -1139,13 +1141,13 @@ def _insert_submitted_handover_mr(rows, source, target, company, box_plan=None):
                     "schedule_date": add_days(now(), 1),
                     "custom_work_order": wo.name,
                 }
-                for wo, amount, stock_uom in rows
+                for wo, amount, stock_uom, source in rows
             ],
         }
     )
     mr.insert()  # session user; submit below — one transaction, native perms
     mr.submit()
-    wo_names = [wo.name for wo, _amount, _uom in rows]
+    wo_names = [row[0].name for row in rows]
     for name in wo_names:
         frappe.db.set_value(
             "Work Order", name, {"custom_handover_material_request": mr.name}, update_modified=False
@@ -1231,7 +1233,7 @@ def create_request(work_order, company=None):
         )
 
     source = _pool_warehouse(lot)  # setting override, else SE-derived (R2)
-    mr = _insert_submitted_handover_mr([(wo, amount, stock_uom)], source, target, wo.company)
+    mr = _insert_submitted_handover_mr([(wo, amount, stock_uom, source)], target, wo.company)
     return {
         "ok": True,
         "material_request": mr.name,
@@ -1361,6 +1363,11 @@ def create_group_request(work_orders, company=None):
                 len(items), ", ".join(items)
             )
         )
+    companies = sorted({wo.company for wo in wos})
+    if len(companies) > 1:
+        frappe.throw(
+            _("Semua Work Order dalam grup harus satu company (ditemukan: {0}).").format(", ".join(companies))
+        )
     target = _target_warehouse_or_throw()
     item_code = items[0]
     # T31 pattern: a batchless pool is ITEM-wide — the Item row lock serializes
@@ -1403,8 +1410,7 @@ def create_group_request(work_orders, company=None):
         expected_total += expected
 
     mr = _insert_submitted_handover_mr(
-        [(wo, amount, stock_uom) for wo, amount, stock_uom, _lot in members],
-        _pool_warehouse(members[0][3]),
+        [(wo, amount, stock_uom, _pool_warehouse(lot)) for wo, amount, stock_uom, lot in members],
         target,
         wos[0].company,
     )
@@ -1571,11 +1577,12 @@ def send_handover(material_request, company=None):
 
     se = frappe.get_doc(make_mr_stock_entry(mr.name))
     wo_by_row = {i.name: i.custom_work_order for i in mr.items}
+    qty_in_uom = {i.name: flt(i.qty) for i in mr.items}
     if sorted(r.material_request_item or "" for r in se.items) != sorted(wo_by_row):
         frappe.throw(_("Stock Entry dari {0} tidak cocok dengan baris permintaannya.").format(material_request))
     for row in se.items:
         lot = lots[wo_by_row[row.material_request_item]]
-        row.qty = qty_by_row[row.material_request_item]
+        row.qty = qty_in_uom[row.material_request_item]
         row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
         if not lot.batchless:
             row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
@@ -1584,7 +1591,8 @@ def send_handover(material_request, company=None):
     se.submit()  # native shortage/valuation failures roll the whole request back
 
     _sync_handover_summary(wo_names)  # fail-honest: Terkirim, Link kept
-    batch = lots[wo_names[0]].batch
+    batches = {lot.batch for lot in lots.values()}
+    batch = next(iter(batches)) if len(batches) == 1 else None
     qty = sum(qty_by_row.values())
 
     return {

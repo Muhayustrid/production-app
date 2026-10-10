@@ -1613,8 +1613,8 @@ class TestHandoverActions(IntegrationTestCase):
 			wo.reload()
 			lot = _checked_lot(wo.name)
 			mr = _insert_submitted_handover_mr(
-				[(wo, flt(wo.produced_qty), self.uom)],
-				_pool_warehouse(lot), self.target_wh, wo.company, box_plan=plan.name,
+				[(wo, flt(wo.produced_qty), self.uom, _pool_warehouse(lot))],
+				self.target_wh, wo.company, box_plan=plan.name,
 			)
 			mr_names.append(mr.name)
 		return {"box_plan": plan.name, "material_requests": mr_names}
@@ -1747,6 +1747,22 @@ class TestHandoverActions(IntegrationTestCase):
 			self._send(mr)
 		self.assertIn("tidak bisa mengirim", str(ctx.exception))
 		self.assertFalse(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name}))
+
+	def test_bulk_group_request_rejects_mixed_company(self):
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		other = frappe.db.get_value("Company", {"name": ("!=", self.company)}, "name")
+		if not other:
+			self.skipTest("site punya satu company")
+		frappe.db.set_value("Work Order", wo2.name, "company", other, update_modified=False)
+		frappe.set_user(self.gudang)
+		try:
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				create_group_request([wo1.name, wo2.name])
+		finally:
+			frappe.set_user("Administrator")
+			frappe.db.set_value("Work Order", wo2.name, "company", self.company, update_modified=False)
+		self.assertIn("satu company", str(ctx.exception))
+		self.assertEqual(self._bound_mr_count(wo1.name), 0)
 
 	def test_bulk_group_request_rejects_wo_with_active_request(self):
 		fg, (wo1, wo2) = self._group_ready(60, 40)
