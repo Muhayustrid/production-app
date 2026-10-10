@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { handoverCard } from '../src/handover-card.js'
+import { groupText, handoverCard, requestRowId } from '../src/handover-card.js'
 
 const units = { stockUom: 'Pcs', displayUom: null, qtyInPack: null }
 
@@ -81,4 +81,17 @@ test('adonan 0 (kosong pasca-Int) tampil kosong, bukan nol', () => {
     timestamp: '2026-09-30 08:00:00',
     units
   }).adonan, '')
+})
+
+test('bulk MR rows get one id per Work Order', () => {
+  const a = requestRowId({ mr: 'MR-1', work_order: 'WO-1' })
+  const b = requestRowId({ mr: 'MR-1', work_order: 'WO-2' })
+  assert.notEqual(a, b)
+  assert.equal(requestRowId({ mr: 'MR-2', work_order: 'WO-3' }), 'MR-2|WO-3')
+})
+
+test('group label covers bulk MR and legacy plan', () => {
+  assert.equal(groupText({ materialRequest: 'MR-1', groupSize: 2 }), 'Grup MR-1 (2 WO)')
+  assert.equal(groupText({ materialRequest: 'MR-1', boxPlan: 'HBP-1', groupSize: 2 }), 'Grup HBP-1 (2 WO)')
+  assert.equal(groupText({ materialRequest: 'MR-1', groupSize: null }), undefined)
 })

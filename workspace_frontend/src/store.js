@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 
 import { applyFontScale } from './ui-preferences.js'
+import { requestRowId } from './handover-card.js'
 import { harusKeLogin, loginRedirectUrl } from './dashboard.js'
 
 // ============================================================================
@@ -682,7 +683,7 @@ function mapLot(l) {
 
 function mapRequest(r) {
   return {
-    id: r.mr, materialRequest: r.mr, workOrder: r.work_order,
+    id: requestRowId(r), materialRequest: r.mr, workOrder: r.work_order,
     item: r.item_name, itemCode: r.item_code,
     // FU95: company MR (bukti scope filter global papan)
     company: r.company || '',
