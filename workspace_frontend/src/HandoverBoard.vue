@@ -16,7 +16,7 @@ import {
 import { fmtInt, qtyMain, qtyStack } from './format.js'
 import { groupText, handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
-import { distinctItems, filterSerahRows, serahFilterCount } from './handover-filter.js'
+import { distinctItems, filterSerahRows, groupByRequest, serahFilterCount } from './handover-filter.js'
 import { rowClickAction, seRouteLabel } from './handover-se.js'
 import { normalizeFilters } from './filter-rows.js'
 import { laneStatusMeta } from './form-order.js'
@@ -356,11 +356,15 @@ watch(viewMode, (mode, sebelum) => {
 // baris tabel Stock Entry: seluruh request papan (status dari lane/flag),
 // dicari dengan helper kartu yang sama (nama item / WO / dokumen / batch),
 // lalu difilter status/item/tanggal (FU50, helper murni ter-test)
-const serahRows = computed(() =>
-  filterSerahRows(handoverRequests, seFilter())
+// MR bulk tampil satu baris (cari WO tetap per baris asli, lalu MR-nya utuh)
+const serahRows = computed(() => {
+  const rows = filterSerahRows(handoverRequests, seFilter())
+  const hit = new Set(rows
+    .filter((r) => boardMatch({ name: r.item, workOrder: r.workOrder, document: r.materialRequest || r.stockEntry, batch: r.batch }, searchQ.value))
+    .map((r) => r.materialRequest || r.id))
+  return groupByRequest(rows.filter((r) => hit.has(r.materialRequest || r.id)))
     .map((r) => ({ r, meta: laneStatusMeta(r) }))
-    .filter(({ r }) => boardMatch({ name: r.item, workOrder: r.workOrder, document: r.materialRequest || r.stockEntry, batch: r.batch }, searchQ.value))
-)
+})
 // FU94: sort 3-klik tabel (client-side — baris dimuat penuh)
 const SE_SORT_ACCESSORS = {
   dokumen: (row) => row.r.materialRequest,
@@ -678,7 +682,7 @@ onMounted(() => {
           <span class="dlg-ico" aria-hidden="true"><Truck :size="16" :stroke-width="1.9" /></span>
           <div class="dlg-hgroup">
             <h3>Kirim Stock Entry</h3>
-            <p class="dlg-sub"><strong>{{ kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
+            <p class="dlg-sub"><strong>{{ kirimRows.length > 1 ? `${kirimRows.length} WO` : kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
           </div>
         </header>
         <div class="dlg-context">
@@ -730,7 +734,7 @@ onMounted(() => {
           <span class="dlg-ico ok" aria-hidden="true"><CheckCircle2 :size="16" :stroke-width="1.9" /></span>
           <div class="dlg-hgroup">
             <h3>{{ kirimReadonly ? 'Detail Stock Entry' : 'Terkirim' }}</h3>
-            <p class="dlg-sub"><strong>{{ kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
+            <p class="dlg-sub"><strong>{{ kirimRows.length > 1 ? `${kirimRows.length} WO` : kirimReq.workOrder }}</strong> · {{ kirimReq.item }}</p>
           </div>
         </header>
         <div class="fgbox">

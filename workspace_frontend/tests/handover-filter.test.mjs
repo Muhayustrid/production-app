@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { distinctItems, filterSerahRows, rowStatusKey, serahFilterCount } from '../src/handover-filter.js'
+import { distinctItems, filterSerahRows, groupByRequest, rowStatusKey, serahFilterCount } from '../src/handover-filter.js'
 
 const rows = [
   { item: 'Roti Coklat', itemCode: 'RC01', lane: 'request', createdAt: '2026-09-18 08:00:00' },
@@ -69,4 +69,16 @@ test('serahFilterCount menghitung BARIS filter — rentang dan multi-nilai = SAT
   assert.equal(serahFilterCount({ statuses: [], items: ['Krim Kopi'], from: '2026-09-01', to: '2026-09-30' }), 2)
   assert.equal(serahFilterCount({ statuses: [], items: [], from: '2026-09-01', to: '' }), 1)
   assert.equal(serahFilterCount({ statuses: ['request'], items: ['Krim Kopi', 'Roti Keju'], from: '2026-09-01', to: '2026-09-30' }), 3)
+})
+
+test('groupByRequest: MR bulk jadi satu baris, qty dijumlah', () => {
+  const g = groupByRequest([
+    { id: 'A|W1', materialRequest: 'A', workOrder: 'W1', requestedQtyPcs: 25 },
+    { id: 'A|W2', materialRequest: 'A', workOrder: 'W2', requestedQtyPcs: 26 },
+    { id: 'B|W3', materialRequest: 'B', workOrder: 'W3', requestedQtyPcs: 10 }
+  ])
+  assert.equal(g.length, 2)
+  assert.deepEqual([g[0].workOrder, g[0].requestedQtyPcs, g[0].id], ['2 WO', 51, 'A|W1'])
+  assert.deepEqual(g[0].workOrders, ['W1', 'W2'])
+  assert.deepEqual([g[1].workOrder, g[1].requestedQtyPcs], ['W3', 10])
 })

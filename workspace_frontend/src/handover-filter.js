@@ -9,6 +9,23 @@ export function rowStatusKey(r) {
   return '-'
 }
 
+// MR bulk = satu baris tabel: qty dijumlah, kolom WO jadi "N WO".
+// Dikirim utuh oleh send_handover, jadi tidak ada aksi per-WO.
+export function groupByRequest(rows) {
+  const groups = new Map()
+  for (const r of rows) {
+    const key = r.materialRequest || r.id
+    const g = groups.get(key)
+    if (!g) groups.set(key, { ...r, workOrders: [r.workOrder] })
+    else {
+      g.workOrders.push(r.workOrder)
+      g.requestedQtyPcs = (g.requestedQtyPcs ?? 0) + (r.requestedQtyPcs ?? 0)
+      g.workOrder = `${g.workOrders.length} WO`
+    }
+  }
+  return [...groups.values()]
+}
+
 // opsi Item dari data papan: unik per nama, urut abjad
 export function distinctItems(rows) {
   const seen = new Map()
