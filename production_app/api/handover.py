@@ -1516,15 +1516,15 @@ def send_handover(material_request, company=None):
     frappe.has_permission("Stock Entry", "create", throw=True)
     frappe.has_permission("Stock Entry", "submit", throw=True)
 
-    wo_name = mr.items[0].custom_work_order
-    qty = flt(mr.items[0].stock_qty or mr.items[0].qty)
-    if qty <= 0:
+    wo_names = sorted({i.custom_work_order for i in mr.items})
+    qty_by_row = {i.name: flt(i.stock_qty or i.qty) for i in mr.items}
+    if any(q <= 0 for q in qty_by_row.values()):
         frappe.throw(_("Qty permintaan {0} tidak valid.").format(material_request))
 
-    frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # row lock
+    for wo_name in wo_names:  # row locks, sorted-name order (deadlock-safe)
+        frappe.db.get_value("Work Order", wo_name, "name", for_update=True)
     mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
-    lot = _checked_lot(wo_name)  # §4.9 unsupported error BEFORE any mutation
-    batch = lot.batch
+    lots = {w: _checked_lot(w) for w in wo_names}  # §4.9 unsupported error BEFORE any mutation
     if mr.status == "Stopped":
         frappe.throw(_("Permintaan {0} berstatus Stopped; aktifkan kembali lewat Desk.").format(material_request))
     sent = _sent_se_by_mr([material_request])
@@ -1552,37 +1552,40 @@ def send_handover(material_request, company=None):
         )
     # FU29: pre-check against the ROUTE origin (the same warehouse
     # make_mr_stock_entry will use for s_warehouse) — NOT the lot's SE-derived
-    # warehouse. A legacy lot whose stock sits elsewhere is refused HERE with a
-    # clear Indonesian message instead of dying at native submit.
-    route_wh = mr.items[0].from_warehouse or mr.set_from_warehouse or lot.warehouse
-    physical = (
-        _item_stock(lot.item_code, route_wh)
-        if lot.batchless
-        else flt(get_batch_qty(batch, route_wh) or 0)
-    )
-    if physical < qty:  # fail atomically here; NegativeStockError is the backstop
-        frappe.throw(
-            _("Stok {0} di gudang asal {1} hanya {2}; tidak bisa mengirim {3}.").format(
-                lot.item_code if lot.batchless else f"batch {batch}",
-                route_wh,
-                physical,
-                qty,
+    # warehouse. Bulk MR: rows sharing an item pool / batch are summed, so a
+    # total that does not fit is refused even when every row alone would.
+    need = {}
+    for i in mr.items:
+        lot = lots[i.custom_work_order]
+        route_wh = i.from_warehouse or mr.set_from_warehouse or lot.warehouse
+        key = ("i", lot.item_code, route_wh) if lot.batchless else ("b", lot.batch, route_wh)
+        need[key] = need.get(key, 0.0) + qty_by_row[i.name]
+    for (kind, ref, route_wh), qty in need.items():
+        physical = _item_stock(ref, route_wh) if kind == "i" else flt(get_batch_qty(ref, route_wh) or 0)
+        if physical < qty:  # fail atomically here; NegativeStockError is the backstop
+            frappe.throw(
+                _("Stok {0} di gudang asal {1} hanya {2}; tidak bisa mengirim {3}.").format(
+                    ref if kind == "i" else f"batch {ref}", route_wh, physical, qty
+                )
             )
-        )
 
     se = frappe.get_doc(make_mr_stock_entry(mr.name))
-    if len(se.items) != 1:
-        frappe.throw(_("Material Request {0} harus satu baris item.").format(material_request))
-    row = se.items[0]
-    row.qty = qty
-    row.transfer_qty = qty * flt(row.conversion_factor or 1)
-    if not lot.batchless:
-        row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
-        row.batch_no = batch
+    wo_by_row = {i.name: i.custom_work_order for i in mr.items}
+    if sorted(r.material_request_item or "" for r in se.items) != sorted(wo_by_row):
+        frappe.throw(_("Stock Entry dari {0} tidak cocok dengan baris permintaannya.").format(material_request))
+    for row in se.items:
+        lot = lots[wo_by_row[row.material_request_item]]
+        row.qty = qty_by_row[row.material_request_item]
+        row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
+        if not lot.batchless:
+            row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
+            row.batch_no = lot.batch
     se.insert()
     se.submit()  # native shortage/valuation failures roll the whole request back
 
-    _sync_handover_summary([wo_name])  # fail-honest: Terkirim, Link/boxes kept
+    _sync_handover_summary(wo_names)  # fail-honest: Terkirim, Link kept
+    batch = lots[wo_names[0]].batch
+    qty = sum(qty_by_row.values())
 
     return {
         "ok": True,
@@ -1590,5 +1593,6 @@ def send_handover(material_request, company=None):
         "stock_entry": se.name,
         "batch": batch,
         "qty": qty,
+        "work_orders": wo_names,
         "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }

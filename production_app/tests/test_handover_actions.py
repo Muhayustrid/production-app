@@ -1681,6 +1681,73 @@ class TestHandoverActions(IntegrationTestCase):
 			self.assertIsNone(summary.custom_handover_material_request)
 			self.assertFalse(summary.custom_handover_status)
 
+	def test_bulk_send_one_se_links_rows_all_wo_terkirim(self):
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		mr = frappe.get_doc("Material Request", self._group_request((wo1, wo2))["material_request"])
+		cold_before = flt(_item_stock(fg, self.cold_wh))
+		result = self._send(mr)
+		self.assertEqual(result["qty"], 100)
+		self.assertEqual(sorted(result["work_orders"]), sorted([wo1.name, wo2.name]))
+		se = frappe.get_doc("Stock Entry", result["stock_entry"])
+		self.assertEqual(se.docstatus, 1)
+		row_by_wo = {i.custom_work_order: i.name for i in mr.items}
+		self.assertEqual(
+			sorted((d.material_request, d.material_request_item, flt(d.qty)) for d in se.items),
+			sorted([(mr.name, row_by_wo[wo1.name], 60), (mr.name, row_by_wo[wo2.name], 40)]),
+		)
+		self.assertEqual(flt(_item_stock(fg, self.cold_wh)), cold_before - 100)
+		self.assertEqual(frappe.db.get_value("Material Request", mr.name, "status"), "Transferred")
+		for wo in (wo1, wo2):
+			self.assertEqual(self._summary(wo.name).custom_handover_status, "Terkirim")
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			self._send(mr)
+		self.assertIn("duplikat", str(ctx.exception))
+		self.assertEqual(
+			len({d.parent for d in frappe.get_all(
+				"Stock Entry Detail", filters={"material_request": mr.name, "docstatus": 1}, fields=["parent"]
+			)}),
+			1,
+		)
+
+	def test_bulk_send_batch_rows_keep_own_batch(self):
+		wo1, b1 = self._lot_ready(30)
+		wo2, b2 = self._lot_ready(20)
+		mr = frappe.get_doc("Material Request", self._group_request((wo1, wo2))["material_request"])
+		se = frappe.get_doc("Stock Entry", self._send(mr)["stock_entry"])
+		row_wo = {i.name: i.custom_work_order for i in mr.items}
+		self.assertEqual(
+			{row_wo[d.material_request_item]: (d.batch_no, flt(d.qty)) for d in se.items},
+			{wo1.name: (b1, 30), wo2.name: (b2, 20)},
+		)
+		self.assertEqual(flt(get_batch_qty(b1, self.target_wh)), 30)
+		self.assertEqual(flt(get_batch_qty(b2, self.target_wh)), 20)
+
+	def test_bulk_send_total_short_zero_writes(self):
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		mr = frappe.get_doc("Material Request", self._group_request((wo1, wo2))["material_request"])
+		drain = frappe.get_doc(
+			{
+				"doctype": "Stock Entry",
+				"stock_entry_type": "Material Transfer",
+				"company": self.company,
+				"items": [
+					{
+						"item_code": fg, "qty": flt(_item_stock(fg, self.cold_wh)) - 70,
+						"basic_rate": 10, "s_warehouse": self.cold_wh,
+						"t_warehouse": self.target_wh, "use_serial_batch_fields": 0,
+					}
+				],
+			}
+		)
+		self._pin_posting(drain, "11:00:00")
+		drain.insert()
+		drain.submit()
+		self.assertEqual(flt(_item_stock(fg, self.cold_wh)), 70)  # each row fits, total does not
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			self._send(mr)
+		self.assertIn("tidak bisa mengirim", str(ctx.exception))
+		self.assertFalse(frappe.get_all("Stock Entry Detail", filters={"material_request": mr.name}))
+
 	def test_bulk_group_request_rejects_wo_with_active_request(self):
 		fg, (wo1, wo2) = self._group_ready(60, 40)
 		self._request(wo1)
