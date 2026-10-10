@@ -256,7 +256,7 @@ Server API (one module `production_app/api/work_order.py`, whitelist only, sessi
 
 ## Work log
 
-### 2026-10-09 — FU115 — DONE (tabel WO proporsional, teks tahap ringkas, error jelas; permintaan user; belum di-commit)
+### 2026-10-09 — FU115 — DONE (tabel WO proporsional, teks tahap ringkas, error jelas; permintaan user; commit 023be0f)
 
 - Pemicu: screenshot user — kolom daftar WO tidak proporsional (No. WO terpotong 2 baris, kolom Gudang kosong lebar, header campur kapital); teks tahap berlebihan; error kurang jelas.
 - Tabel: kolom Gudang dihapus, chip serah terima ditumpuk di bawah chip Tahap (8 kolom: 176px No. WO nowrap, Produk 2fr); header `Tahap Aktif`→`Tahap`, `Adonan ke`→`Adonan`; tombol sort mewarisi uppercase/letter-spacing (sebelumnya UA-reset → header campur). Varian 1180px & grid-areas mobile ikut (area `gudang` dibuang).
@@ -264,7 +264,7 @@ Server API (one module `production_app/api/work_order.py`, whitelist only, sessi
 - Error: `work_order.py` (~30 pesan) jadi "apa + kenapa" singkat; tahap mentah (`pre_packing`) dipetakan `STAGE_NAMES`, kunci mentah reject/trial/sisa → label; `Not permitted`/`Unknown preparation field` diterjemahkan. `work_order_label.py` 7 pesan diawali "Label belum bisa dicetak: …". Dialog error SPA: stok kurang jadi satu kalimat `Stok X kurang N di Gudang.`; judul default `Gagal`. QtyInput: `Harus angka ≥ 0.` / `Harus bulat (UOM).`. Pesan handover/gudang yang di-assert tes tidak disentuh.
 - Bukti: `vite build` OK; `node --test` 116/116; backend test_wo_skip_prepacking 4, test_wo_finish_duplicate_rm 2, test_wo_filters 7, test_warehouse_defaults_live 18, test_www_guest_redirect 3 — semua OK. Deploy 8081, sha256 bundle lokal = served (`cb43f16b…`). Browser (user sementara, sudah dihapus): 1440px No. WO 1 baris (tinggi 21px), header seragam uppercase; 1100px tanpa scroll horizontal (scrollWidth = clientWidth 1034); 390px kartu rapi; detail Finish teks ringkas. API live: confirm_prepacking pada WO selesai → `Pre-Packing belum bisa: WO sedang di tahap Selesai.`
 
-### 2026-10-09 — FU114 — DONE (skip Pre-Packing per Item, permintaan user; belum di-commit)
+### 2026-10-09 — FU114 — DONE (skip Pre-Packing per Item, permintaan user; commit 80dd225)
 
 - Pemicu: produk langsung jadi (mis. krim kopi) hanya mengisi Post-Packing. Keputusan user: flag **per Item** (bukan per WO); label dari good Post-Packing.
 - Changes: `upgrade.py` — Item Check `custom_skip_prepacking` "Tanpa Pre-Packing". `api/work_order.py` — `skips_prepacking(item)` (get_cached_value); `derive_stage` melompati pre_packing untuk item ber-flag; `_stage_filters` post_packing/finish tak lagi menyaring marker prepacking di SQL (derive_stage yang memutuskan); `confirm_postpacking`/`_validate_postpacking` tanpa syarat prepacking untuk item ber-flag; `wo_list`/`wo_detail` mengirim `skip_prepacking`; `finish()` tak berubah. `api/dashboard.py` — `production_item` ditambah ke `WO_ROW_FIELDS`. `www/work_order_label.py` — sumber label Post-Packing untuk item ber-flag. Frontend — stepper Workspace menyembunyikan Pre-Packing, Kanban `nextStage`, label tombol Material/Operasi, StageFinish menyembunyikan ringkasan Pre-Packing, StagePostPacking menawarkan cetak label setelah simpan, judul dialog label per tahap.
