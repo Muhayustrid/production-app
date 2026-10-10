@@ -1652,6 +1652,35 @@ class TestHandoverActions(IntegrationTestCase):
 			self.assertEqual(summary.custom_handover_material_request, mr.name)
 			self.assertEqual(summary.custom_handover_status, "Diminta Gudang")
 
+	def test_bulk_board_one_row_per_wo_and_reservation(self):
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		before = self._lot(handover_board(), wo1.name)["available_qty"]
+		mr = self._group_request((wo1, wo2))["material_request"]
+		board = handover_board()
+		rows = {r["work_order"]: r for r in board["requests"] if r["mr"] == mr}
+		self.assertEqual(set(rows), {wo1.name, wo2.name})
+		self.assertEqual((rows[wo1.name]["qty"], rows[wo2.name]["qty"]), (60, 40))
+		self.assertEqual({r["group_size"] for r in rows.values()}, {2})
+		self.assertEqual({r["lane"] for r in rows.values()}, {"request"})
+		# batchless: one item pool, every row of the MR holds from it
+		self.assertEqual(self._lot(board, wo1.name)["reserved_qty"], 100)
+		self.assertEqual(self._lot(board, wo2.name)["reserved_qty"], 100)
+		self.assertEqual(self._lot(board, wo1.name)["available_qty"], before - 100)
+
+	def test_bulk_cancel_clears_every_wo(self):
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		mr = self._group_request((wo1, wo2))["material_request"]
+		frappe.set_user(self.gudang)
+		try:
+			cancel_request(mr)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(frappe.db.get_value("Material Request", mr, "docstatus"), 2)
+		for wo in (wo1, wo2):
+			summary = self._summary(wo.name)
+			self.assertIsNone(summary.custom_handover_material_request)
+			self.assertFalse(summary.custom_handover_status)
+
 	def test_bulk_group_request_rejects_wo_with_active_request(self):
 		fg, (wo1, wo2) = self._group_ready(60, 40)
 		self._request(wo1)
