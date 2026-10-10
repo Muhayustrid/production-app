@@ -472,7 +472,6 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 		items = bound_items.get(m.name)
 		if not items:
 			continue  # not a handover MR (no Work Order binding)
-		first = items[0]
 		se = sent.get(m.name)
 		lane, flag = None, None
 		if se:
@@ -485,66 +484,67 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 			lane, flag = LANE_REQUEST, "stopped"
 		else:
 			lane = LANE_REQUEST
-		lot = wo_by_name.get(first.custom_work_order)
-		qty_in_pack, adonan_ke = (lot.qty_in_pack, lot.adonan_ke) if lot else (None, None)
-		if lot is None:
-			# WO has no lot row (never manufactured / not submitted): the mockup
-			# dialogs still read qtyInPack + adonan off the request's item, so
-			# resolve it the same way instead of handing the UI a blank factor
-			enriched = frappe._dict(production_item=first.item_code, custom_uom=None)
-			_enrich_units([enriched])
-			qty_in_pack = flt(enriched.display_conversion_factor or 1)
-			display_uom = enriched.display_uom or enriched.stock_uom
-		else:
-			display_uom = lot.display_uom or lot.stock_uom
-		rows.append(
-			{
-				"mr": m.name,
-				"docstatus": m.docstatus,
-				"status": m.status,
-				"lane": lane,
-				"flag": flag,
-				"item_code": first.item_code,
-				"item_name": first.item_name or first.item_code,
-				"qty": flt(first.stock_qty or first.qty),  # stock UOM (Pcs)
-				"stock_uom": first.stock_uom,
-				"work_order": first.custom_work_order,
-				# FU95: ikut terkirim supaya klien/uji bisa membuktikan scope
-				# company baris (filter tetap server-side)
-				"company": m.company,
-				"batch": lot.batch if lot and not lot.unsupported else None,
-				"qty_in_pack": qty_in_pack,
-				"display_uom": display_uom,
-				"adonan_ke": adonan_ke,
-				# FU96: field box (kg/jumlah) dipensiunkan — grup request tetap
-				# dikenali lewat plan + jumlah anggota (mekanisme W19 hidup)
-				"box_plan": m.custom_handover_box_plan or None,
-				"group_size": (
-					group_size_by_plan.get(m.custom_handover_box_plan, 0)
-					if m.custom_handover_box_plan
-					else None
-				),
-				"from_warehouse": m.set_from_warehouse or None,
-				"to_warehouse": m.set_warehouse or None,
-				"postpacking": {
-					"good": flt(m.custom_good_qty_postpacking),
-					"reject": flt(m.custom_reject_qty_postpacking),
-					"trial": flt(m.custom_trial_qty_postpacking),
-					"sisa": flt(m.custom_sisa_qty_postpacking),
-					"jam_packing": _time_str(m.custom_jam_packing)
-					if m.custom_jam_packing
-					else None,
-					"qc_packing": m.custom_qc_packing or None,
-					"qc_packing_name": users.get(m.custom_qc_packing),
-					"confirmed": bool(m.custom_postpacking_confirmed),
-				},
-			"stock_entry": se.name if se else None,
-			"sent_at": f"{se.posting_date} {_time_str(se.posting_time)}" if se else None,
-			"owner": m.owner,
-			"owner_name": users.get(m.owner),
-			"creation": str(m.creation),
-		}
-		)
+		for it in items:  # 2026-10-10: bulk MR = one row per WO
+			lot = wo_by_name.get(it.custom_work_order)
+			qty_in_pack, adonan_ke = (lot.qty_in_pack, lot.adonan_ke) if lot else (None, None)
+			if lot is None:
+				# WO has no lot row (never manufactured / not submitted): the mockup
+				# dialogs still read qtyInPack + adonan off the request's item, so
+				# resolve it the same way instead of handing the UI a blank factor
+				enriched = frappe._dict(production_item=it.item_code, custom_uom=None)
+				_enrich_units([enriched])
+				qty_in_pack = flt(enriched.display_conversion_factor or 1)
+				display_uom = enriched.display_uom or enriched.stock_uom
+			else:
+				display_uom = lot.display_uom or lot.stock_uom
+			rows.append(
+				{
+					"mr": m.name,
+					"docstatus": m.docstatus,
+					"status": m.status,
+					"lane": lane,
+					"flag": flag,
+					"item_code": it.item_code,
+					"item_name": it.item_name or it.item_code,
+					"qty": flt(it.stock_qty or it.qty),  # stock UOM (Pcs)
+					"stock_uom": it.stock_uom,
+					"work_order": it.custom_work_order,
+					# FU95: ikut terkirim supaya klien/uji bisa membuktikan scope
+					# company baris (filter tetap server-side)
+					"company": m.company,
+					"batch": lot.batch if lot and not lot.unsupported else None,
+					"qty_in_pack": qty_in_pack,
+					"display_uom": display_uom,
+					"adonan_ke": adonan_ke,
+					# FU96: field box (kg/jumlah) dipensiunkan — grup request tetap
+					# dikenali lewat plan + jumlah anggota (mekanisme W19 hidup)
+					"box_plan": m.custom_handover_box_plan or None,
+					"group_size": (
+						group_size_by_plan.get(m.custom_handover_box_plan, 0)
+						if m.custom_handover_box_plan
+						else (len(items) if len(items) > 1 else None)
+					),
+					"from_warehouse": m.set_from_warehouse or None,
+					"to_warehouse": m.set_warehouse or None,
+					"postpacking": {
+						"good": flt(m.custom_good_qty_postpacking),
+						"reject": flt(m.custom_reject_qty_postpacking),
+						"trial": flt(m.custom_trial_qty_postpacking),
+						"sisa": flt(m.custom_sisa_qty_postpacking),
+						"jam_packing": _time_str(m.custom_jam_packing)
+						if m.custom_jam_packing
+						else None,
+						"qc_packing": m.custom_qc_packing or None,
+						"qc_packing_name": users.get(m.custom_qc_packing),
+						"confirmed": bool(m.custom_postpacking_confirmed),
+					},
+				"stock_entry": se.name if se else None,
+				"sent_at": f"{se.posting_date} {_time_str(se.posting_time)}" if se else None,
+				"owner": m.owner,
+				"owner_name": users.get(m.owner),
+				"creation": str(m.creation),
+			}
+			)
 
 	# FU29: live stock at the ROUTE origin (MR from_warehouse) so request
 	# cards can warn BEFORE a send is attempted; cached per (kind, key) — the
@@ -1110,22 +1110,24 @@ def _expected_unit_count(wo, lot, amount):
     return int(expected)
 
 
-def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_plan=None):
-    """Shared per-WO tail of create_request / create_group_request: insert +
-    submit the native Material Transfer MR (full produced qty, pool source,
-    target setting, row custom_work_order) and write the Work Order summary
-    atomically in the SAME transaction (read_only field: the controlled
-    db_set gate), then sync the status. FU96: no box values anymore — group
-    requests carry the shared plan on the MR header only. Returns the
-    submitted MR."""
+def _insert_submitted_handover_mr(rows, target, company, box_plan=None):
+    """Shared tail of create_request / create_group_request: insert + submit
+    ONE native Material Transfer MR with one row per Work Order (`rows` =
+    [(wo, amount, stock_uom, source), ...]; full produced qty, the WO's own
+    pool source (header source only when every row shares it), target
+    setting, row custom_work_order), then write every Work Order summary in
+    the SAME transaction (read_only field: the controlled db_set gate) and
+    sync the status. `box_plan` only for legacy plan-group fixtures. Returns
+    the submitted MR."""
+    sources = {source for _wo, _amount, _uom, source in rows}
     mr = frappe.get_doc(
         {
             "doctype": "Material Request",
             "material_request_type": "Material Transfer",
-            "company": wo.company,
+            "company": company,
             "transaction_date": now(),
             "schedule_date": add_days(now(), 1),
-            "set_from_warehouse": source,
+            "set_from_warehouse": next(iter(sources)) if len(sources) == 1 else None,
             "set_warehouse": target,
             **({"custom_handover_box_plan": box_plan} if box_plan else {}),
             "items": [
@@ -1139,18 +1141,18 @@ def _insert_submitted_handover_mr(wo, amount, stock_uom, source, target, box_pla
                     "schedule_date": add_days(now(), 1),
                     "custom_work_order": wo.name,
                 }
+                for wo, amount, stock_uom, source in rows
             ],
         }
     )
     mr.insert()  # session user; submit below — one transaction, native perms
     mr.submit()
-    frappe.db.set_value(
-        "Work Order",
-        wo.name,
-        {"custom_handover_material_request": mr.name},
-        update_modified=False,
-    )
-    _sync_handover_summary([wo.name])  # fail-honest: status Diminta Gudang
+    wo_names = [row[0].name for row in rows]
+    for name in wo_names:
+        frappe.db.set_value(
+            "Work Order", name, {"custom_handover_material_request": mr.name}, update_modified=False
+        )
+    _sync_handover_summary(wo_names)  # fail-honest: status Diminta Gudang
     return mr
 
 
@@ -1231,7 +1233,7 @@ def create_request(work_order, company=None):
         )
 
     source = _pool_warehouse(lot)  # setting override, else SE-derived (R2)
-    mr = _insert_submitted_handover_mr(wo, amount, stock_uom, source, target)
+    mr = _insert_submitted_handover_mr([(wo, amount, stock_uom, source)], target, wo.company)
     return {
         "ok": True,
         "material_request": mr.name,
@@ -1247,18 +1249,19 @@ def _cancel_unsent_request(material_request):
     bound Work Order FIRST (no MR->WO lock inversion), re-read the MR under
     the lock, refuse abnormal docstatus / submitted-SE evidence, native-cancel
     and clear the summary through document-derived synchronization in the same
-    transaction. Returns the bound Work Order name (None for unbound MRs)."""
-    wo_name = frappe.db.get_value(
+    transaction. Returns the bound Work Order names (bulk MR: all of them)."""
+    wo_names = sorted(set(frappe.get_all(
         "Material Request Item",
-        {"parent": material_request, "custom_work_order": ("is", "set")},
-        "custom_work_order",
-    )
-    if wo_name:
-        # the summary gate reads + writes this Work Order below, and neither
+        filters={"parent": material_request, "custom_work_order": ("is", "set")},
+        pluck="custom_work_order",
+    )))
+    if wo_names:
+        # the summary gate reads + writes these Work Orders below, and neither
         # get_doc nor db reads check permissions — verify the WO read grant
         # explicitly (same policy as the board: no read, no handover access)
         frappe.has_permission("Work Order", "read", throw=True)
-        frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # lock WO first
+        for wo_name in wo_names:  # lock WOs first, sorted (deadlock-safe)
+            frappe.db.get_value("Work Order", wo_name, "name", for_update=True)
     mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
     frappe.has_permission("Material Request", "cancel", doc=mr, throw=True)
     if mr.docstatus != 1:
@@ -1272,9 +1275,8 @@ def _cancel_unsent_request(material_request):
             )
         )
     mr.cancel()  # native; permission-checked as session user
-    if wo_name:
-        _sync_handover_summary([wo_name])  # fail-honest: clears Link/status
-    return wo_name
+    _sync_handover_summary(wo_names)  # fail-honest: clears Link/status
+    return wo_names
 
 
 @frappe.whitelist()
@@ -1323,18 +1325,14 @@ def _json_list(value, label):
 @frappe.whitelist()
 @_retry_on_deadlock
 def create_group_request(work_orders, company=None):
-    """Gudang side: request a GROUP of Work Orders of the SAME item. The grain
-    stays 1 MR per Work Order (full produced qty each, R3); the group is
-    expressed by one Handover Box Plan that every member MR links
-    (custom_handover_box_plan), because the group pill and the cancel-group
-    mechanism ride that Link. FU96: boxes are RETIRED — the plan carries ONE
-    zero-kg row with the whole expected count purely as the group marker (no
-    weighing data anywhere). Legacy callers that still send box args are
+    """Gudang side: request a GROUP of Work Orders of the SAME item as ONE
+    Material Request with one row per Work Order (full produced qty each, R3;
+    2026-10-10). No Handover Box Plan anymore — older plan groups stay
+    readable/cancellable. Legacy callers that still send box args are
     accepted: frappe's get_newargs filters unknown kwargs before invocation.
 
     Contract: role gate + every validation under the member-WO locks BEFORE
-    any write; then ONE transaction inserts the plan and one submitted MR per
-    WO."""
+    any write; then ONE transaction inserts the submitted MR."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
@@ -1364,6 +1362,11 @@ def create_group_request(work_orders, company=None):
             _("Semua Work Order dalam grup harus satu item (ditemukan {0} item: {1}).").format(
                 len(items), ", ".join(items)
             )
+        )
+    companies = sorted({wo.company for wo in wos})
+    if len(companies) > 1:
+        frappe.throw(
+            _("Semua Work Order dalam grup harus satu company (ditemukan: {0}).").format(", ".join(companies))
         )
     target = _target_warehouse_or_throw()
     item_code = items[0]
@@ -1406,26 +1409,16 @@ def create_group_request(work_orders, company=None):
         members.append((wo, amount, stock_uom, lot))
         expected_total += expected
 
-    # FU96: ONE zero-kg row carrying the whole expected count keeps the plan
-    # (and the group pill / cancel-group riding its Link) alive — a group
-    # MARKER, not weighing data (boxes retired).
-    plan = frappe.get_doc(
-        {
-            "doctype": "Handover Box Plan",
-            "item_code": item_code,
-            "boxes": [{"kg": 0, "qty": expected_total}],
-        }
-    ).insert()  # session user (in-doctype gudang create perm)
-    mr_names = []
-    for wo, amount, stock_uom, lot in members:
-        mr = _insert_submitted_handover_mr(
-            wo, amount, stock_uom, _pool_warehouse(lot), target, box_plan=plan.name
-        )
-        mr_names.append(mr.name)
+    mr = _insert_submitted_handover_mr(
+        [(wo, amount, stock_uom, _pool_warehouse(lot)) for wo, amount, stock_uom, lot in members],
+        target,
+        wos[0].company,
+    )
     return {
         "ok": True,
-        "box_plan": plan.name,
-        "material_requests": mr_names,
+        "material_request": mr.name,
+        "material_requests": [mr.name],  # compat: pre-2026-10-10 clients
+        "box_plan": None,
         "expected_unit_count": expected_total,
         "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }
@@ -1483,12 +1476,12 @@ def cancel_group_request(box_plan, company=None):
 
 
 def _handover_mr(material_request):
-    """Load the handover MR: read-gated, docstatus 1, one Work Order-bound row."""
+    """Load the handover MR: read-gated, docstatus 1, every row Work Order-bound."""
     mr = frappe.get_doc("Material Request", material_request)
     frappe.has_permission("Material Request", "read", doc=mr, throw=True)
     if mr.docstatus != 1:
         frappe.throw(_("Material Request {0} tidak aktif (docstatus {1}).").format(material_request, mr.docstatus))
-    if not mr.items or not mr.items[0].get("custom_work_order"):
+    if not mr.items or not all(i.get("custom_work_order") for i in mr.items):
         frappe.throw(_("Material Request {0} bukan permintaan serah terima (tanpa Work Order).").format(material_request))
     return mr
 
@@ -1529,15 +1522,15 @@ def send_handover(material_request, company=None):
     frappe.has_permission("Stock Entry", "create", throw=True)
     frappe.has_permission("Stock Entry", "submit", throw=True)
 
-    wo_name = mr.items[0].custom_work_order
-    qty = flt(mr.items[0].stock_qty or mr.items[0].qty)
-    if qty <= 0:
+    wo_names = sorted({i.custom_work_order for i in mr.items})
+    qty_by_row = {i.name: flt(i.stock_qty or i.qty) for i in mr.items}
+    if any(q <= 0 for q in qty_by_row.values()):
         frappe.throw(_("Qty permintaan {0} tidak valid.").format(material_request))
 
-    frappe.db.get_value("Work Order", wo_name, "name", for_update=True)  # row lock
+    for wo_name in wo_names:  # row locks, sorted-name order (deadlock-safe)
+        frappe.db.get_value("Work Order", wo_name, "name", for_update=True)
     mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
-    lot = _checked_lot(wo_name)  # §4.9 unsupported error BEFORE any mutation
-    batch = lot.batch
+    lots = {w: _checked_lot(w) for w in wo_names}  # §4.9 unsupported error BEFORE any mutation
     if mr.status == "Stopped":
         frappe.throw(_("Permintaan {0} berstatus Stopped; aktifkan kembali lewat Desk.").format(material_request))
     sent = _sent_se_by_mr([material_request])
@@ -1565,37 +1558,42 @@ def send_handover(material_request, company=None):
         )
     # FU29: pre-check against the ROUTE origin (the same warehouse
     # make_mr_stock_entry will use for s_warehouse) — NOT the lot's SE-derived
-    # warehouse. A legacy lot whose stock sits elsewhere is refused HERE with a
-    # clear Indonesian message instead of dying at native submit.
-    route_wh = mr.items[0].from_warehouse or mr.set_from_warehouse or lot.warehouse
-    physical = (
-        _item_stock(lot.item_code, route_wh)
-        if lot.batchless
-        else flt(get_batch_qty(batch, route_wh) or 0)
-    )
-    if physical < qty:  # fail atomically here; NegativeStockError is the backstop
-        frappe.throw(
-            _("Stok {0} di gudang asal {1} hanya {2}; tidak bisa mengirim {3}.").format(
-                lot.item_code if lot.batchless else f"batch {batch}",
-                route_wh,
-                physical,
-                qty,
+    # warehouse. Bulk MR: rows sharing an item pool / batch are summed, so a
+    # total that does not fit is refused even when every row alone would.
+    need = {}
+    for i in mr.items:
+        lot = lots[i.custom_work_order]
+        route_wh = i.from_warehouse or mr.set_from_warehouse or lot.warehouse
+        key = ("i", lot.item_code, route_wh) if lot.batchless else ("b", lot.batch, route_wh)
+        need[key] = need.get(key, 0.0) + qty_by_row[i.name]
+    for (kind, ref, route_wh), qty in need.items():
+        physical = _item_stock(ref, route_wh) if kind == "i" else flt(get_batch_qty(ref, route_wh) or 0)
+        if physical < qty:  # fail atomically here; NegativeStockError is the backstop
+            frappe.throw(
+                _("Stok {0} di gudang asal {1} hanya {2}; tidak bisa mengirim {3}.").format(
+                    ref if kind == "i" else f"batch {ref}", route_wh, physical, qty
+                )
             )
-        )
 
     se = frappe.get_doc(make_mr_stock_entry(mr.name))
-    if len(se.items) != 1:
-        frappe.throw(_("Material Request {0} harus satu baris item.").format(material_request))
-    row = se.items[0]
-    row.qty = qty
-    row.transfer_qty = qty * flt(row.conversion_factor or 1)
-    if not lot.batchless:
-        row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
-        row.batch_no = batch
+    wo_by_row = {i.name: i.custom_work_order for i in mr.items}
+    qty_in_uom = {i.name: flt(i.qty) for i in mr.items}
+    if sorted(r.material_request_item or "" for r in se.items) != sorted(wo_by_row):
+        frappe.throw(_("Stock Entry dari {0} tidak cocok dengan baris permintaannya.").format(material_request))
+    for row in se.items:
+        lot = lots[wo_by_row[row.material_request_item]]
+        row.qty = qty_in_uom[row.material_request_item]
+        row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
+        if not lot.batchless:
+            row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
+            row.batch_no = lot.batch
     se.insert()
     se.submit()  # native shortage/valuation failures roll the whole request back
 
-    _sync_handover_summary([wo_name])  # fail-honest: Terkirim, Link/boxes kept
+    _sync_handover_summary(wo_names)  # fail-honest: Terkirim, Link kept
+    batches = {lot.batch for lot in lots.values()}
+    batch = next(iter(batches)) if len(batches) == 1 else None
+    qty = sum(qty_by_row.values())
 
     return {
         "ok": True,
@@ -1603,5 +1601,6 @@ def send_handover(material_request, company=None):
         "stock_entry": se.name,
         "batch": batch,
         "qty": qty,
+        "work_orders": wo_names,
         "board": _build_board(company),  # FU95: papan balik ikut filter company klien
     }

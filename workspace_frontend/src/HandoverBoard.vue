@@ -14,7 +14,7 @@ import {
   normalizePageSize, PAGE_SIZE_OPTIONS, saveListPreferences, savedListPreferences, sendHandover
 } from './store.js'
 import { fmtInt, qtyMain, qtyStack } from './format.js'
-import { handoverCard } from './handover-card.js'
+import { groupText, handoverCard } from './handover-card.js'
 import { boardMatch } from './handover-search.js'
 import { distinctItems, filterSerahRows, serahFilterCount } from './handover-filter.js'
 import { rowClickAction, seRouteLabel } from './handover-se.js'
@@ -86,10 +86,6 @@ function lotCard(lot) {
         : ''
   }
 }
-
-// FU96: box (kg) dipensiunkan — permintaan grup ditandai lewat plan + jumlah
-// anggota (mekanisme W19 hidup), tanpa baris ringkasan box lagi.
-const groupText = (r) => (r.boxPlan ? `Grup ${r.boxPlan}${r.groupSize != null ? ` (${r.groupSize} WO)` : ''}` : undefined)
 
 function reqCard(r) {
   const lot0 = lotForWo(r.workOrder)
@@ -292,8 +288,12 @@ const kirimDone = ref(false)
 // true = dibuka dari baris Terkirim (tanpa tombol kirim, judul detail)
 const kirimReadonly = ref(false)
 
-// T32 (R6): qty kirim = qty diminta MR (== produced_qty WO); server tidak pernah stop
-const kirimGood = computed(() => kirimReq.value?.requestedQtyPcs ?? 0)
+// T32 (R6): qty kirim = qty diminta MR (== produced_qty WO); server tidak pernah stop.
+// MR bulk dikirim utuh: semua baris WO-nya jadi satu Stock Entry.
+const kirimRows = computed(() =>
+  kirimReq.value ? handoverRequests.filter((x) => x.materialRequest === kirimReq.value.materialRequest) : []
+)
+const kirimGood = computed(() => kirimRows.value.reduce((sum, x) => sum + (x.requestedQtyPcs ?? 0), 0))
 const kirimRoute = computed(() => seRouteLabel(kirimReq.value, handoverBoard.targetWarehouse))
 // FU29: peringatan stok rute tampil DI DALAM form review sebelum submit
 const kirimRouteWarn = computed(() =>
@@ -327,7 +327,7 @@ function closeKirim() {
 async function confirmKirim() {
   kirimError.value = ''
   try {
-    await sendHandover(kirimReq.value.id)
+    await sendHandover(kirimReq.value.materialRequest)
     // ganti kartu dengan versi terbaru dari papan server
     const fresh = handoverRequests.find((x) => x.id === kirimReq.value.id)
     if (fresh) kirimReq.value = fresh
@@ -701,9 +701,9 @@ onMounted(() => {
             <span class="k">Batch</span>
             <span class="v">{{ kirimReq.batch || '-' }}</span>
           </div>
-          <div v-if="kirimReq.boxPlan" class="sum-row">
+          <div v-if="groupText(kirimReq)" class="sum-row">
             <span class="k">Grup</span>
-            <span class="v">{{ groupText(kirimReq) }}</span>
+            <span class="v">{{ groupText(kirimReq) }}<template v-if="kirimRows.length > 1"> · dikirim sekaligus</template></span>
           </div>
         </div>
         <div class="boxgroup" style="margin-top: 14px">
