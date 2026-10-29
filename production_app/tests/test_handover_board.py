@@ -272,7 +272,15 @@ class TestHandoverBoard(IntegrationTestCase):
 	@classmethod
 	def _lot_in_cold(cls, wo):
 		"""The FG batch the WO's Manufacture created in the cold warehouse."""
-		return frappe.get_all("Batch", filters={"reference_name": wo.name}, pluck="name")[0]
+		rows = frappe.db.sql(
+			"""select sbe.batch_no from `tabStock Entry` se
+				join `tabStock Entry Detail` sed on sed.parent = se.name
+				join `tabSerial and Batch Entry` sbe on sbe.parent = sed.serial_and_batch_bundle
+				where se.work_order = %s and se.purpose = 'Manufacture'
+				and se.docstatus = 1 and sed.is_finished_item = 1""",
+			(wo.name,),
+		)
+		return rows[0][0]
 
 	@classmethod
 	def _make_mr(cls, wo, qty):
@@ -585,7 +593,7 @@ class TestHandoverBoard(IntegrationTestCase):
 		"""With the source setting set, the batchless pool counts stock in the
 		SETTING warehouse only (stock elsewhere ignored); an MR created BEFORE
 		the setting existed (from_warehouse = SE-derived lot warehouse) keeps
-		reserving the pool afterwards (WO-lot-based keying, not from_warehouse)."""
+		reserving its recorded source afterwards, not the newly configured pool."""
 		suffix = random_string(4).upper()
 		fg = _make_item(f"{PREFIX}-FGNB3-{suffix}", self.group, self.uom, batch=False)
 		bom = self._make_bom(fg)
@@ -627,8 +635,10 @@ class TestHandoverBoard(IntegrationTestCase):
 			self.assertEqual(board["source_warehouse"], pool_wh)
 			lot = self._lot(board, wo.name)
 			self.assertEqual(flt(lot["physical_qty"]), 300)  # SETTING warehouse counts
-			self.assertEqual(flt(lot["reserved_qty"]), 40)  # legacy MR still reserves
-			self.assertEqual(flt(lot["available_qty"]), 260)
+			self.assertEqual(flt(lot["reserved_qty"]), 0)  # historical source is unchanged
+			self.assertEqual(flt(lot["available_qty"]), 300)
+			from production_app.api.handover import _pool_reserved_now
+			self.assertEqual(_pool_reserved_now(fg, self.cold_wh), 40)
 
 	# --------------------------------------- 2. reserved / available math
 
@@ -737,8 +747,9 @@ class TestHandoverBoard(IntegrationTestCase):
 
 	def test_t35_submitted_se_precedence_over_abnormal_cancel(self):
 		"""A submitted Stock Entry keeps the request terkirim even when the MR
-		is forced to the test-only abnormal docstatus=2 (cancelled AFTER send);
-		both `_requests` and `_handover_lanes` derive the same truth."""
+		is forced to the test-only abnormal docstatus=2 (cancelled AFTER send).
+		The fully sent MR row is terkirim, but the WO (40 of 100) is not: it
+		has no lane and keeps its actual transfer plus the unrequested 60."""
 		from production_app.api import handover as handover_api
 
 		wo = self._make_wo(self.bom, 100, self.fg, "9")
@@ -750,11 +761,17 @@ class TestHandoverBoard(IntegrationTestCase):
 
 		mr.db_set("docstatus", 2)  # abnormal: cancelled after the send existed
 
-		board = handover_board()
+		# lot transfer evidence is target-scoped; pin the fixture's target
+		with self._pin_settings(handover_warehouse=self.target_wh):
+			board = handover_board()
 		req = self._req(board, mr.name)
 		self.assertEqual(req["lane"], "terkirim")
 		self.assertEqual(req["stock_entry"], se.name)
-		self.assertEqual(handover_api._handover_lanes([wo.name]), {wo.name: "terkirim"})
+		self.assertEqual(handover_api._handover_lanes([wo.name]), {})
+		self.assertEqual(flt(req["transferred_qty"]), 40)
+		lot = self._lot(board, wo.name)
+		self.assertEqual(flt(lot["transferred_qty"]), 40)
+		self.assertEqual(flt(lot["unrequested_remainder"]), 60)
 
 	def test_fu96_request_rows_carry_no_box_keys_and_bulk_mapping(self):
 		"""FU96: box (kg/jumlah) dipensiunkan — request rows TIDAK lagi membawa

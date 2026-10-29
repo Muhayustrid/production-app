@@ -676,6 +676,7 @@ function mapLot(l) {
     warehouse: l.warehouse, enteredAt: l.entered_at,
     producedQty: l.produced_qty, completedAt: l.completed_at,
     hasOlderLotSameItem: !!l.has_older_lot_same_item,
+    unrequestedRemainder: l.unrequested_remainder ?? null,
     unsupported: !!l.unsupported, unsupportedReason: l.unsupported_reason
   }
 }
@@ -698,6 +699,9 @@ function mapRequest(r) {
     // FU29: stok live di gudang asal rute (batch/pool) — null = tak dapat dihitung
     routeAvailable: r.route_available ?? null,
     stockEntry: r.stock_entry, sentAt: r.sent_at, ownerName: r.owner_name,
+    remainder: r.remainder ?? null,
+    outstandingQty: r.outstanding_qty ?? null,
+    transferredQtyPcs: r.transferred_qty ?? null,
     createdAt: r.creation
   }
 }

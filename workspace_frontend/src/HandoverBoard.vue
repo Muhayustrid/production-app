@@ -77,7 +77,8 @@ function lotCard(lot) {
       quantityLabel: 'Hasil WO',
       timestampLabel: 'Selesai',
       timestamp: lot.completedAt || lot.enteredAt,
-      units: lot
+      units: lot,
+      remainder: lot.unrequestedRemainder
     }),
     note: lot.batchless
       ? `Stok item digabung${reserved > 0 ? ` · tertahan ${fmtInt(reserved)} PCS` : ''}`
@@ -106,7 +107,8 @@ function reqCard(r) {
       timestampLabel: 'Waktu',
       timestamp: r.createdAt,
       units: lot0 || r,
-      box: groupText(r)
+      box: groupText(r),
+      remainder: r.remainder
     })
   }
 }
@@ -122,12 +124,13 @@ function doneCard(r) {
       document: r.stockEntry,
       batch: r.batch,
       adonan: r.adonanKe ?? lot0?.adonanKe,
-      quantity: r.requestedQtyPcs,
+      quantity: r.transferredQtyPcs || r.requestedQtyPcs,
       quantityLabel: 'Ditransfer',
       timestampLabel: 'Dikirim',
       timestamp: r.sentAt,
       units: lot0 || r,
-      box: groupText(r)
+      box: groupText(r),
+      remainder: r.remainder
     }),
     note: ''
   }
@@ -184,7 +187,7 @@ const filteredLots = computed(() => handoverLots.filter((l) => {
   if (!day) return false
   return (!lotFrom.value || day >= lotFrom.value) && (!lotTo.value || day <= lotTo.value)
 }))
-const coldLots = computed(() => filteredLots.value.filter((l) => l.unsupported || lotAvailablePcs(l) > 0))
+const coldLots = computed(() => filteredLots.value.filter((l) => l.unsupported || lotAvailablePcs(l) > 0 || l.unrequestedRemainder > 0))
 // FU44: cari pada kartu (bukan baris) SEBELUM pagination — searchQ mengubah
 // jumlah kartu lane Cold Storage maupun halamannya.
 const coldCards = computed(() => coldLots.value.map(lotCard).filter((c) => boardMatch(c, searchQ.value)))

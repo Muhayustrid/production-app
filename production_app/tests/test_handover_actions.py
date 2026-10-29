@@ -300,7 +300,14 @@ class TestHandoverActions(IntegrationTestCase):
 
 	@classmethod
 	def _lot_in_cold(cls, wo):
-		return frappe.get_all("Batch", filters={"reference_name": wo.name}, pluck="name")[0]
+		rows = frappe.db.sql(
+			"""select sbe.batch_no from `tabStock Entry` se
+				join `tabStock Entry Detail` sed on sed.parent = se.name
+				join `tabSerial and Batch Entry` sbe on sbe.parent = sed.serial_and_batch_bundle
+				where se.work_order = %s and se.purpose = 'Manufacture'
+				  and se.docstatus = 1 and sed.is_finished_item = 1""", (wo.name,),
+		)
+		return rows[0][0]
 
 	@classmethod
 	def _lot_ready(cls, qty, item=None, bom_no=None):
@@ -310,14 +317,14 @@ class TestHandoverActions(IntegrationTestCase):
 		cls._manufacture(wo, qty)
 		return wo, cls._lot_in_cold(wo)
 
-	def _request(self, wo):
+	def _request(self, wo, requested_qty=None):
 		"""create_request as the gudang actor (the matrix role). FU96: the
 		contract is qty-only — parameter box tidak ada lagi."""
 		if not flt(wo.produced_qty):
 			wo.reload()  # pick up produced_qty written by the Manufacture step
 		frappe.set_user(self.gudang)
 		try:
-			return create_request(wo.name)
+			return create_request(wo.name, requested_qty=requested_qty)
 		finally:
 			frappe.set_user("Administrator")
 
@@ -396,11 +403,11 @@ class TestHandoverActions(IntegrationTestCase):
 
 		global_scans = 0
 
-		def tracked(wo_names=None):
+		def tracked(wo_names=None, company=None):
 			nonlocal global_scans
 			if wo_names is None:
 				global_scans += 1
-			return original(wo_names=wo_names)
+			return original(wo_names=wo_names, company=company)
 
 		with patch.object(handover, "_wo_lot_rows", side_effect=tracked):
 			result = self._request(wo)
@@ -444,7 +451,7 @@ class TestHandoverActions(IntegrationTestCase):
 		# duplicate ACTIVE request for the same WO: blocked, zero writes
 		with self.assertRaises(frappe.ValidationError) as ctx:
 			self._request(wo)
-		self.assertIn("sudah punya permintaan aktif", str(ctx.exception))
+		self.assertIn("tidak memiliki sisa hasil", str(ctx.exception))
 		self.assertEqual(self._bound_mr_count(wo.name), 1)
 
 		# from_warehouse follows the source setting when set (R2)
@@ -543,6 +550,57 @@ class TestHandoverActions(IntegrationTestCase):
 		self.assertEqual(_pool_reserved_now(self.fg_nb), before)
 		mr("Pending")
 		self.assertEqual(_pool_reserved_now(self.fg_nb), before + 7)
+
+	def test_native_mr_cannot_overreserve_pool(self):
+		"""External native MR (R&D desk form) submitted after a handover
+		request reserved the whole pool is rejected; free pool stock still
+		accepts it. Physical 10, handover 10, native 4 must not reach 14."""
+		fg, (wo,) = self._group_ready(10)
+		prior = frappe.db.get_single_value(
+			"Manufacturing Settings", "custom_default_handover_source_warehouse"
+		)
+
+		def native_mr(qty):
+			return frappe.get_doc(
+				{
+					"doctype": "Material Request",
+					"material_request_type": "Material Transfer",
+					"company": self.company,
+					"schedule_date": today(),
+					"set_from_warehouse": self.cold_wh,
+					"set_warehouse": self.src_wh,
+					"items": [
+						{
+							"item_code": fg,
+							"qty": qty,
+							"uom": self.uom,
+							"from_warehouse": self.cold_wh,
+							"warehouse": self.src_wh,
+						}
+					],
+				}
+			).insert()
+
+		try:
+			warehouse_defaults_save(
+				handover_warehouse=self.target_wh, handover_source_warehouse=self.cold_wh
+			)
+			rd = native_mr(4)
+			rd.submit()  # free pool stock: R&D request accepted
+			self.assertEqual(_pool_reserved_now(fg, self.cold_wh), 4)
+			rd.cancel()
+
+			self._request(wo)  # handover reserves the whole pool
+			self.assertEqual(_pool_reserved_now(fg, self.cold_wh), 10)
+			late = native_mr(4)
+			with self.assertRaises(frappe.ValidationError) as ctx:
+				late.submit()
+			self.assertIn("tersedia", str(ctx.exception))
+			self.assertEqual(_pool_reserved_now(fg, self.cold_wh), 10)
+		finally:
+			warehouse_defaults_save(
+				handover_warehouse=self.target_wh, handover_source_warehouse=prior
+			)
 
 	def test_t31_pool_short_blocked_zero_writes(self):
 		"""R3: the availability guard still holds at the WO's full qty — a
@@ -773,123 +831,47 @@ class TestHandoverActions(IntegrationTestCase):
 		self.assertNotIn("boxes", row)
 
 	def test_fu96_second_request_owns_link_after_send(self):
-		"""Resolver precedence: after M1 is sent, a newer request M2 owns the
-		Work Order Link — an older SE can never demote an equal-or-newer
-		selected request. The sent M1 card stays document-derived terkirim.
-		Stock consumed by M1's send is restored through the smallest honest
-		native desk movement so M2 can be a full produced-qty request without
-		weakening any production guard."""
+		"""A partial completed request leaves eligible output for a later request."""
 		from production_app.api import handover as handover_api
 
-		wo, batch = self._lot_ready(60)
-		mr1 = frappe.get_doc("Material Request", self._request(wo)["material_request"])  # 10 kg / 12 Pack
+		wo, _batch = self._lot_ready(60)
+		mr1 = frappe.get_doc("Material Request", self._request(wo, requested_qty=30)["material_request"])
 		self._send(mr1)
-
-		# restore the sent batch to the lot warehouse at the desk (native)
-		restore = frappe.get_doc(
-			{
-				"doctype": "Stock Entry",
-				"stock_entry_type": "Material Transfer",
-				"company": self.company,
-				"items": [
-					{
-						"item_code": self.fg,
-						"qty": 60,
-						"basic_rate": 10,
-						"s_warehouse": self.target_wh,
-						"t_warehouse": self.cold_wh,
-						"use_serial_batch_fields": 1,
-						"batch_no": batch,
-					}
-				],
-			}
-		)
-		restore.insert()
-		restore.submit()
-
-		result2 = self._request(wo)
-		mr2 = frappe.get_doc("Material Request", result2["material_request"])
-
-		# the newer request owns the resolver state: an older SE may not revert it
-		self.assertEqual(
-			handover_api._handover_state([wo.name]),
-			{wo.name: {"lane": "request", "mr": mr2.name}},
-		)
+		self.assertNotEqual(self._summary(wo.name).custom_handover_status, "Terkirim")
+		mr2 = frappe.get_doc("Material Request", self._request(wo, requested_qty=30)["material_request"])
+		self.assertEqual(handover_api._handover_state([wo.name]),
+			{wo.name: {"lane": "request", "mr": mr2.name}})
 		summary = self._summary(wo.name)
 		self.assertEqual(summary.custom_handover_material_request, mr2.name)
-		# document-derived: M2 is the open request (M1's SE is history, not state)
 		self.assertEqual(summary.custom_handover_status, "Diminta Gudang")
-
 		board = handover_board()
-		row1, row2 = self._req(board, mr1.name), self._req(board, mr2.name)
-		self.assertEqual(row1["lane"], "terkirim")  # per-MR: the submitted SE stays
-		self.assertEqual(row1["stock_entry"], frappe.db.get_value(
-			"Stock Entry Detail", {"material_request": mr1.name, "docstatus": 1}, "parent"
-		))
-		self.assertEqual(row2["lane"], "request")
-		# FU96: tidak ada kunci box di kedua baris
-		for row in (row1, row2):
-			self.assertNotIn("box_1", row)
-			self.assertNotIn("boxes", row)
+		self.assertEqual(self._req(board, mr1.name)["lane"], "terkirim")
+		self.assertEqual(self._req(board, mr2.name)["lane"], "request")
+		self._send(mr2)
+		self.assertEqual(self._summary(wo.name).custom_handover_status, "Terkirim")
 
 	def test_fu96_cancelled_request_never_leaves_state_on_another_mr(self):
-		"""T36 controller ruling (FU96: Link saja): create M1 -> send M1 ->
-		create M2 -> cancel M2. The resolver falls back to the older sent M1
-		(M2 died unsent), so the summary moves the Link back to M1 — a
-		cancelled request never leaves any state behind."""
-		from production_app.api import handover as handover_api
-
-		wo, batch = self._lot_ready(60)
-		mr1 = frappe.get_doc("Material Request", self._request(wo)["material_request"])  # 10 kg / 12 Pack
+		"""Cancelling an unsent remainder preserves actual partial history and eligibility."""
+		wo, _batch = self._lot_ready(60)
+		mr1 = frappe.get_doc("Material Request", self._request(wo, requested_qty=30)["material_request"])
 		self._send(mr1)
-
-		# restore the sent batch so M2 can request the full produced qty
-		restore = frappe.get_doc(
-			{
-				"doctype": "Stock Entry",
-				"stock_entry_type": "Material Transfer",
-				"company": self.company,
-				"items": [
-					{
-						"item_code": self.fg,
-						"qty": 60,
-						"basic_rate": 10,
-						"s_warehouse": self.target_wh,
-						"t_warehouse": self.cold_wh,
-						"use_serial_batch_fields": 1,
-						"batch_no": batch,
-					}
-				],
-			}
-		)
-		restore.insert()
-		restore.submit()
-
-		result2 = self._request(wo)
-		mr2 = frappe.get_doc("Material Request", result2["material_request"])
-		self.assertEqual(self._summary(wo.name).custom_handover_material_request, mr2.name)
-
+		mr2 = frappe.get_doc("Material Request", self._request(wo, requested_qty=30)["material_request"])
 		frappe.set_user(self.gudang)
 		try:
 			cancel_request(mr2.name)
 		finally:
 			frappe.set_user("Administrator")
-
-		# resolver falls back to the older sent M1 (newest relevant evidence)
-		self.assertEqual(
-			handover_api._handover_state([wo.name]),
-			{wo.name: {"lane": "terkirim", "mr": mr1.name}},
-		)
 		summary = self._summary(wo.name)
-		self.assertEqual(summary.custom_handover_material_request, mr1.name)
-		self.assertEqual(summary.custom_handover_status, "Terkirim")
+		self.assertNotEqual(summary.custom_handover_status, "Terkirim")
+		self.assertNotEqual(summary.custom_handover_material_request, mr2.name)
 		board = handover_board()
 		row1, row2 = self._req(board, mr1.name), self._req(board, mr2.name)
 		self.assertEqual(row1["lane"], "terkirim")
-		self.assertNotIn("box_1", row1)
 		self.assertIsNone(row2["lane"])
 		self.assertEqual(row2["flag"], "cancelled")
-		self.assertNotIn("box_1", row2)
+		self.assertEqual(flt(self._lot(board, wo.name)["unrequested_remainder"]), 30)
+		mr3 = frappe.get_doc("Material Request", self._request(wo, requested_qty=30)["material_request"])
+		self.assertEqual(flt(mr3.items[0].stock_qty), 30)
 
 	def test_fu96_send_does_not_require_postpacking_confirmation_and_retains_summary(self):
 		"""send_handover runs on a plain request (no verify step anywhere) and
@@ -992,13 +974,8 @@ class TestHandoverActions(IntegrationTestCase):
 		same item draw one balance and fill it exactly; send creates a NO-batch
 		Stock Entry that drains exactly the requested qty; the MR is not
 		stopped; boxes mirror to the batchless WO like the batch path."""
-		wo1 = self._make_wo(60, item=self.fg_nb)
-		self._transfer(wo1)
-		self._manufacture(wo1, 60)
-		wo2 = self._make_wo(40, item=self.fg_nb)
-		self._transfer(wo2)
-		self._manufacture(wo2, 40)
-		self.assertEqual(flt(_item_stock(self.fg_nb, self.cold_wh)), 100)  # one pool
+		fg, (wo1, wo2) = self._group_ready(60, 40)
+		self.assertEqual(flt(_item_stock(fg, self.cold_wh)), 100)  # one isolated pool
 
 		result = self._request(wo1)  # qty == produced 60, from the shared pool
 		self.assertEqual(flt(result["qty"]), 60)
@@ -1021,8 +998,8 @@ class TestHandoverActions(IntegrationTestCase):
 		se = frappe.get_doc("Stock Entry", res["stock_entry"])
 		self.assertFalse(se.items[0].batch_no)  # batchless: no batch anywhere
 		self.assertFalse(se.items[0].serial_and_batch_bundle)
-		self.assertEqual(flt(_item_stock(self.fg_nb, self.cold_wh)), 40)
-		self.assertEqual(flt(_item_stock(self.fg_nb, self.target_wh)), 60)
+		self.assertEqual(flt(_item_stock(fg, self.cold_wh)), 40)
+		self.assertEqual(flt(_item_stock(fg, self.target_wh)), 60)
 		mr1.reload()
 		self.assertEqual(mr1.status, "Transferred")  # full qty: never stopped (R6)
 		# the summary (Link + status) was written at create and survives the send
@@ -1033,7 +1010,7 @@ class TestHandoverActions(IntegrationTestCase):
 		# duplicate send still blocked; pool unchanged by the failed attempt
 		with self.assertRaises(frappe.ValidationError):
 			self._send(mr1)
-		self.assertEqual(flt(_item_stock(self.fg_nb, self.cold_wh)), 40)
+		self.assertEqual(flt(_item_stock(fg, self.cold_wh)), 40)
 
 	# --------------------------------------------------------- 4. cancel
 
@@ -1701,7 +1678,7 @@ class TestHandoverActions(IntegrationTestCase):
 			self.assertEqual(self._summary(wo.name).custom_handover_status, "Terkirim")
 		with self.assertRaises(frappe.ValidationError) as ctx:
 			self._send(mr)
-		self.assertIn("duplikat", str(ctx.exception))
+		self.assertIn("sudah selesai ditransfer", str(ctx.exception))
 		self.assertEqual(
 			len({d.parent for d in frappe.get_all(
 				"Stock Entry Detail", filters={"material_request": mr.name, "docstatus": 1}, fields=["parent"]
@@ -1861,7 +1838,7 @@ class TestHandoverActions(IntegrationTestCase):
 		try:
 			with self.assertRaises(frappe.ValidationError) as ctx:
 				cancel_request(mr1)
-			self.assertIn("docstatus 2", str(ctx.exception))
+			self.assertEqual(frappe.db.get_value("Material Request", mr1, "docstatus"), 2)
 		finally:
 			frappe.set_user("Administrator")
 
@@ -1910,7 +1887,7 @@ class TestHandoverActions(IntegrationTestCase):
 			before = self._summary(wo.name)
 			with self.assertRaises(frappe.ValidationError) as ctx:
 				create_request(wo.name)
-			self.assertIn("sudah punya permintaan aktif", str(ctx.exception))
+			self.assertIn("tidak memiliki sisa hasil", str(ctx.exception))
 		finally:
 			frappe.set_user("Administrator")
 		self.assertEqual(self._bound_mr_count(wo.name), 1)

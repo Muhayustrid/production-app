@@ -175,6 +175,7 @@ awesomebar_search = ["production_app.search.awesomebar_results"]
 # (api/handover._handover_lanes), disinkronkan tiap MR/SE serah terima berubah.
 doc_events = {
 	"Material Request": {
+		"before_submit": "production_app.api.handover.guard_pool_reservation",
 		"on_submit": "production_app.api.handover.sync_from_material_request",
 		"on_cancel": "production_app.api.handover.sync_from_material_request",
 		"on_update": "production_app.api.handover.sync_from_material_request",

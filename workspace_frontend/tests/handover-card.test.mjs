@@ -95,3 +95,17 @@ test('group label covers bulk MR and legacy plan', () => {
   assert.equal(groupText({ materialRequest: 'MR-1', boxPlan: 'HBP-1', groupSize: 2 }), 'Grup HBP-1 (2 WO)')
   assert.equal(groupText({ materialRequest: 'MR-1', groupSize: null }), undefined)
 })
+
+test('handoverCard formats partial allocation with remainder without altering UOM', () => {
+  const card = handoverCard({
+    kind: 'request',
+    workOrder: 'MFG-WO-2026-00043',
+    document: 'MAT-MR-2026-00050',
+    quantity: 21,
+    quantityLabel: 'Diminta',
+    units: { stockUom: 'Pcs', displayUom: null, qtyInPack: null },
+    remainder: 4
+  })
+  assert.equal(card.quantity, '21 Pcs')
+  assert.equal(card.remainder, '4 Pcs')
+})

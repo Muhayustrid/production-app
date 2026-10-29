@@ -12,7 +12,10 @@ export function handoverCard(values) {
     quantity: qtyMain(values.quantity, values.units),
     timestampLabel: values.timestampLabel || '',
     timestamp: fmtStampShort(values.timestamp).replace(' · ', ', '),
-    box: values.box || ''
+    box: values.box || '',
+    ...(values.remainder != null && values.remainder !== ''
+      ? { remainder: qtyMain(values.remainder, values.units) }
+      : {})
   }
 }
 

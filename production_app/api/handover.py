@@ -32,6 +32,8 @@ from collections import defaultdict
 
 import functools
 
+import hashlib
+
 import json
 
 import math
@@ -99,7 +101,7 @@ def _build_board(company=None):
     }
 
 
-def _target_warehouse():
+def _target_warehouse(company=None):
 	return (
 		frappe.db.get_single_value(
 			"Manufacturing Settings", "custom_default_handover_warehouse"
@@ -436,8 +438,8 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 			"custom_work_order": ("is", "set"),
 		},
 		fields=[
-			"parent", "item_code", "item_name", "qty", "stock_qty", "stock_uom",
-			"custom_work_order",
+			"name", "parent", "item_code", "item_name", "qty", "stock_qty", "stock_uom",
+			"custom_work_order", "from_warehouse",
 		],
 		order_by="idx asc",
 	):
@@ -447,6 +449,18 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 
 	wo_by_name = {r.work_order: r for r in wo_rows}
 	sent = _sent_se_by_mr([m.name for m in mrs])
+	all_mri_names = [it.name for items in bound_items.values() for it in items if getattr(it, "name", None)]
+	transferred_by_mri = dict(
+		frappe.db.sql(
+			"""select sed.material_request_item, coalesce(sum(sed.transfer_qty), 0)
+				 from `tabStock Entry Detail` sed
+				where sed.material_request_item in %s
+				  and sed.docstatus = 1
+				group by sed.material_request_item""",
+			(tuple(all_mri_names),),
+			as_list=True,
+		)
+	) if all_mri_names else {}
 	users = _user_names(
 		{m.owner for m in mrs} | {m.custom_qc_packing for m in mrs if m.custom_qc_packing}
 	)
@@ -473,18 +487,24 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 		if not items:
 			continue  # not a handover MR (no Work Order binding)
 		se = sent.get(m.name)
-		lane, flag = None, None
-		if se:
-			lane = LANE_KIRIM  # document evidence outranks an abnormal docstatus
-		elif m.docstatus == 2:
-			flag = "cancelled"  # leaves the lanes, stays on the board (audit)
-		elif m.docstatus == 0:
-			flag = "draft"  # not yet submitted — no reservation, no action
-		elif m.status == "Stopped":
-			lane, flag = LANE_REQUEST, "stopped"
-		else:
-			lane = LANE_REQUEST
 		for it in items:  # 2026-10-10: bulk MR = one row per WO
+			req_qty = flt(it.stock_qty or it.qty)
+			done_qty = flt(transferred_by_mri.get(it.name, 0.0))
+			outstanding = max(0.0, req_qty - done_qty)
+			source_wh = it.from_warehouse or m.set_from_warehouse or None
+			lane, flag = None, None
+			if m.docstatus == 2:
+				flag = "cancelled"
+				if done_qty > 0 and outstanding <= 0:
+					lane = LANE_KIRIM
+			elif m.docstatus == 0:
+				flag = "draft"  # not yet submitted — no reservation, no action
+			elif m.status == "Stopped":
+				lane, flag = LANE_REQUEST, "stopped"
+			elif outstanding <= 0 or m.status in ("Transferred", "Issued"):
+				lane = LANE_KIRIM
+			else:
+				lane = LANE_REQUEST
 			lot = wo_by_name.get(it.custom_work_order)
 			qty_in_pack, adonan_ke = (lot.qty_in_pack, lot.adonan_ke) if lot else (None, None)
 			if lot is None:
@@ -497,6 +517,7 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 				display_uom = enriched.display_uom or enriched.stock_uom
 			else:
 				display_uom = lot.display_uom or lot.stock_uom
+			remainder = max(0.0, flt(lot.produced_qty) - done_qty) if lot else outstanding
 			rows.append(
 				{
 					"mr": m.name,
@@ -506,7 +527,10 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 					"flag": flag,
 					"item_code": it.item_code,
 					"item_name": it.item_name or it.item_code,
-					"qty": flt(it.stock_qty or it.qty),  # stock UOM (Pcs)
+					"qty": req_qty,  # stock UOM (Pcs)
+					"outstanding_qty": outstanding,
+					"transferred_qty": done_qty,
+					"remainder": remainder,
 					"stock_uom": it.stock_uom,
 					"work_order": it.custom_work_order,
 					# FU95: ikut terkirim supaya klien/uji bisa membuktikan scope
@@ -524,7 +548,7 @@ def _requests(wo_rows, wo_names=None, item_codes=None, company=None):
 						if m.custom_handover_box_plan
 						else (len(items) if len(items) > 1 else None)
 					),
-					"from_warehouse": m.set_from_warehouse or None,
+					"from_warehouse": source_wh,
 					"to_warehouse": m.set_warehouse or None,
 					"postpacking": {
 						"good": flt(m.custom_good_qty_postpacking),
@@ -627,17 +651,13 @@ def _handover_sync_ready():
 def _handover_state(wo_names):
 	"""SATU resolver status+Link serah terima per Work Order (dipakai
 	_handover_lanes, sinkronisasi ringkasan, dan migrasi T35 supaya preseden
-	lane dan Link tidak bisa drift). Kandidat diiterasi TERBARU lebih dulu dan
-	kandidat PERTAMA yang relevan memiliki state — sebuah kandidat lebih LAMA
-	(tinggal SE-nya pun) tidak pernah menurunkan MR terpilih yang sama-atau-lebih
-	baru. Preseden dari dokumen:
-
-	- evidence Stock Entry SUBMITTED menentukan lane HANYA saat ia evidence
-	  terbaru yang relevan — termasuk MR yang anehnya sudah cancel setelah
-	  kirim (state = terkirim, Link = MR-nya);
-	- tanpa SE terbaru: MR submitted non-cancelled TERBARU memiliki Link
-	  (state = request; termasuk Stopped tanpa SE — pernah diminta);
-	- MR draft/cancelled tanpa SE tidak memiliki apa pun.
+	lane dan Link tidak bisa drift). Kandidat diiterasi TERBARU lebih dulu.
+	Preseden:
+	- Terkirim (LANE_KIRIM) HANYA bila transfer kumulatif GBJ telah menutup produced_qty;
+	- tanpa pemenuhan penuh: MR submitted aktif (docstatus 1, belum Transferred/Stopped)
+	  menentukan LANE_REQUEST;
+	- WO dengan sisa unrequested output dan tanpa MR aktif memiliki lane None
+	  sehingga tetap dapat diminta kembali.
 
 	Mengembalikan {wo_name: {"lane": ..., "mr": ...}}; {} saat kosong/tanpa
 	izin (pemanggil menampilkan tanpa flag, tanpa error)."""
@@ -659,13 +679,39 @@ def _handover_state(wo_names):
 					"name": ("in", mr_names),
 					"material_request_type": "Material Transfer",
 				},
-				fields=["name", "docstatus", "creation"],
+				fields=["name", "docstatus", "status", "creation"],
 				order_by="creation desc",
 				limit=0,
 			)
 			if mr_names
 			else []
 		)
+		wo_produced = dict(
+			frappe.get_all(
+				"Work Order",
+				filters={"name": ("in", wo_names)},
+				fields=["name", "produced_qty"],
+				as_list=True,
+				limit=0,
+			)
+		)
+		target_wh = _target_warehouse()
+		if not target_wh:
+			transferred_by_wo = {}
+		else:
+			transferred_by_wo = dict(
+				frappe.db.sql(
+					"""select mri.custom_work_order, coalesce(sum(sed.transfer_qty), 0)
+						 from `tabStock Entry Detail` sed
+						 join `tabMaterial Request Item` mri on mri.name = sed.material_request_item
+						where mri.custom_work_order in %s
+						  and sed.docstatus = 1
+						  and coalesce(sed.t_warehouse, '') = %s
+						group by mri.custom_work_order""",
+					(tuple(wo_names), target_wh),
+					as_list=True,
+				)
+			) if wo_names else {}
 	except frappe.PermissionError:
 		return {}
 	if not mrs:
@@ -675,20 +721,33 @@ def _handover_state(wo_names):
 	for i in items:
 		wos_by_mr[i.parent].append(i.custom_work_order)
 	state = {}
-	for m in mrs:  # newest first — the newest relevant candidate owns a WO
-		for wo_name in wos_by_mr.get(m.name, ()):
-			if wo_name in state:
-				# fix round 1: an OLDER candidate (even one carrying submitted-SE
-				# evidence) never demotes an equal-or-newer selected MR — the
-				# Link must follow the newest request, or the board would hang
-				# the newer request's boxes on the older, already-sent MR
-				continue
-			if m.name in sent:
-				# SE evidence decides the lane only when it is the newest
-				# relevant evidence (incl. an MR abnormally cancelled AFTER send)
-				state[wo_name] = {"lane": LANE_KIRIM, "mr": m.name}
-			elif m.docstatus == 1:
-				state[wo_name] = {"lane": LANE_REQUEST, "mr": m.name}
+	for wo_name in wo_names:
+		produced = flt(wo_produced.get(wo_name, 0.0))
+		transferred = flt(transferred_by_wo.get(wo_name, 0.0))
+		# Matching MRs for this WO (newest first)
+		matching_mrs = [m for m in mrs if wo_name in wos_by_mr.get(m.name, ())]
+		if not matching_mrs:
+			continue
+		newest_mr = matching_mrs[0]
+		transferred_mr = next((m.name for m in matching_mrs if m.docstatus == 1 and m.name in sent), None)
+
+		if produced > 0 and transferred >= produced:
+			# Fully covered by cumulative transfers; cancelled requests cannot own the Link.
+			state[wo_name] = {"lane": LANE_KIRIM, "mr": transferred_mr}
+		else:
+			# Active request pending fulfillment (excludes Issued consistently)
+			active_candidate = next(
+				(m for m in matching_mrs if m.docstatus == 1 and m.status not in ("Stopped", "Cancelled", "Transferred", "Issued")),
+				None
+			)
+			if active_candidate:
+				state[wo_name] = {"lane": LANE_REQUEST, "mr": active_candidate.name}
+			elif transferred > 0:
+				# Partially transferred, no open active MR currently
+				state[wo_name] = {"lane": None, "mr": transferred_mr, "partial": True}
+			elif newest_mr.docstatus == 1:
+				# Keep submitted terminal requests navigable, but release cancelled links.
+				state[wo_name] = {"lane": None, "mr": newest_mr.name}
 	return state
 
 
@@ -699,6 +758,7 @@ def _handover_lanes(wo_names):
 	return {
 		wo_name: state["lane"]
 		for wo_name, state in _handover_state(wo_names).items()
+		if state.get("lane")
 	}
 
 
@@ -735,7 +795,7 @@ def _sync_handover_summary(wo_names):
 		if state:
 			if link != state["mr"]:
 				values["custom_handover_material_request"] = state["mr"]
-			label = HANDOVER_STATUS_LABEL[state["lane"]]
+			label = HANDOVER_STATUS_LABEL.get(state["lane"], "Diminta Gudang")
 			if status != label:
 				values[HANDOVER_STATUS_FIELD] = label
 		else:
@@ -774,6 +834,35 @@ def sync_from_material_request(doc, method=None):
 			title=SYNC_ERROR_TITLE,
 			message=f"Material Request {doc.name}\n\n{frappe.get_traceback()}",
 		)
+
+
+def guard_pool_reservation(doc, method=None):
+	"""doc_events Material Request before_submit: a native Material Transfer
+	MR (desk R&D, other warehouses) drawing from the configured handover
+	source pool may not reserve more than physical minus every other active
+	reservation. Same Item row lock as create_request, so the two serialize.
+	Handover rows (custom_work_order) are skipped: create_request /
+	create_group_request already guard them under that lock.
+	shortcut: reopen of a Stopped MR (update_status) bypasses submit hooks,
+	add an on_update guard if reopen over a drained pool becomes real."""
+	source = _source_warehouse()
+	if not source or doc.material_request_type != "Material Transfer":
+		return
+	wanted = {}
+	for d in doc.items or []:
+		if not d.get("custom_work_order") and (d.from_warehouse or doc.set_from_warehouse) == source:
+			wanted[d.item_code] = wanted.get(d.item_code, 0.0) + flt(d.stock_qty or d.qty)
+	for item_code in sorted(wanted):
+		frappe.db.get_value("Item", item_code, "name", for_update=True)  # pool lock
+		# self is still docstatus 0 here, so it is not in the reserved sum
+		available = _item_stock(item_code, source) - _pool_reserved_now(item_code, source, for_update=True)
+		if wanted[item_code] > available:
+			frappe.throw(
+				_("Qty {0} dari {1} melebihi stok tersedia: diminta {2}, tersedia {3}.").format(
+					item_code, source, wanted[item_code], max(0.0, available)
+				),
+				frappe.ValidationError,
+			)
 
 
 def sync_from_stock_entry(doc, method=None):
@@ -816,32 +905,26 @@ def backfill_handover_status():
 
 
 def _reserved_by_wo(requests):
-	"""§4.3: reservation = Σ qty of submitted, not stopped/cancelled MRs
-	without a Stock Entry, bound to the Work Order — exactly the request-lane
-	rows carrying no edge flag (draft/cancelled have no lane, stopped is
-	flagged)."""
+	"""§4.3: reservation = Σ outstanding qty of active, not stopped/cancelled MRs
+	without complete Stock Entry, bound to the Work Order."""
 	reserved = {}
 	for r in requests:
 		if r["lane"] == LANE_REQUEST and not r["flag"]:
-			reserved[r["work_order"]] = reserved.get(r["work_order"], 0.0) + r["qty"]
+			reserved[r["work_order"]] = reserved.get(r["work_order"], 0.0) + flt(r.get("outstanding_qty", r["qty"]))
 	return reserved
 
 
 def _reserved_by_item(requests, wo_rows):
-	"""Follow-up 8 — batchless pool reservation: batchless stock has no batch
-	dimension, so every active MR of the ITEM (any WO) holds from the same
-	pool. T31 (R2): the pool warehouse is the WO lot row's POOL warehouse
-	(source setting overrides), NOT the MR's stored from_warehouse — so MRs
-	created before the setting existed still reserve the pool after it appears.
-	Fallback when the WO has no lot row: the request's own from_warehouse."""
-	wo_by_name = {r.work_order: r for r in wo_rows}
+	"""Batchless pool reservation: active MRs hold reservation against the item
+	scoped to the MR row's source warehouse, preventing historical reservations from
+	shifting if setting changes."""
 	reserved = {}
 	for r in requests:
 		if r["lane"] == LANE_REQUEST and not r["flag"]:
-			lot = wo_by_name.get(r["work_order"])
-			warehouse = _pool_warehouse(lot) if lot else r["from_warehouse"]
-			key = (r["item_code"], warehouse)
-			reserved[key] = reserved.get(key, 0.0) + r["qty"]
+			warehouse = r.get("from_warehouse")
+			if warehouse:
+				key = (r["item_code"], warehouse)
+				reserved[key] = reserved.get(key, 0.0) + flt(r.get("outstanding_qty", r["qty"]))
 	return reserved
 
 
@@ -871,25 +954,47 @@ def _lots(wo_rows, requests):
 	pool_stock = {}
 	# a request bound to a lane keeps its (even empty) lot listed
 	bound = {r["work_order"] for r in requests if r["lane"]}
+	wo_names = [r.work_order for r in wo_rows if not getattr(r, "unsupported", False)]
+	target_wh = _target_warehouse()
+	target_clause = "and coalesce(sed.t_warehouse, '') = %s" if target_wh else ""
+	params = [tuple(wo_names), target_wh] if target_wh else [tuple(wo_names)]
+	transferred_by_wo = dict(
+		frappe.db.sql(
+			f"""select mri.custom_work_order, coalesce(sum(sed.transfer_qty), 0)
+				 from `tabStock Entry Detail` sed
+				 join `tabMaterial Request Item` mri on mri.name = sed.material_request_item
+				where mri.custom_work_order in %s
+				  and sed.docstatus = 1
+				  {target_clause}
+				group by mri.custom_work_order""",
+			tuple(params),
+			as_list=True,
+		)
+	) if wo_names and target_wh else {}
 	lots = []
 	for row in wo_rows:
 		if row.unsupported:
 			lots.append(row)
 			continue
+		transferred = flt(transferred_by_wo.get(row.work_order, 0.0))
+		active_req = flt(reserved.get(row.work_order, 0.0))
+		row.transferred_qty = transferred
+		rem = max(0.0, flt(row.produced_qty) - transferred - active_req)
+		row.unrequested_remainder = rem if (transferred > 0 or active_req > 0) and rem > 0 else 0.0
 		if row.batchless:
 			pool_wh = _pool_warehouse(row)
 			key = (row.item_code, pool_wh)
 			if key not in pool_stock:
 				pool_stock[key] = _item_stock(row.item_code, pool_wh)
 			row.physical_qty = pool_stock[key]
-			row.reserved_qty = flt(reserved_item.get(key, 0.0))
+			row.reserved_qty = _pool_reserved_now(row.item_code, pool_wh, for_update=False)
 		else:
-			row.reserved_qty = reserved.get(row.work_order, 0.0)
+			row.reserved_qty = active_req
 		row.available_qty = row.physical_qty - row.reserved_qty
 		# FU30: penanda manual "Gudang Confirmed" dipensiunkan — lot turun murni
 		# dari stok (physical 0) / Status Serah Terima; kecuali masih diikat
 		# permintaan aktif (dialognya butuh data lot).
-		if row.physical_qty <= 0 and row.work_order not in bound:
+		if row.physical_qty <= 0 and row.work_order not in bound and row.unrequested_remainder <= 0:
 			continue  # empty lot nobody references — drops off the lane
 		lots.append(row)
 
@@ -972,47 +1077,120 @@ def _retry_on_deadlock(action):
 
 def _active_mr_now(mr_name):
     """CURRENT (locking) active-request check for one MR: submitted, not
-    stopped, without a submitted Stock Entry — the same semantics as the
-    snapshot-based duplicate scan, but authoritative across lock waits."""
-    docstatus, status = frappe.db.get_value(
-        "Material Request", mr_name, ["docstatus", "status"], for_update=True
-    ) or (None, None)
-    if docstatus != 1 or status == "Stopped":
+    stopped/transferred/cancelled, and has unfulfilled quantity remaining."""
+    docstatus, status, per_ordered = frappe.db.get_value(
+        "Material Request", mr_name, ["docstatus", "status", "per_ordered"], for_update=True
+    ) or (None, None, None)
+    if docstatus != 1 or status in ("Stopped", "Transferred", "Cancelled", "Issued") or flt(per_ordered) >= 100.0:
         return False
-    return not frappe.db.get_value(
-        "Stock Entry Detail",
-        {"material_request": mr_name, "docstatus": 1, "parenttype": "Stock Entry"},
-        "parent",
-        for_update=True,
-    )
+    # Check if there is remaining unfulfilled quantity across items
+    mri_outstanding = frappe.db.sql(
+        """select coalesce(sum(
+               greatest(0.0, mri.stock_qty - coalesce((
+                   select sum(sed.transfer_qty)
+                     from `tabStock Entry Detail` sed
+                    where sed.material_request = mr.name
+                      and sed.material_request_item = mri.name
+                      and sed.docstatus = 1
+               ), 0.0))
+           ), 0.0)
+              from `tabMaterial Request Item` mri
+              join `tabMaterial Request` mr on mr.name = mri.parent
+             where mr.name = %s""",
+        (mr_name,),
+    )[0][0]
+    return flt(mri_outstanding) > 0.0
 
 
-def _pool_reserved_now(item_code):
-    """T36 race guard: CURRENT total of ACTIVE pool reservations for the item
-    (submitted, not stopped, SE-less Material Transfers). Transferred/Issued
-    MRs are done even without a linked SE (migrated MRs) — they reserve
-    nothing. Locking reads see
-    siblings that committed while this request waited on the pool lock — the
-    REPEATABLE-READ snapshot cannot. Item-wide by design: the pool IS the
-    item's stock (one source setting in practice); counting a request from
-    another pool warehouse only ever makes the guard stricter.
-    # ponytail: item-wide sum; split by (item, warehouse) if a second pool
-    # per item ever becomes real"""
+def _compute_outstanding_reservation(stock_qty, fulfilled_qty=0.0):
+    """Reservation is the nonnegative unfulfilled portion of a submitted, active MR item."""
+    return max(0.0, flt(stock_qty) - flt(fulfilled_qty))
+
+
+def _allocate_pool_budget(wo_rows, pool_available):
+    """Deterministic sorted-WO pool budget allocation.
+    Allocates available pool budget greedily in sorted Work Order name order,
+    bounded by each Work Order's unrequested eligible remainder.
+    Returns (allocations_dict, remaining_budget).
+    """
+    sorted_wos = sorted(wo_rows, key=lambda w: w.get("work_order") if isinstance(w, dict) else w.work_order)
+    remaining_budget = max(0.0, flt(pool_available))
+    allocations = {}
+    for w in sorted_wos:
+        wo_name = w.get("work_order") if isinstance(w, dict) else w.work_order
+        produced = flt(w.get("produced_qty") if isinstance(w, dict) else w.produced_qty)
+        unrequested = flt(w.get("unrequested_qty", produced) if isinstance(w, dict) else getattr(w, "unrequested_qty", produced))
+        alloc = min(remaining_budget, unrequested, flt(w.get("allocation_limit", unrequested)))
+        remaining_budget = max(0.0, remaining_budget - alloc)
+        allocations[wo_name] = {
+            "work_order": wo_name,
+            "produced_qty": produced,
+            "allocated_qty": alloc,
+            "unrequested_remainder": max(0.0, unrequested - alloc),
+        }
+    return allocations, remaining_budget
+
+
+def _derive_wo_handover_state(produced_qty, cumulative_transferred=0.0, active_mr=None, active_mr_qty=0.0):
+    """Derive Work Order handover lane and partial remainder truth.
+    A WO is fully transferred (LANE_KIRIM) only when cumulative GBJ transfers cover produced_qty.
+    """
+    produced = flt(produced_qty)
+    transferred = flt(cumulative_transferred)
+    mr_qty = flt(active_mr_qty)
+    if transferred >= produced and produced > 0:
+        return {
+            "lane": LANE_KIRIM,
+            "mr": active_mr,
+            "remaining_unrequested": 0.0,
+            "is_partial": False,
+        }
+    if active_mr:
+        rem = max(0.0, produced - transferred - mr_qty)
+        return {
+            "lane": LANE_REQUEST,
+            "mr": active_mr,
+            "remaining_unrequested": rem,
+            "is_partial": transferred > 0,
+        }
+    rem = max(0.0, produced - transferred)
+    return {
+        "lane": None,
+        "mr": None,
+        "remaining_unrequested": rem,
+        "is_partial": transferred > 0,
+    }
+
+
+def _pool_reserved_now(item_code, warehouse=None, for_update=False):
+    """CURRENT total of ACTIVE pool reservations for the item in the source warehouse.
+    Deducts fulfilled Stock Entry Detail transfer quantities so transferred stock (which has
+    already left physical inventory) is not double-deducted as an outstanding reservation.
+    When warehouse is omitted, scopes across all source warehouses for backwards compatibility.
+    """
+    wh_clause = "and coalesce(nullif(mri.from_warehouse, ''), nullif(mr.set_from_warehouse, '')) = %s" if warehouse else ""
+    params = [item_code, warehouse] if warehouse else [item_code]
+    lock = " for update" if for_update else ""
     return flt(
         frappe.db.sql(
-            """select coalesce(sum(mri.stock_qty), 0)
-                   from `tabMaterial Request Item` mri
-                   join `tabMaterial Request` mr on mr.name = mri.parent
-                  where mri.item_code = %s
-                    and mr.docstatus = 1
-                    and mr.status not in ('Stopped', 'Transferred', 'Issued')
-                    and mr.material_request_type = 'Material Transfer'
-                    and not exists (
-                        select 1 from `tabStock Entry Detail` sed
-                         where sed.material_request = mr.name and sed.docstatus = 1
-                    )
-                  for update""",
-            (item_code,),
+            f"""select coalesce(sum(
+                   greatest(0.0, mri.stock_qty - coalesce((
+                       select sum(sed.transfer_qty)
+                         from `tabStock Entry Detail` sed
+                        where sed.material_request = mr.name
+                          and sed.material_request_item = mri.name
+                          and sed.docstatus = 1
+                   ), 0.0))
+               ), 0.0)
+                  from `tabMaterial Request Item` mri
+                  join `tabMaterial Request` mr on mr.name = mri.parent
+                 where mri.item_code = %s
+                   and mr.docstatus = 1
+                   and mr.status not in ('Stopped', 'Transferred', 'Issued')
+                   and mr.material_request_type = 'Material Transfer'
+                   {wh_clause}
+                   {lock}""",
+            tuple(params),
         )[0][0]
     )
 
@@ -1153,14 +1331,236 @@ def _insert_submitted_handover_mr(rows, target, company, box_plan=None):
     return mr
 
 
+def _compute_preview_fingerprint(allocations, groups=None):
+    """Deterministic canonical context hash for preview allocations and pool state."""
+    alloc_items = [
+        (
+            str(a.get("work_order") or "").strip(),
+            str(a.get("item_code") or "").strip(),
+            str(a.get("source_warehouse") or "").strip(),
+            str(a.get("target_warehouse") or ""),
+            str(a.get("company") or ""),
+            str(a.get("stock_uom") or ""),
+            str(a.get("display_uom") or ""),
+            flt(a.get("qty_in_pack") or 1),
+            str(a.get("batch") or ""),
+            round(flt(a.get("allocated_qty") or 0.0), 4),
+            round(flt(a.get("unrequested_remainder") or 0.0), 4),
+        )
+        for a in (allocations or [])
+    ]
+    alloc_items.sort(key=lambda x: x[0])
+    group_items = []
+    if groups:
+        group_items = [
+            (
+                str(g.get("item_code") or "").strip(),
+                str(g.get("source_warehouse") or "").strip(),
+                round(flt(g.get("physical_stock") or 0.0), 4),
+                round(flt(g.get("available_pool") or 0.0), 4),
+                round(flt(g.get("outstanding_reservations") or 0.0), 4),
+            )
+            for g in groups
+        ]
+        group_items.sort(key=lambda x: (x[0], x[1]))
+    canonical = json.dumps({"a": alloc_items, "g": group_items}, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+@frappe.whitelist()
+def preview_handover_request(work_orders, company=None):
+    """Additive read-only preview of proposed GBJ handover request allocations.
+    Calculates eligible unrequested quantities, physical stock per source warehouse,
+    active reservations (including external MRs like R&D), and deterministic per-WO allocations
+    sorted by Work Order name.
+    """
+    _require_role(
+        ROLES_GUDANG,
+        _("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat melihat preview permintaan serah terima."),
+    )
+    if isinstance(work_orders, str):
+        try:
+            work_orders = json.loads(work_orders)
+        except Exception:
+            work_orders = [work_orders]
+    work_orders = sorted({str(w).strip() for w in (work_orders or []) if str(w or "").strip()})
+    if not work_orders:
+        return {"ok": True, "fingerprint": "", "allocations": [], "groups": []}
+
+    frappe.has_permission("Work Order", "read", throw=True)
+    for w in work_orders:
+        frappe.has_permission("Work Order", "read", doc=w, throw=True)
+    wos = [frappe.get_doc("Work Order", w) for w in work_orders]
+
+    target_wh = _target_warehouse()
+    if not target_wh:
+        transferred_by_wo = {}
+    else:
+        transferred_by_wo = dict(
+            frappe.db.sql(
+                """select mri.custom_work_order, coalesce(sum(sed.transfer_qty), 0)
+                     from `tabStock Entry Detail` sed
+                     join `tabMaterial Request Item` mri on mri.name = sed.material_request_item
+                    where mri.custom_work_order in %s
+                      and sed.docstatus = 1
+                      and coalesce(sed.t_warehouse, '') = %s
+                    group by mri.custom_work_order""",
+                (tuple(work_orders), target_wh),
+                as_list=True,
+            )
+        )
+
+    active_mrs = frappe.db.sql(
+        """select mri.custom_work_order,
+                  greatest(0.0, mri.stock_qty - coalesce((
+                      select sum(sed.transfer_qty)
+                        from `tabStock Entry Detail` sed
+                       where sed.material_request = mr.name
+                         and sed.material_request_item = mri.name
+                         and sed.docstatus = 1
+                  ), 0.0)) as outstanding_qty
+             from `tabMaterial Request Item` mri
+             join `tabMaterial Request` mr on mr.name = mri.parent
+            where mri.custom_work_order in %s
+              and mr.docstatus = 1
+              and mr.status not in ('Stopped', 'Transferred', 'Issued')
+              and mr.material_request_type = 'Material Transfer'""",
+        (tuple(work_orders),),
+        as_dict=True,
+    )
+    active_req_by_wo = defaultdict(float)
+    for row in active_mrs:
+        active_req_by_wo[row["custom_work_order"]] += flt(row["outstanding_qty"])
+
+    wo_rows = _wo_lot_rows(work_orders)
+    lot_by_wo = {r.work_order: r for r in wo_rows}
+
+    groups = defaultdict(list)
+    for wo in wos:
+        lot = lot_by_wo.get(wo.name)
+        source_wh = _pool_warehouse(lot) if lot else wo.fg_warehouse
+        produced = flt(wo.produced_qty)
+        transferred = flt(transferred_by_wo.get(wo.name, 0.0))
+        active_req = flt(active_req_by_wo.get(wo.name, 0.0))
+        eligible_unrequested = max(0.0, produced - transferred - active_req)
+        allocation_limit = eligible_unrequested
+        if lot and lot.unsupported:
+            allocation_limit = 0.0
+        elif lot and not lot.batchless:
+            allocation_limit = max(0.0, flt(get_batch_qty(lot.batch, source_wh) or 0) - active_req)
+        groups[(wo.production_item, source_wh)].append({
+            "work_order": wo.name,
+            "produced_qty": produced,
+            "transferred_qty": transferred,
+            "active_requested_qty": active_req,
+            "unrequested_qty": eligible_unrequested,
+            "allocation_limit": allocation_limit,
+            "target_warehouse": target_wh,
+            "company": wo.company,
+            "stock_uom": lot.stock_uom if lot else wo.stock_uom,
+            "display_uom": lot.display_uom if lot else None,
+            "qty_in_pack": lot.qty_in_pack if lot else 1,
+            "batch": lot.batch if lot else None,
+            "source_warehouse": source_wh,
+            "item_code": wo.production_item,
+        })
+
+    allocations_out = []
+    group_summaries = []
+
+    for (item_code, source_wh), members in groups.items():
+        physical = _item_stock(item_code, source_wh)
+        reserved = _pool_reserved_now(item_code, source_wh)
+        available = max(0.0, physical - reserved)
+
+        allocs, remaining_budget = _allocate_pool_budget(members, available)
+
+        ext_res_query = frappe.db.sql(
+            """select mr.name, mr.schedule_date, mri.warehouse as target_warehouse,
+                      coalesce(nullif(mri.from_warehouse, ''), nullif(mr.set_from_warehouse, '')) as source_warehouse,
+                      greatest(0.0, mri.stock_qty - coalesce((
+                          select sum(sed.transfer_qty)
+                            from `tabStock Entry Detail` sed
+                           where sed.material_request = mr.name
+                             and sed.material_request_item = mri.name
+                             and sed.docstatus = 1
+                      ), 0.0)) as outstanding_qty
+                 from `tabMaterial Request Item` mri
+                 join `tabMaterial Request` mr on mr.name = mri.parent
+                where mri.item_code = %s
+                  and (coalesce(nullif(mri.from_warehouse, ''), nullif(mr.set_from_warehouse, '')) = %s
+                       or coalesce(nullif(mri.from_warehouse, ''), nullif(mr.set_from_warehouse, '')) is null)
+                  and mr.docstatus = 1
+                  and mr.status not in ('Stopped', 'Transferred', 'Issued')
+                  and mr.material_request_type = 'Material Transfer'
+                  and (mri.custom_work_order is null or mri.custom_work_order = '' or mri.custom_work_order not in %s)""",
+            (item_code, source_wh, tuple(work_orders)),
+            as_dict=True,
+        )
+        ext_reservations = []
+        unresolved_reservations = []
+        can_read_mr = frappe.has_permission("Material Request", "read")
+        for er in ext_res_query:
+            if flt(er["outstanding_qty"]) > 0:
+                can_read_doc = can_read_mr and frappe.has_permission("Material Request", "read", doc=er["name"])
+                unresolved = "source_warehouse" in er and not er["source_warehouse"]
+                details = {
+                    "material_request": er["name"] if can_read_doc else "Restricted",
+                    "target_warehouse": er["target_warehouse"] if can_read_doc else "Restricted",
+                    "source_warehouse": None if unresolved else source_wh,
+                    "quantity": flt(er["outstanding_qty"]),
+                }
+                (unresolved_reservations if unresolved else ext_reservations).append(details)
+
+        group_summaries.append({
+            "item_code": item_code,
+            "source_warehouse": source_wh,
+            "physical_stock": physical,
+            "stock_uom": frappe.db.get_value("Item", item_code, "stock_uom"),
+            "outstanding_reservations": reserved,
+            "available_pool": available,
+            "remaining_budget": remaining_budget,
+            "external_reservations": ext_reservations,
+            "unresolved_reservations": unresolved_reservations,
+        })
+
+        for m in members:
+            al = allocs[m["work_order"]]
+            item_summary = {
+                "work_order": m["work_order"],
+                "item_code": m["item_code"],
+                "source_warehouse": m["source_warehouse"],
+                "target_warehouse": m["target_warehouse"],
+                "company": m["company"],
+                "stock_uom": m["stock_uom"],
+                "display_uom": m["display_uom"],
+                "qty_in_pack": m["qty_in_pack"],
+                "batch": m["batch"],
+                "produced_qty": m["produced_qty"],
+                "transferred_qty": m["transferred_qty"],
+                "active_requested_qty": m["active_requested_qty"],
+                "allocated_qty": al["allocated_qty"],
+                "unrequested_remainder": al["unrequested_remainder"],
+            }
+            item_summary["fingerprint"] = _compute_preview_fingerprint([item_summary], [group_summaries[-1]])
+            allocations_out.append(item_summary)
+
+    global_fingerprint = _compute_preview_fingerprint(allocations_out, group_summaries)
+    return {
+        "ok": True,
+        "fingerprint": global_fingerprint,
+        "allocations": allocations_out,
+        "groups": group_summaries,
+    }
+
+
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_request(work_order, company=None):
+def create_request(work_order, requested_qty=None, company=None, preview_fingerprint=None):
     """Gudang side (Stock User / Stock Manager / Gudang Barang Jadi): submit a Material Transfer
-    request for the Work Order's FULL produced qty (R3 — no qty dialog, drag is
-    the direct action). The source warehouse is the handover source setting
-    when set, else the SE-derived lot warehouse (R2). One ACTIVE (unshipped,
-    unstopped) request per Work Order; a duplicate throws.
+    request for the Work Order's produced or confirmed allocation qty. The source warehouse
+    is the handover source setting when set, else the SE-derived lot warehouse (R2). One ACTIVE
+    (unshipped, unstopped) request per Work Order; a duplicate throws.
 
     FU96: the box payload is RETIRED — this is the only (qty-only) contract.
     Legacy callers that still send box args are accepted: frappe's get_newargs
@@ -1175,18 +1575,80 @@ def create_request(work_order, company=None):
 
     frappe.db.get_value("Work Order", work_order, "name", for_update=True)  # row lock
     wo = frappe.get_doc("Work Order", work_order)
-    # FU58: gate company (setting hanya berlaku bila cocok dengan WO konsumen);
-    # target masih dibaca SEBELUM tulisan pertama (mr.insert di bawah)
     target = _target_warehouse_or_throw(wo.company)
-    amount = flt(wo.produced_qty)
-    if amount <= 0:
+    target_wh = target
+    transferred = flt(frappe.db.sql(
+        """select coalesce(sum(sed.transfer_qty), 0)
+             from `tabStock Entry Detail` sed
+             join `tabMaterial Request Item` mri on mri.name = sed.material_request_item
+            where mri.custom_work_order = %s
+              and sed.docstatus = 1
+              and coalesce(sed.t_warehouse, '') = %s""",
+        (work_order, target_wh),
+    )[0][0])
+    active_req = flt(frappe.db.sql(
+        """select coalesce(sum(
+               greatest(0.0, mri.stock_qty - coalesce((
+                   select sum(sed.transfer_qty)
+                     from `tabStock Entry Detail` sed
+                    where sed.material_request = mr.name
+                      and sed.material_request_item = mri.name
+                      and sed.docstatus = 1
+               ), 0.0))
+           ), 0.0)
+              from `tabMaterial Request Item` mri
+              join `tabMaterial Request` mr on mr.name = mri.parent
+             where mri.custom_work_order = %s
+               and mr.docstatus = 1
+               and mr.status not in ('Stopped', 'Transferred', 'Issued')
+               and mr.material_request_type = 'Material Transfer'""",
+        (work_order,),
+    )[0][0])
+    eligible_unrequested = max(0.0, flt(wo.produced_qty) - transferred - active_req)
+
+    if preview_fingerprint:
+        # Re-derive preview for this work order under lock to verify context binding
+        preview_data = preview_handover_request([work_order], company=wo.company)
+        alloc = next((a for a in preview_data.get("allocations", []) if a["work_order"] == work_order), None)
+        valid_fps = {preview_data.get("fingerprint")}
+        if alloc:
+            valid_fps.add(alloc.get("fingerprint"))
+        if preview_fingerprint not in valid_fps:
+            frappe.throw(
+                _("Status alokasi atau stok telah berubah sejak preview. Muat ulang halaman.")
+            )
+    if requested_qty is not None:
+        try:
+            amount = flt(requested_qty)
+        except Exception:
+            amount = None
+        if amount is None or not math.isfinite(amount):
+            frappe.throw(
+                _("Kuantitas yang diminta ({0}) tidak valid.").format(requested_qty),
+                frappe.ValidationError,
+            )
+        if amount <= 0:
+            frappe.throw(
+                _("Kuantitas yang diminta ({0}) harus lebih besar dari 0.").format(amount),
+                frappe.ValidationError,
+            )
+        if amount > eligible_unrequested:
+            frappe.throw(
+                _("Kuantitas yang diminta ({0}) melebihi sisa hasil Work Order {1} ({2}). Muat ulang halaman.").format(
+                    amount, work_order, eligible_unrequested
+                ),
+                frappe.ValidationError,
+            )
+    else:
+        amount = eligible_unrequested
+
+    if amount <= 0 or not math.isfinite(amount):
         frappe.throw(
-            _("Work Order {0} belum punya hasil barang jadi (produced qty 0).").format(work_order)
+            _("Work Order {0} tidak memiliki sisa hasil yang dapat diminta.").format(work_order),
+            frappe.ValidationError,
         )
     lot = _checked_lot(work_order)
     if lot.batchless:
-        # the pool is ITEM-wide: requests from every WO of this item draw from
-        # it, so the Item row lock serializes them (the WO lock above cannot)
         frappe.db.get_value("Item", wo.production_item, "name", for_update=True)
         lot = _checked_lot(work_order)  # re-derive under the pool lock
 
@@ -1198,10 +1660,6 @@ def create_request(work_order, company=None):
                 _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, r["mr"])
             )
 
-    # T36 race guard: a competitor that committed while this request waited on
-    # the WO lock is invisible to the snapshot reads above. A locking re-read
-    # of the summary Link sees CURRENT data — while it owns an active request,
-    # the duplicate guard holds (the retry wrapper covers the ER-1020 mood).
     link_now = frappe.db.get_value(
         "Work Order", wo.name, "custom_handover_material_request", for_update=True
     )
@@ -1210,26 +1668,20 @@ def create_request(work_order, company=None):
             _("Work Order {0} sudah punya permintaan aktif ({1}).").format(work_order, link_now)
         )
 
-    # FU96: qty-only contract — the server-side count guard still runs
-    # (item with an invalid display-UOM conversion or a non-whole output is
-    # refused with a clear message); no box parsing/allocation anymore.
     expected_units = _expected_unit_count(wo, lot, amount)
     unit = lot.display_uom or lot.stock_uom
 
     stock_uom = lot.stock_uom or frappe.db.get_value("Item", wo.production_item, "stock_uom")
     _enforce_whole_uom(amount, stock_uom, "Qty")
     available = flt(lot.available_qty)
+    source = _pool_warehouse(lot)
     if lot.batchless:
-        # T36 race guard: sibling reservations committed while this request
-        # waited on the pool lock are invisible to the snapshot — the CURRENT
-        # total wins (physical stock is untouched by request-only races)
-        available = min(available, flt(lot.physical_qty) - _pool_reserved_now(wo.production_item))
+        available = min(available, flt(lot.physical_qty) - _pool_reserved_now(wo.production_item, source, for_update=True))
     if amount > available:
         frappe.throw(
-            _("Qty melebihi lot tersedia: diminta {0}, tersedia {1}.").format(amount, available)
+            _("Qty melebihi stok tersedia: diminta {0}, tersedia {1}. Muat ulang halaman.").format(amount, available)
         )
 
-    source = _pool_warehouse(lot)  # setting override, else SE-derived (R2)
     mr = _insert_submitted_handover_mr([(wo, amount, stock_uom, source)], target, wo.company)
     return {
         "ok": True,
@@ -1321,15 +1773,16 @@ def _json_list(value, label):
 
 @frappe.whitelist()
 @_retry_on_deadlock
-def create_group_request(work_orders, company=None):
+def create_group_request(work_orders, allocations=None, company=None, preview_fingerprint=None):
     """Gudang side: request a GROUP of Work Orders of the SAME item as ONE
-    Material Request with one row per Work Order (full produced qty each, R3;
-    2026-10-10). No Handover Box Plan anymore — older plan groups stay
-    readable/cancellable. Legacy callers that still send box args are
-    accepted: frappe's get_newargs filters unknown kwargs before invocation.
+    Material Request with one row per Work Order.
+    Supports optional explicit per-WO allocations dict/JSON {work_order: qty}.
+    When allocations are provided, rows with 0 allocation are skipped;
+    if all rows are 0, throws an error.
+    Without explicit allocations, falls back to full produced_qty for each member.
 
-    Contract: role gate + every validation under the member-WO locks BEFORE
-    any write; then ONE transaction inserts the submitted MR."""
+    Contract: role gate + every validation under member-WO locks and pool locks
+    BEFORE any write; then ONE transaction inserts the submitted MR."""
     _require_role(
         ROLES_GUDANG,
         _("Hanya peran gudang (Stock User / Stock Manager / Gudang Barang Jadi) yang dapat membuat permintaan serah terima."),
@@ -1339,6 +1792,16 @@ def create_group_request(work_orders, company=None):
     wo_names = sorted({str(n).strip() for n in _json_list(work_orders, "Work Orders") if str(n or "").strip()})
     if len(wo_names) < 2:
         frappe.throw(_("Grup serah terima butuh minimal 2 Work Order."))
+
+    alloc_map = None
+    if allocations:
+        if isinstance(allocations, str):
+            try:
+                alloc_map = json.loads(allocations)
+            except Exception:
+                alloc_map = None
+        elif isinstance(allocations, dict):
+            alloc_map = allocations
 
     # lock every member WO first, sorted-name order (deadlock-safe)
     wos = []
@@ -1367,17 +1830,22 @@ def create_group_request(work_orders, company=None):
         )
     target = _target_warehouse_or_throw()
     item_code = items[0]
-    # T31 pattern: a batchless pool is ITEM-wide — the Item row lock serializes
-    # pool siblings before the first lot derivation
     if not frappe.db.get_value("Item", item_code, "has_batch_no"):
         frappe.db.get_value("Item", item_code, "name", for_update=True)
 
+    if preview_fingerprint:
+        preview_data = preview_handover_request(wo_names, company=wos[0].company)
+        expected_fp = preview_data.get("fingerprint")
+        if preview_fingerprint != expected_fp:
+            frappe.throw(
+                _("Status alokasi atau stok telah berubah sejak preview. Muat ulang halaman.")
+            )
+
     members = []
     expected_total = 0
-    claimed = 0
+    claimed_by_source = defaultdict(float)
+
     for wo in wos:
-        lot = _checked_lot(wo.name)
-        # R3 duplicate guard, authoritative form re-derived under the lock
         link_now = frappe.db.get_value(
             "Work Order", wo.name, "custom_handover_material_request", for_update=True
         )
@@ -1385,26 +1853,86 @@ def create_group_request(work_orders, company=None):
             frappe.throw(
                 _("Work Order {0} sudah punya permintaan aktif ({1}).").format(wo.name, link_now)
             )
-        amount = flt(wo.produced_qty)
+
+        target_wh = _target_warehouse(wo.company) or target
+        transferred = flt(frappe.db.sql(
+            """select coalesce(sum(sed.transfer_qty), 0)
+                 from `tabStock Entry Detail` sed
+                 join `tabMaterial Request Item` mri on mri.name = sed.material_request_item
+                where mri.custom_work_order = %s
+                  and sed.docstatus = 1
+                  and coalesce(sed.t_warehouse, '') = %s""",
+            (wo.name, target_wh),
+        )[0][0])
+        active_req = flt(frappe.db.sql(
+            """select coalesce(sum(
+                   greatest(0.0, mri.stock_qty - coalesce((
+                       select sum(sed.transfer_qty)
+                         from `tabStock Entry Detail` sed
+                        where sed.material_request = mr.name
+                          and sed.material_request_item = mri.name
+                          and sed.docstatus = 1
+                   ), 0.0))
+               ), 0.0)
+                  from `tabMaterial Request Item` mri
+                  join `tabMaterial Request` mr on mr.name = mri.parent
+                 where mri.custom_work_order = %s
+                   and mr.docstatus = 1
+                   and mr.status not in ('Stopped', 'Transferred', 'Issued')
+                   and mr.material_request_type = 'Material Transfer'""",
+            (wo.name,),
+        )[0][0])
+        eligible_unrequested = max(0.0, flt(wo.produced_qty) - transferred - active_req)
+
+        if alloc_map is not None:
+            raw_val = alloc_map.get(wo.name, 0.0)
+            try:
+                amount = flt(raw_val)
+            except Exception:
+                amount = None
+            if amount is None or not math.isfinite(amount):
+                frappe.throw(
+                    _("Alokasi untuk Work Order {0} tidak valid: {1}").format(wo.name, raw_val),
+                    frappe.ValidationError,
+                )
+            if amount <= 0:
+                continue  # skip zero-allocation row
+            if amount > eligible_unrequested:
+                frappe.throw(
+                    _("Kuantitas yang diminta ({0}) melebihi sisa hasil Work Order {1} ({2}). Muat ulang halaman.").format(
+                        amount, wo.name, eligible_unrequested
+                    ),
+                    frappe.ValidationError,
+                )
+        else:
+            amount = eligible_unrequested
+            if amount <= 0 or not math.isfinite(amount):
+                continue
+
+        # after the skip: a member previewed at 0 may have no lot left at all
+        lot = _checked_lot(wo.name)
         expected = _expected_unit_count(wo, lot, amount)
         stock_uom = lot.stock_uom or frappe.db.get_value("Item", wo.production_item, "stock_uom")
         _enforce_whole_uom(amount, stock_uom, "Qty")
         available = flt(lot.available_qty)
+        source = _pool_warehouse(lot)
         if lot.batchless:
-            # grup menarik N kali dalam satu transaksi; _pool_reserved_now belum
-            # melihat write mana pun, jadi kumulatif klaim anggota sebelumnya
-            # harus dihitung manual (invarian T36 tetap berlaku utk grup).
             available = min(
                 available,
-                flt(lot.physical_qty) - _pool_reserved_now(wo.production_item) - claimed,
+                flt(lot.physical_qty) - _pool_reserved_now(wo.production_item, source, for_update=True) - claimed_by_source[source],
             )
         if amount > available:
             frappe.throw(
-                _("Qty melebihi lot tersedia: diminta {0}, tersedia {1}.").format(amount, available)
+                _("Qty melebihi lot tersedia untuk {0}: diminta {1}, tersedia {2}.").format(
+                    wo.name, amount, available
+                )
             )
-        claimed += amount
+        claimed_by_source[source] += amount
         members.append((wo, amount, stock_uom, lot))
         expected_total += expected
+
+    if not members:
+        frappe.throw(_("Semua alokasi bernilai 0; tidak ada permintaan yang dibuat."))
 
     mr = _insert_submitted_handover_mr(
         [(wo, amount, stock_uom, _pool_warehouse(lot)) for wo, amount, stock_uom, lot in members],
@@ -1519,78 +2047,101 @@ def send_handover(material_request, company=None):
     frappe.has_permission("Stock Entry", "create", throw=True)
     frappe.has_permission("Stock Entry", "submit", throw=True)
 
-    wo_names = sorted({i.custom_work_order for i in mr.items})
+    wo_names = sorted({i.custom_work_order for i in mr.items if i.custom_work_order})
+
+    # Consistent lock order across all endpoints: WO (sorted) -> MR (no MR->WO inversion)
+    for wo_name in sorted(wo_names):  # row locks, sorted-name order (deadlock-safe)
+        frappe.db.get_value("Work Order", wo_name, "name", for_update=True)
+    frappe.db.get_value("Material Request", material_request, "name", for_update=True)
+
+    mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
+    if mr.docstatus != 1:
+        frappe.throw(_("Permintaan {0} belum aktif atau sudah dibatalkan.").format(material_request))
+    if mr.status in ("Stopped", "Transferred") or flt(mr.get("per_ordered") or 0.0) >= 100.0:
+        frappe.throw(
+            _("Permintaan {0} sudah selesai ditransfer atau dihentikan.").format(material_request)
+        )
+
     qty_by_row = {i.name: flt(i.stock_qty or i.qty) for i in mr.items}
-    if any(q <= 0 for q in qty_by_row.values()):
+    if not qty_by_row or any(q <= 0 for q in qty_by_row.values()):
         frappe.throw(_("Qty permintaan {0} tidak valid.").format(material_request))
 
-    for wo_name in wo_names:  # row locks, sorted-name order (deadlock-safe)
-        frappe.db.get_value("Work Order", wo_name, "name", for_update=True)
-    mr = frappe.get_doc("Material Request", material_request)  # re-read under the lock
     lots = {w: _checked_lot(w) for w in wo_names}  # §4.9 unsupported error BEFORE any mutation
-    if mr.status == "Stopped":
-        frappe.throw(_("Permintaan {0} sedang dihentikan; aktifkan dulu lewat ERPNext Desk.").format(material_request))
-    sent = _sent_se_by_mr([material_request])
-    if sent:
+
+    # Native MR->SE mapping handles remaining unfulfilled quantities across sequential sends
+    se = frappe.get_doc(make_mr_stock_entry(mr.name))
+    if not getattr(se, "items", None):
         frappe.throw(
-            _("Pengiriman duplikat: Stock Entry {0} sudah ada untuk {1}.").format(
-                get_link_to_form("Stock Entry", sent[material_request].name), material_request
-            )
+            _("Permintaan {0} tidak memiliki sisa kuantitas untuk ditransfer.").format(material_request)
         )
-    # T36 race guard: an SE committed while this send waited on the WO lock is
-    # invisible to the snapshot reads above; the locking re-read sees it
-    # CURRENT and delivers the duplicate-send validation (the retry wrapper
-    # covers the ER-1020 mood instead).
-    se_now = frappe.db.get_value(
-        "Stock Entry Detail",
-        {"material_request": material_request, "docstatus": 1, "parenttype": "Stock Entry"},
-        "parent",
-        for_update=True,
-    )
-    if se_now:
-        frappe.throw(
-            _("Pengiriman duplikat: Stock Entry {0} sudah ada untuk {1}.").format(
-                get_link_to_form("Stock Entry", se_now), material_request
-            )
-        )
-    # FU29: pre-check against the ROUTE origin (the same warehouse
-    # make_mr_stock_entry will use for s_warehouse) — NOT the lot's SE-derived
-    # warehouse. Bulk MR: rows sharing an item pool / batch are summed, so a
-    # total that does not fit is refused even when every row alone would.
+
+    mri_by_name = {i.name: i for i in mr.items}
+    fulfilled_by_row = dict(frappe.db.sql(
+        """select sed.material_request_item, sum(sed.transfer_qty)
+             from `tabStock Entry Detail` sed
+            where sed.material_request = %s and sed.docstatus = 1
+            group by sed.material_request_item""",
+        (mr.name,),
+    ))
+    outstanding_by_row = {
+        name: max(0.0, qty - flt(fulfilled_by_row.get(name, 0)))
+        for name, qty in qty_by_row.items()
+    }
+    mapped_by_row = defaultdict(float)
+    for row in se.items:
+        mri = mri_by_name.get(row.material_request_item)
+        wo_name = mri.custom_work_order if mri else None
+        lot = lots.get(wo_name) if wo_name else None
+        row.transfer_qty = flt(row.qty) * flt(row.conversion_factor or 1)
+        mapped_by_row[row.material_request_item] += row.transfer_qty
+        if mri is None or row.transfer_qty <= 0 or mapped_by_row[row.material_request_item] > outstanding_by_row[mri.name] + 1e-9:
+            frappe.throw(_("Sisa transfer native tidak sesuai bukti transfer aktual. Muat ulang dan periksa permintaan."))
+        if lot and not lot.batchless:
+            row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
+            row.batch_no = lot.batch
+
+    if any(abs(mapped_by_row.get(name, 0.0) - outstanding) > 1e-9
+           for name, outstanding in outstanding_by_row.items()):
+        frappe.throw(_("Sisa transfer native tidak sesuai bukti transfer aktual. Muat ulang dan periksa permintaan."))
+
+    # FU29: pre-check against the ROUTE origin (s_warehouse)
     need = {}
-    for i in mr.items:
-        lot = lots[i.custom_work_order]
-        route_wh = i.from_warehouse or mr.set_from_warehouse or lot.warehouse
-        key = ("i", lot.item_code, route_wh) if lot.batchless else ("b", lot.batch, route_wh)
-        need[key] = need.get(key, 0.0) + qty_by_row[i.name]
+    for row in se.items:
+        mri = mri_by_name.get(row.material_request_item)
+        wo_name = mri.custom_work_order if mri else None
+        lot = lots.get(wo_name) if wo_name else None
+        route_wh = row.s_warehouse or (mri.from_warehouse if mri else None) or mr.set_from_warehouse or (lot.warehouse if lot else None)
+        if lot and not lot.batchless:
+            key = ("b", lot.batch, route_wh)
+        else:
+            key = ("i", row.item_code, route_wh)
+        need[key] = need.get(key, 0.0) + flt(row.transfer_qty)
+
+    own_reservations = defaultdict(float)
+    for mri in mr.items:
+        source = mri.from_warehouse or mr.set_from_warehouse
+        own_reservations[(mri.item_code, source)] += outstanding_by_row[mri.name]
+
     for (kind, ref, route_wh), qty in need.items():
         physical = _item_stock(ref, route_wh) if kind == "i" else flt(get_batch_qty(ref, route_wh) or 0)
-        if physical < qty:  # fail atomically here; NegativeStockError is the backstop
+        available = physical
+        if kind == "i":
+            other_reservations = max(0.0, _pool_reserved_now(ref, route_wh, for_update=True) - own_reservations[(ref, route_wh)])
+            available -= other_reservations
+        if available < qty:  # preserve other requests as well as native physical-stock validation
             frappe.throw(
                 _("Stok {0} di gudang asal {1} hanya {2}; tidak bisa mengirim {3}.").format(
                     ref if kind == "i" else f"batch {ref}", route_wh, physical, qty
                 )
             )
 
-    se = frappe.get_doc(make_mr_stock_entry(mr.name))
-    wo_by_row = {i.name: i.custom_work_order for i in mr.items}
-    qty_in_uom = {i.name: flt(i.qty) for i in mr.items}
-    if sorted(r.material_request_item or "" for r in se.items) != sorted(wo_by_row):
-        frappe.throw(_("Stock Entry dari {0} tidak cocok dengan baris permintaannya.").format(material_request))
-    for row in se.items:
-        lot = lots[wo_by_row[row.material_request_item]]
-        row.qty = qty_in_uom[row.material_request_item]
-        row.transfer_qty = row.qty * flt(row.conversion_factor or 1)
-        if not lot.batchless:
-            row.use_serial_batch_fields = 1  # v16: old batch field -> bundle at submit (T21)
-            row.batch_no = lot.batch
     se.insert()
     se.submit()  # native shortage/valuation failures roll the whole request back
 
-    _sync_handover_summary(wo_names)  # fail-honest: Terkirim, Link kept
+    _sync_handover_summary(wo_names)
     batches = {lot.batch for lot in lots.values()}
     batch = next(iter(batches)) if len(batches) == 1 else None
-    qty = sum(qty_by_row.values())
+    qty = sum(flt(r.transfer_qty or r.qty) for r in se.items)
 
     return {
         "ok": True,
