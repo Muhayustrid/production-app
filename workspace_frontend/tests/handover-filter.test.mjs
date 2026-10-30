@@ -82,3 +82,12 @@ test('groupByRequest: MR bulk jadi satu baris, qty dijumlah', () => {
   assert.deepEqual(g[0].workOrders, ['W1', 'W2'])
   assert.deepEqual([g[1].workOrder, g[1].requestedQtyPcs], ['W3', 10])
 })
+
+test('grouped request rows keep the display UOM so the qty shows Pack, not only Pcs', async () => {
+  const { mapRequest } = await import('../src/store.js')
+  const { qtyStack } = await import('../src/format.js')
+  const raw = (wo) => ({ mr: 'MR-1', work_order: wo, qty: 444, stock_uom: 'Pcs', display_uom: 'Pack', qty_in_pack: 6 })
+  const [g] = groupByRequest([mapRequest(raw('WO-1')), mapRequest(raw('WO-2'))])
+  assert.equal(g.workOrder, '2 WO')
+  assert.deepEqual(qtyStack(g.requestedQtyPcs, g), { main: '148 Pack', sub: '888 Pcs' })
+})

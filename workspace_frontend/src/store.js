@@ -681,13 +681,13 @@ function mapLot(l) {
   }
 }
 
-function mapRequest(r) {
+export function mapRequest(r) {
   return {
     id: requestRowId(r), materialRequest: r.mr, workOrder: r.work_order,
     item: r.item_name, itemCode: r.item_code,
     // FU95: company MR (bukti scope filter global papan)
     company: r.company || '',
-    requestedQtyPcs: r.qty, stockUom: r.stock_uom, qtyInPack: r.qty_in_pack,
+    requestedQtyPcs: r.qty, stockUom: r.stock_uom, qtyInPack: r.qty_in_pack, displayUom: r.display_uom,
     adonanKe: r.adonan_ke, batch: r.batch,
     // FU96: alokasi box (kg + jumlah) dipensiunkan dari alur serah terima —
     // request = dokumen qty murni. W19: identitas grup tetap ada (plan +
