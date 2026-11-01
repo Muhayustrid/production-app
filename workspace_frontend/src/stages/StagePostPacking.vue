@@ -2,7 +2,6 @@
 import { computed, reactive } from 'vue'
 import { PackageCheck } from 'lucide-vue-next'
 import { confirmPostPacking, suggestionPreferences } from '../store.js'
-import { labelCountForWorkOrder, offerLabelPrint } from '../label-print-prompt.js'
 import { qtyMain } from '../format.js'
 import QtyInput from '../QtyInput.vue'
 
@@ -59,8 +58,9 @@ async function save() {
     jam: form.jam,
     qc: String(form.qc).trim()
   })
-  // FU114: item Tanpa Pre-Packing — label dicetak setelah Post-Packing
-  if (saved?.skipPrepacking) offerLabelPrint(saved.id, labelCountForWorkOrder(saved), 'Post-Packing')
+  if (saved) window.dispatchEvent(new CustomEvent('production:packing-saved', {
+    detail: { workOrder: saved, stage: 'postpacking' }
+  }))
 }
 </script>
 
